@@ -649,5 +649,13 @@ func truncateToTokens(s string, budget int) string {
 	if len(s) <= maxChars {
 		return s
 	}
-	return s[:maxChars]
+	// Slice at a rune boundary to avoid splitting multi-byte UTF-8 characters.
+	count := 0
+	for i := range s {
+		if count >= maxChars {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
