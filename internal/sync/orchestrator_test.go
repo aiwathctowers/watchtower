@@ -464,6 +464,225 @@ func TestUserProfileJSONStored(t *testing.T) {
 	assert.Equal(t, "alice@example.com", profile["email"])
 }
 
+// integrationMux creates a mock Slack API server where conversations.history returns
+// different messages per channel, and conversations.replies returns thread replies.
+func integrationMux(channelMessages map[string][]map[string]any, threadReplies map[string][]map[string]any) *http.ServeMux {
+	mux := baseMux()
+
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		channelID := r.FormValue("channel")
+		msgs, ok := channelMessages[channelID]
+		if !ok {
+			msgs = []map[string]any{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"messages": msgs,
+			"has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		channelID := r.FormValue("channel")
+		threadTS := r.FormValue("ts")
+		key := channelID + "|" + threadTS
+		replies, ok := threadReplies[key]
+		if !ok {
+			replies = []map[string]any{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"messages": replies,
+			"has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	return mux
+}
+
+// TestIntegrationSyncFlow runs a full sync with canned Slack API responses
+// (workspace info, users, channels, messages, thread replies) and verifies
+// that the database contains the expected data after sync completes.
+func TestIntegrationSyncFlow(t *testing.T) {
+	// Define messages per channel
+	channelMessages := map[string][]map[string]any{
+		"C001": {
+			{
+				"type": "message", "user": "U001",
+				"text": "Deploying v2.3 to production",
+				"ts":   "1740567600.000100",
+				"reply_count": 2, "thread_ts": "1740567600.000100",
+			},
+			{
+				"type": "message", "user": "U002",
+				"text": "Monitoring dashboards now",
+				"ts":   "1740567600.000200",
+			},
+		},
+		"C002": {
+			{
+				"type": "message", "user": "U001",
+				"text": "New design mockups ready for review",
+				"ts":   "1740567600.000300",
+			},
+		},
+		// C003 (old-project) is archived and won't be synced by default
+	}
+
+	// Define thread replies: parent message + 2 replies
+	threadReplies := map[string][]map[string]any{
+		"C001|1740567600.000100": {
+			{
+				"type": "message", "user": "U001",
+				"text": "Deploying v2.3 to production",
+				"ts":   "1740567600.000100",
+				"thread_ts": "1740567600.000100",
+				"reply_count": 2,
+			},
+			{
+				"type": "message", "user": "U002",
+				"text": "Looks good, I'll keep an eye on metrics",
+				"ts":   "1740567600.000150",
+				"thread_ts": "1740567600.000100",
+			},
+			{
+				"type": "message", "user": "U003",
+				"text": "No breaking changes in my service",
+				"ts":   "1740567600.000160",
+				"thread_ts": "1740567600.000100",
+			},
+		},
+	}
+
+	mux := integrationMux(channelMessages, threadReplies)
+	ts := newTestSetup(t, mux)
+
+	err := ts.orch.Run(context.Background(), SyncOptions{})
+	require.NoError(t, err)
+
+	// --- Verify workspace ---
+	ws, err := ts.db.GetWorkspace()
+	require.NoError(t, err)
+	require.NotNil(t, ws)
+	assert.Equal(t, "T024BE7LD", ws.ID)
+	assert.Equal(t, "my-company", ws.Name)
+	assert.Equal(t, "my-company", ws.Domain)
+
+	// --- Verify users ---
+	users, err := ts.db.GetUsers(db.UserFilter{})
+	require.NoError(t, err)
+	assert.Len(t, users, 3)
+
+	alice, err := ts.db.GetUserByName("alice")
+	require.NoError(t, err)
+	require.NotNil(t, alice)
+	assert.Equal(t, "U001", alice.ID)
+	assert.Equal(t, "Alice Smith", alice.RealName)
+
+	// --- Verify channels ---
+	channels, err := ts.db.GetChannels(db.ChannelFilter{})
+	require.NoError(t, err)
+	assert.Len(t, channels, 3)
+
+	general, err := ts.db.GetChannelByName("general")
+	require.NoError(t, err)
+	require.NotNil(t, general)
+	assert.Equal(t, "C001", general.ID)
+	assert.True(t, general.IsMember)
+
+	engineering, err := ts.db.GetChannelByName("engineering")
+	require.NoError(t, err)
+	require.NotNil(t, engineering)
+	assert.Equal(t, "C002", engineering.ID)
+
+	// --- Verify messages in #general (C001) ---
+	c001Msgs, err := ts.db.GetMessagesByChannel("C001", 100)
+	require.NoError(t, err)
+	assert.Len(t, c001Msgs, 4) // 2 history messages + 2 thread replies
+
+	// Verify a specific message
+	found := false
+	for _, m := range c001Msgs {
+		if m.TS == "1740567600.000100" {
+			found = true
+			assert.Equal(t, "U001", m.UserID)
+			assert.Equal(t, "Deploying v2.3 to production", m.Text)
+		}
+	}
+	assert.True(t, found, "expected to find the deployment message")
+
+	// --- Verify messages in #engineering (C002) ---
+	c002Msgs, err := ts.db.GetMessagesByChannel("C002", 100)
+	require.NoError(t, err)
+	assert.Len(t, c002Msgs, 1)
+	assert.Equal(t, "New design mockups ready for review", c002Msgs[0].Text)
+
+	// --- Verify thread replies were synced ---
+	threadMsgs, err := ts.db.GetThreadReplies("C001", "1740567600.000100")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(threadMsgs), 2, "thread should have at least 2 replies")
+
+	replyFound := false
+	for _, m := range threadMsgs {
+		if m.TS == "1740567600.000150" {
+			replyFound = true
+			assert.Equal(t, "U002", m.UserID)
+			assert.Equal(t, "Looks good, I'll keep an eye on metrics", m.Text)
+		}
+	}
+	assert.True(t, replyFound, "expected to find thread reply from bob")
+
+	// --- Verify sync state ---
+	syncState, err := ts.db.GetSyncState("C001")
+	require.NoError(t, err)
+	require.NotNil(t, syncState)
+	assert.True(t, syncState.IsInitialSyncComplete)
+	assert.Greater(t, syncState.MessagesSynced, 0)
+
+	// --- Verify archived channel (C003) was NOT synced for messages ---
+	c003Msgs, err := ts.db.GetMessagesByChannel("C003", 100)
+	require.NoError(t, err)
+	assert.Len(t, c003Msgs, 0, "archived channel should not have messages synced")
+}
+
+// TestIntegrationSyncWithChannelFilter verifies that passing --channels
+// limits the sync to only the specified channels.
+func TestIntegrationSyncWithChannelFilter(t *testing.T) {
+	channelMessages := map[string][]map[string]any{
+		"C001": {
+			{"type": "message", "user": "U001", "text": "General msg", "ts": "1740567600.000100"},
+		},
+		"C002": {
+			{"type": "message", "user": "U002", "text": "Engineering msg", "ts": "1740567600.000200"},
+		},
+	}
+
+	mux := integrationMux(channelMessages, nil)
+	ts := newTestSetup(t, mux)
+
+	// Sync only "general" channel
+	err := ts.orch.Run(context.Background(), SyncOptions{
+		Channels: []string{"general"},
+	})
+	require.NoError(t, err)
+
+	// General should have messages
+	c001Msgs, err := ts.db.GetMessagesByChannel("C001", 100)
+	require.NoError(t, err)
+	assert.Len(t, c001Msgs, 1)
+
+	// Engineering should NOT have messages (wasn't requested)
+	c002Msgs, err := ts.db.GetMessagesByChannel("C002", 100)
+	require.NoError(t, err)
+	assert.Len(t, c002Msgs, 0)
+}
+
 // errFromString creates an error with the given string.
 type stringError string
 

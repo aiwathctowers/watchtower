@@ -363,9 +363,9 @@ watch:
 **Files:** `internal/db/*_test.go`, `internal/slack/*_test.go`, `internal/ai/*_test.go`, `internal/config/*_test.go`
 
 ### Task 24: Integration tests
-- [ ] Sync flow test: mock Slack API (httptest.Server returning canned responses) → run full sync → verify DB contains expected workspace, users, channels, messages, threads
-- [ ] AI flow test: pre-populate SQLite DB with test data → run ask pipeline → verify context contains correct messages for the query
-- [ ] End-to-end test: mock Slack API → sync → ask question → verify response references correct channels/users
+- [x] Sync flow test: mock Slack API (httptest.Server returning canned responses) → run full sync → verify DB contains expected workspace, users, channels, messages, threads
+- [x] AI flow test: pre-populate SQLite DB with test data → run ask pipeline → verify context contains correct messages for the query
+- [x] End-to-end test: mock Slack API → sync → ask question → verify response references correct channels/users
 
 **Files:** `internal/sync/orchestrator_test.go`, `internal/ai/pipeline_test.go`
 
