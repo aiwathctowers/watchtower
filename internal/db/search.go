@@ -104,15 +104,17 @@ func sanitizeFTS5Query(query string) string {
 		if operators[strings.ToUpper(w)] {
 			continue
 		}
-		// Strip FTS5 special characters: * ^ : "
+		// Strip FTS5 special characters: * ^ : " { } \
 		w = strings.Map(func(r rune) rune {
 			switch r {
-			case '*', '^', ':', '"', '(', ')', '+':
+			case '*', '^', ':', '"', '(', ')', '+', '{', '}', '\\':
 				return -1
 			default:
 				return r
 			}
 		}, w)
+		// Strip leading hyphens (NOT operator in FTS5)
+		w = strings.TrimLeft(w, "-")
 		if w != "" {
 			safe = append(safe, w)
 		}

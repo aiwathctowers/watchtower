@@ -79,7 +79,7 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	// Env var bindings
-	v.SetEnvPrefix("")
+	v.SetEnvPrefix("WATCHTOWER")
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
