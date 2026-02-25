@@ -36,15 +36,20 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 		workers = 1
 	}
 
+	o.progress.SetMessageChannels(len(channels))
+
 	pool := NewWorkerPool(workers)
 	pool.Start(ctx, func(ctx context.Context, task SyncTask) error {
+		o.progress.SetCurrentChannel(task.ChannelID)
 		if err := o.syncChannel(ctx, task.ChannelID, opts.Full); err != nil {
 			if isNonFatalError(err) {
 				o.logger.Printf("skipping channel %s: %v", task.ChannelID, err)
+				o.progress.IncMessageChannel()
 				return nil
 			}
 			return fmt.Errorf("syncing channel %s: %w", task.ChannelID, err)
 		}
+		o.progress.IncMessageChannel()
 		return nil
 	})
 
@@ -195,6 +200,7 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 			return fmt.Errorf("upserting messages: %w", err)
 		}
 		messagesSynced += count
+		o.progress.AddMessages(count)
 
 		// Update sync state with progress
 		syncState := db.SyncState{

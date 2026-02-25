@@ -201,7 +201,7 @@ watch:
 **Files:** `internal/sync/thread_sync.go`
 
 ### Task 12: Sync progress reporting
-- [ ] Create `internal/sync/progress.go`:
+- [x] Create `internal/sync/progress.go`:
   - `type Progress struct` tracking: phase (metadata/messages/threads), channels total/done, messages fetched, threads fetched, current channel name
   - Thread-safe updates via mutex
   - `Render()` — formats progress for terminal display using lipgloss:

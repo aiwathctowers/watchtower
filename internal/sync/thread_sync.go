@@ -27,6 +27,7 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 	}
 
 	o.logger.Printf("found %d threads to sync", len(threadParents))
+	o.progress.SetThreadsTotal(len(threadParents))
 
 	workers := opts.Workers
 	if workers <= 0 {
@@ -38,13 +39,16 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 
 	pool := NewWorkerPool(workers)
 	pool.Start(ctx, func(ctx context.Context, task SyncTask) error {
-		if err := o.syncThread(ctx, task.ChannelID, task.ThreadTS); err != nil {
+		replyCount, err := o.syncThread(ctx, task.ChannelID, task.ThreadTS)
+		if err != nil {
 			if isNonFatalError(err) {
 				o.logger.Printf("skipping thread %s/%s: %v", task.ChannelID, task.ThreadTS, err)
+				o.progress.IncThread(0)
 				return nil
 			}
 			return fmt.Errorf("syncing thread %s/%s: %w", task.ChannelID, task.ThreadTS, err)
 		}
+		o.progress.IncThread(replyCount)
 		return nil
 	})
 
@@ -72,19 +76,20 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 }
 
 // syncThread fetches all replies for a single thread and upserts them.
-func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS string) error {
+// Returns the number of replies synced and any error.
+func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS string) (int, error) {
 	replies, err := o.slackClient.GetConversationReplies(ctx, channelID, threadTS)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if len(replies) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	tx, err := o.db.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return 0, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -102,7 +107,7 @@ func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS strin
 			permalink = excluded.permalink,
 			raw_json = excluded.raw_json`)
 	if err != nil {
-		return fmt.Errorf("preparing statement: %w", err)
+		return 0, fmt.Errorf("preparing statement: %w", err)
 	}
 	defer stmt.Close()
 
@@ -128,13 +133,13 @@ func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS strin
 			string(rawJSON),
 		)
 		if err != nil {
-			return fmt.Errorf("upserting thread reply %s: %w", msg.Timestamp, err)
+			return 0, fmt.Errorf("upserting thread reply %s: %w", msg.Timestamp, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
+		return 0, fmt.Errorf("committing transaction: %w", err)
 	}
 
-	return nil
+	return len(replies), nil
 }

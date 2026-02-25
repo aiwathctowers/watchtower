@@ -29,6 +29,7 @@ type Orchestrator struct {
 	slackClient *watchtowerslack.Client
 	config      *config.Config
 	logger      *log.Logger
+	progress    *Progress
 }
 
 // NewOrchestrator creates a new sync orchestrator.
@@ -38,12 +39,18 @@ func NewOrchestrator(database *db.DB, slackClient *watchtowerslack.Client, cfg *
 		slackClient: slackClient,
 		config:      cfg,
 		logger:      log.Default(),
+		progress:    NewProgress(),
 	}
 }
 
 // SetLogger sets a custom logger for the orchestrator.
 func (o *Orchestrator) SetLogger(l *log.Logger) {
 	o.logger = l
+}
+
+// Progress returns the progress tracker for this orchestrator.
+func (o *Orchestrator) Progress() *Progress {
+	return o.progress
 }
 
 // Run executes the sync pipeline in three sequential phases:
@@ -57,22 +64,26 @@ func (o *Orchestrator) Run(ctx context.Context, opts SyncOptions) error {
 
 	// Phase 1: metadata
 	o.logger.Println("phase 1: syncing metadata")
+	o.progress.SetPhase(PhaseMetadata)
 	if err := o.syncMetadata(ctx); err != nil {
 		return fmt.Errorf("metadata sync: %w", err)
 	}
 
 	// Phase 2: messages
 	o.logger.Println("phase 2: syncing messages")
+	o.progress.SetPhase(PhaseMessages)
 	if err := o.syncMessages(ctx, opts); err != nil {
 		return fmt.Errorf("message sync: %w", err)
 	}
 
 	// Phase 3: threads
 	o.logger.Println("phase 3: syncing threads")
+	o.progress.SetPhase(PhaseThreads)
 	if err := o.syncThreads(ctx, opts); err != nil {
 		return fmt.Errorf("thread sync: %w", err)
 	}
 
+	o.progress.SetPhase(PhaseDone)
 	o.logger.Println("sync complete")
 	return nil
 }
@@ -108,7 +119,8 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 	}
 
 	apiUserIDs := make(map[string]bool, len(users))
-	for _, u := range users {
+	o.progress.SetMetadataUsers(len(users), 0)
+	for i, u := range users {
 		apiUserIDs[u.ID] = true
 		profileJSON, _ := json.Marshal(u.Profile)
 		if err := o.db.UpsertUser(db.User{
@@ -123,6 +135,7 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("upserting user %s: %w", u.ID, err)
 		}
+		o.progress.SetMetadataUsers(len(users), i+1)
 	}
 
 	// Detect deleted users: in DB but not returned by API
@@ -149,7 +162,8 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetching channels: %w", err)
 	}
-	for _, ch := range channels {
+	o.progress.SetMetadataChannels(len(channels), 0)
+	for i, ch := range channels {
 		chType := slackChannelType(ch)
 		if err := o.db.UpsertChannel(db.Channel{
 			ID:         ch.ID,
@@ -164,6 +178,7 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("upserting channel %s: %w", ch.ID, err)
 		}
+		o.progress.SetMetadataChannels(len(channels), i+1)
 	}
 	o.logger.Printf("channels: %d synced", len(channels))
 
