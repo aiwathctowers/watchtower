@@ -267,12 +267,12 @@ watch:
 **Files:** `internal/ai/context_builder.go`
 
 ### Task 16: Claude API client with streaming (internal/ai/client.go)
-- [ ] Create `internal/ai/client.go`:
+- [x] Create `internal/ai/client.go`:
   - `type Client struct` with anthropic client and model string
   - `NewClient(apiKey, model string) *Client`
   - `Query(ctx context.Context, systemPrompt, userMessage string) (<-chan string, error)` — uses anthropic-sdk-go streaming API, returns channel emitting text chunks as they arrive
   - Error handling: invalid API key (clear message), context too long (reduce and retry), rate limited (wait and retry)
-- [ ] Create `internal/ai/prompt.go`:
+- [x] Create `internal/ai/prompt.go`:
   - System prompt template: "You are Watchtower, an AI assistant that helps analyze Slack workspace activity..." with workspace name, domain, current time, timezone, guidelines (be concise, include permalinks, use user's language)
   - `AssembleUserMessage(summary, context, question string) string` — combines workspace summary + message context + user question
 
