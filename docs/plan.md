@@ -111,12 +111,12 @@ watch:
 **Files:** `internal/db/db.go`, `internal/db/schema.sql`, `internal/db/models.go`
 
 ### Task 5: Database CRUD operations
-- [ ] Create `internal/db/channels.go`: `UpsertChannel(ch)`, `GetChannels(filter)`, `GetChannelByName(name)`, `GetChannelByID(id)`
-- [ ] Create `internal/db/users.go`: `UpsertUser(u)`, `GetUsers(filter)`, `GetUserByName(name)`, `GetUserByID(id)`
-- [ ] Create `internal/db/messages.go`: `UpsertMessage(msg)`, `GetMessages(opts)`, `GetMessagesByTimeRange(channelID, from, to)`, `GetMessagesByChannel(channelID, limit)`, `GetThreadReplies(channelID, threadTS)`
-- [ ] Create `internal/db/search.go`: `SearchMessages(query string, opts SearchOpts) ([]Message, error)` — builds FTS5 MATCH query, joins with messages table for full data, supports channel/user/time filters
-- [ ] Create `internal/db/sync_state.go`: `GetSyncState(channelID)`, `UpdateSyncState(channelID, state)`, `MarkInitialSyncComplete(channelID)`
-- [ ] Create `internal/db/watch.go`: `AddWatch(entityType, entityID, entityName, priority)`, `RemoveWatch(entityType, entityID)`, `GetWatchList()`, `IsWatched(entityType, entityID) bool`
+- [x] Create `internal/db/channels.go`: `UpsertChannel(ch)`, `GetChannels(filter)`, `GetChannelByName(name)`, `GetChannelByID(id)`
+- [x] Create `internal/db/users.go`: `UpsertUser(u)`, `GetUsers(filter)`, `GetUserByName(name)`, `GetUserByID(id)`
+- [x] Create `internal/db/messages.go`: `UpsertMessage(msg)`, `GetMessages(opts)`, `GetMessagesByTimeRange(channelID, from, to)`, `GetMessagesByChannel(channelID, limit)`, `GetThreadReplies(channelID, threadTS)`
+- [x] Create `internal/db/search.go`: `SearchMessages(query string, opts SearchOpts) ([]Message, error)` — builds FTS5 MATCH query, joins with messages table for full data, supports channel/user/time filters
+- [x] Create `internal/db/sync_state.go`: `GetSyncState(channelID)`, `UpdateSyncState(channelID, state)`, `MarkInitialSyncComplete(channelID)`
+- [x] Create `internal/db/watch.go`: `AddWatch(entityType, entityID, entityName, priority)`, `RemoveWatch(entityType, entityID)`, `GetWatchList()`, `IsWatched(entityType, entityID) bool`
 
 **Files:** `internal/db/channels.go`, `internal/db/users.go`, `internal/db/messages.go`, `internal/db/search.go`, `internal/db/sync_state.go`, `internal/db/watch.go`
 
