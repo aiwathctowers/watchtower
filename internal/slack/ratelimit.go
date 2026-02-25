@@ -35,6 +35,18 @@ func NewRateLimiter() *RateLimiter {
 	}
 }
 
+// NewUnlimitedRateLimiter creates a rate limiter that does not enforce any limits.
+// Intended for testing only.
+func NewUnlimitedRateLimiter() *RateLimiter {
+	return &RateLimiter{
+		limiters: map[int]*rate.Limiter{
+			Tier2: rate.NewLimiter(rate.Inf, 1),
+			Tier3: rate.NewLimiter(rate.Inf, 1),
+		},
+		backoffs: make(map[int]time.Time),
+	}
+}
+
 // Wait blocks until the rate limiter allows a request for the given tier.
 // It respects both the token bucket rate and any active 429 backoff.
 func (rl *RateLimiter) Wait(ctx context.Context, tier int) error {

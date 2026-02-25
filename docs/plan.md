@@ -142,7 +142,7 @@ watch:
 **Files:** `internal/slack/client.go`, `internal/slack/ratelimit.go`, `internal/slack/permalink.go`
 
 ### Task 7: Sync orchestrator (internal/sync/orchestrator.go)
-- [ ] Create `internal/sync/orchestrator.go`:
+- [x] Create `internal/sync/orchestrator.go`:
   - `type SyncOptions struct` with fields: Full (bool), Channels ([]string), Workers (int), DaemonMode (bool)
   - `type Orchestrator struct` with db, slackClient, config, progress
   - `NewOrchestrator(db, slackClient, config) *Orchestrator`
@@ -155,7 +155,7 @@ watch:
 **Files:** `internal/sync/orchestrator.go`
 
 ### Task 8: Worker pool (internal/sync/worker.go)
-- [ ] Create `internal/sync/worker.go`:
+- [x] Create `internal/sync/worker.go`:
   - `type WorkerPool struct` with configurable concurrency, task channel, WaitGroup, error channel
   - `type SyncTask struct` with Type (channel/thread), ChannelID, ThreadTS, Priority
   - `NewWorkerPool(workers int) *WorkerPool`

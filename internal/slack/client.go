@@ -30,6 +30,15 @@ func NewClientWithAPI(api *slack.Client) *Client {
 	}
 }
 
+// NewClientWithAPIUnlimited creates a client with a pre-configured slack.Client
+// and an unlimited rate limiter (for testing).
+func NewClientWithAPIUnlimited(api *slack.Client) *Client {
+	return &Client{
+		api:         api,
+		rateLimiter: NewUnlimitedRateLimiter(),
+	}
+}
+
 // GetTeamInfo returns workspace information. (Tier 2)
 func (c *Client) GetTeamInfo(ctx context.Context) (*slack.TeamInfo, error) {
 	if err := c.rateLimiter.Wait(ctx, Tier2); err != nil {
