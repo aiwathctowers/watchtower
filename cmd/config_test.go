@@ -134,10 +134,3 @@ func TestMaskValue(t *testing.T) {
 	assert.Equal(t, "****", maskValue("xoxp-secret-token-here"))
 }
 
-func TestIsSensitiveKey(t *testing.T) {
-	assert.True(t, isSensitiveKey("slack_token"))
-	assert.True(t, isSensitiveKey("ai.api_key"))
-	assert.True(t, isSensitiveKey("some_secret"))
-	assert.False(t, isSensitiveKey("ai.model"))
-	assert.False(t, isSensitiveKey("active_workspace"))
-}

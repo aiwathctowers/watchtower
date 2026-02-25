@@ -136,14 +136,13 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading config: %w", err)
 	}
 
-	// Parse value to appropriate type so YAML stores typed values
+	// Parse integers so YAML stores them as numbers; all other values are
+	// stored as strings and viper handles type coercion on read. Avoid
+	// ParseBool/ParseFloat which can misinterpret string values like "t"
+	// or "f" as booleans.
 	var typedValue interface{} = value
 	if i, err := strconv.Atoi(value); err == nil {
 		typedValue = i
-	} else if b, err := strconv.ParseBool(value); err == nil {
-		typedValue = b
-	} else if f, err := strconv.ParseFloat(value, 64); err == nil {
-		typedValue = f
 	}
 	v.Set(key, typedValue)
 	if err := v.WriteConfig(); err != nil {
@@ -189,13 +188,6 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
-}
-
-func isSensitiveKey(key string) bool {
-	lower := strings.ToLower(key)
-	return strings.Contains(lower, "token") ||
-		strings.Contains(lower, "api_key") ||
-		strings.Contains(lower, "secret")
 }
 
 func maskValue(val string) string {

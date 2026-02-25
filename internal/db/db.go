@@ -33,12 +33,12 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// For in-memory databases, limit to 1 connection so all operations
-	// share the same database instance (each connection to :memory: gets
-	// its own independent database).
-	if dbPath == ":memory:" {
-		sqlDB.SetMaxOpenConns(1)
-	}
+	// Limit to 1 connection: for :memory: databases each connection gets
+	// its own independent database, and for file databases per-connection
+	// pragmas (busy_timeout, foreign_keys, synchronous) would not apply
+	// to new pooled connections. SQLite serializes writes anyway, so a
+	// single connection avoids both issues with no performance loss.
+	sqlDB.SetMaxOpenConns(1)
 
 	db := &DB{DB: sqlDB}
 
