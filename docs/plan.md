@@ -370,8 +370,8 @@ watch:
 **Files:** `internal/sync/orchestrator_test.go`, `internal/ai/pipeline_test.go`
 
 ### Task 25: GoReleaser and distribution
-- [ ] Create `.goreleaser.yaml` for cross-compilation (darwin/amd64, darwin/arm64, linux/amd64, linux/arm64)
-- [ ] Homebrew formula generation in goreleaser config
-- [ ] Verify `go build` produces working binary on current platform
+- [x] Create `.goreleaser.yaml` for cross-compilation (darwin/amd64, darwin/arm64, linux/amd64, linux/arm64)
+- [x] Homebrew formula generation in goreleaser config
+- [x] Verify `go build` produces working binary on current platform
 
 **Files:** `.goreleaser.yaml`
