@@ -235,7 +235,7 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 	rendered, err := renderer.Render(fullResponse.String())
 	sources := ""
 	if err == nil {
-		sources = extractSourcesSection(rendered)
+		sources = ai.ExtractSourcesSection(rendered)
 	}
 
 	_ = database.UpdateCheckpoint(now)

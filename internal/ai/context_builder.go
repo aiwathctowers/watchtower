@@ -2,6 +2,7 @@ package ai
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,10 @@ type ContextBuilder struct {
 	db     *db.DB
 	budget int    // total token budget
 	domain string // workspace domain for permalinks
+
+	// Lookup caches to avoid repeated DB queries for the same entity
+	channelNameCache map[string]string
+	userCache        map[string]*db.User
 }
 
 // NewContextBuilder creates a ContextBuilder.
@@ -25,9 +30,11 @@ func NewContextBuilder(database *db.DB, contextBudget int, domain string) *Conte
 		contextBudget = 150000
 	}
 	return &ContextBuilder{
-		db:     database,
-		budget: contextBudget,
-		domain: domain,
+		db:               database,
+		budget:           contextBudget,
+		domain:           domain,
+		channelNameCache: make(map[string]string),
+		userCache:        make(map[string]*db.User),
 	}
 }
 
@@ -334,9 +341,11 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 		name     string
 		id       string
 		msgCount int
+		msgs     []db.Message
 	}
 
 	var activities []channelActivity
+	userActivity := make(map[string]int) // userID -> count
 	for _, ch := range channels {
 		if ch.IsArchived {
 			continue
@@ -350,20 +359,19 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 				name:     ch.Name,
 				id:       ch.ID,
 				msgCount: len(msgs),
+				msgs:     msgs,
 			})
+			for _, msg := range msgs {
+				if msg.UserID != "" {
+					userActivity[msg.UserID]++
+				}
+			}
 		}
 	}
 
-	// Sort by message count descending (simple selection sort for small slice)
-	for i := 0; i < len(activities); i++ {
-		maxIdx := i
-		for j := i + 1; j < len(activities); j++ {
-			if activities[j].msgCount > activities[maxIdx].msgCount {
-				maxIdx = j
-			}
-		}
-		activities[i], activities[maxIdx] = activities[maxIdx], activities[i]
-	}
+	sort.Slice(activities, func(i, j int) bool {
+		return activities[i].msgCount > activities[j].msgCount
+	})
 
 	tokensUsed := estimateTokens(b.String())
 
@@ -383,22 +391,7 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 		}
 	}
 
-	// Top active users in the time range
-	userActivity := make(map[string]int) // userID -> count
-	for _, a := range activities {
-		msgs, err := cb.db.GetMessagesByTimeRange(a.id, from, to)
-		if err != nil {
-			continue
-		}
-		for _, msg := range msgs {
-			if msg.UserID != "" {
-				userActivity[msg.UserID]++
-			}
-		}
-	}
-
 	if len(userActivity) > 0 {
-		// Find top users
 		type userCount struct {
 			id    string
 			count int
@@ -407,15 +400,9 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 		for id, count := range userActivity {
 			topUsers = append(topUsers, userCount{id, count})
 		}
-		for i := 0; i < len(topUsers); i++ {
-			maxIdx := i
-			for j := i + 1; j < len(topUsers); j++ {
-				if topUsers[j].count > topUsers[maxIdx].count {
-					maxIdx = j
-				}
-			}
-			topUsers[i], topUsers[maxIdx] = topUsers[maxIdx], topUsers[i]
-		}
+		sort.Slice(topUsers, func(i, j int) bool {
+			return topUsers[i].count > topUsers[j].count
+		})
 
 		b.WriteString("Top active users:\n")
 		limit := 5
@@ -448,42 +435,14 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 }
 
 // formatChannelMessages formats recent messages from a channel within the token budget.
+// Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatChannelMessages(channelID, channelName string, from, to float64, budget int) (string, error) {
-	msgs, err := cb.db.GetMessagesByTimeRange(channelID, from, to)
-	if err != nil {
-		return "", err
-	}
-	if len(msgs) == 0 {
-		return "", nil
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n--- #%s ---\n", channelName))
-	tokensUsed := estimateTokens(b.String())
-
-	for _, msg := range msgs {
-		line := cb.formatMessage(channelName, msg)
-		lineTokens := estimateTokens(line)
-		if tokensUsed+lineTokens > budget {
-			break
-		}
-		b.WriteString(line)
-		tokensUsed += lineTokens
-
-		// Include thread summary if the message has replies
-		if msg.ReplyCount > 0 {
-			threadSummary, err := cb.formatThreadSummary(channelID, msg.TS, channelName, budget-tokensUsed)
-			if err == nil && threadSummary != "" {
-				b.WriteString(threadSummary)
-				tokensUsed += estimateTokens(threadSummary)
-			}
-		}
-	}
-
-	return b.String(), nil
+	section, _, err := cb.formatChannelMessagesDedup(channelID, channelName, from, to, budget, nil)
+	return section, err
 }
 
-// formatChannelMessagesDedup is like formatChannelMessages but tracks and skips duplicates.
+// formatChannelMessagesDedup formats recent messages from a channel, tracking and skipping duplicates.
+// Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatChannelMessagesDedup(channelID, channelName string, from, to float64, budget int, seen map[string]bool) (string, []string, error) {
 	msgs, err := cb.db.GetMessagesByTimeRange(channelID, from, to)
 	if err != nil {
@@ -500,7 +459,7 @@ func (cb *ContextBuilder) formatChannelMessagesDedup(channelID, channelName stri
 
 	for _, msg := range msgs {
 		key := msg.ChannelID + "|" + msg.TS
-		if seen[key] {
+		if seen != nil && seen[key] {
 			continue
 		}
 		line := cb.formatMessage(channelName, msg)
@@ -528,45 +487,14 @@ func (cb *ContextBuilder) formatChannelMessagesDedup(channelID, channelName stri
 }
 
 // formatUserMessages formats recent messages from a specific user.
+// Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatUserMessages(userID, userName string, from, to float64, budget int) (string, error) {
-	msgs, err := cb.db.GetMessages(db.MessageOpts{
-		UserID: userID,
-		Limit:  200,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	// Filter by time range
-	var filtered []db.Message
-	for _, msg := range msgs {
-		if msg.TSUnix >= from && msg.TSUnix <= to {
-			filtered = append(filtered, msg)
-		}
-	}
-	if len(filtered) == 0 {
-		return "", nil
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n--- Messages from @%s ---\n", userName))
-	tokensUsed := estimateTokens(b.String())
-
-	for _, msg := range filtered {
-		chName := cb.resolveChannelName(msg.ChannelID)
-		line := cb.formatMessage(chName, msg)
-		lineTokens := estimateTokens(line)
-		if tokensUsed+lineTokens > budget {
-			break
-		}
-		b.WriteString(line)
-		tokensUsed += lineTokens
-	}
-
-	return b.String(), nil
+	section, _, err := cb.formatUserMessagesDedup(userID, userName, from, to, budget, nil)
+	return section, err
 }
 
-// formatUserMessagesDedup is like formatUserMessages but tracks and skips duplicates.
+// formatUserMessagesDedup formats recent messages from a user, tracking and skipping duplicates.
+// Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatUserMessagesDedup(userID, userName string, from, to float64, budget int, seen map[string]bool) (string, []string, error) {
 	msgs, err := cb.db.GetMessages(db.MessageOpts{
 		UserID: userID,
@@ -593,7 +521,7 @@ func (cb *ContextBuilder) formatUserMessagesDedup(userID, userName string, from,
 
 	for _, msg := range filtered {
 		key := msg.ChannelID + "|" + msg.TS
-		if seen[key] {
+		if seen != nil && seen[key] {
 			continue
 		}
 		chName := cb.resolveChannelName(msg.ChannelID)
@@ -726,19 +654,33 @@ func (cb *ContextBuilder) effectiveTimeRange(query ParsedQuery) (from, to float6
 
 // resolveChannelName looks up a channel name from its ID.
 func (cb *ContextBuilder) resolveChannelName(channelID string) string {
+	if name, ok := cb.channelNameCache[channelID]; ok {
+		return name
+	}
 	ch, err := cb.db.GetChannelByID(channelID)
 	if err != nil || ch == nil {
+		cb.channelNameCache[channelID] = channelID
 		return channelID
 	}
+	cb.channelNameCache[channelID] = ch.Name
 	return ch.Name
 }
 
 // resolveUser returns the username and display name for a user ID.
 func (cb *ContextBuilder) resolveUser(userID string) (name, displayName string) {
+	if u, ok := cb.userCache[userID]; ok {
+		name = u.Name
+		if name == "" {
+			name = userID
+		}
+		return name, u.DisplayName
+	}
 	u, err := cb.db.GetUserByID(userID)
 	if err != nil || u == nil {
+		cb.userCache[userID] = &db.User{ID: userID}
 		return userID, ""
 	}
+	cb.userCache[userID] = u
 	name = u.Name
 	if name == "" {
 		name = userID

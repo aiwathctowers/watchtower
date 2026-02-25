@@ -141,7 +141,7 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	// Render for sources
 	rendered, err := renderer.Render(fullResponse.String())
 	if err == nil {
-		sources := extractSourcesSection(rendered)
+		sources := ai.ExtractSourcesSection(rendered)
 		if sources != "" {
 			fmt.Fprintf(out, "\n\n%s", sources)
 		}

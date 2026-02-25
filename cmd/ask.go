@@ -141,7 +141,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	rendered, err := renderer.Render(fullResponse.String())
 	if err == nil {
 		// Extract just the sources section (after the main content)
-		sources := extractSourcesSection(rendered)
+		sources := ai.ExtractSourcesSection(rendered)
 		if sources != "" {
 			fmt.Fprintf(out, "\n\n%s", sources)
 		}
@@ -150,11 +150,3 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// extractSourcesSection returns the "Sources:" section from rendered output, if present.
-func extractSourcesSection(rendered string) string {
-	idx := strings.LastIndex(rendered, "Sources:\n")
-	if idx < 0 {
-		return ""
-	}
-	return strings.TrimSpace(rendered[idx:])
-}

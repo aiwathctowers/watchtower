@@ -32,8 +32,10 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 	var conditions []string
 	var args []interface{}
 
+	// Sanitize FTS5 query: quote each term to prevent FTS5 syntax injection
+	sanitizedQuery := sanitizeFTS5Query(query)
 	conditions = append(conditions, "messages_fts MATCH ?")
-	args = append(args, query)
+	args = append(args, sanitizedQuery)
 
 	if len(opts.ChannelIDs) > 0 {
 		placeholders := make([]string, len(opts.ChannelIDs))
@@ -79,4 +81,21 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 	defer rows.Close()
 
 	return scanMessages(rows)
+}
+
+// sanitizeFTS5Query escapes user input for safe use in FTS5 MATCH queries.
+// Each word is wrapped in double quotes to treat it as a literal token,
+// preventing FTS5 operator injection (AND, OR, NOT, NEAR, etc.).
+func sanitizeFTS5Query(query string) string {
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return query
+	}
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		// Escape any embedded double quotes
+		w = strings.ReplaceAll(w, `"`, `""`)
+		quoted[i] = `"` + w + `"`
+	}
+	return strings.Join(quoted, " ")
 }

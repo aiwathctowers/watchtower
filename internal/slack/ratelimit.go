@@ -74,6 +74,9 @@ func (rl *RateLimiter) Wait(ctx context.Context, tier int) error {
 // HandleRateLimit sets a backoff for the given tier after receiving a 429 response.
 // It adds jitter (0-25% of retryAfter) to avoid thundering herd.
 func (rl *RateLimiter) HandleRateLimit(tier int, retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		retryAfter = time.Second
+	}
 	jitter := time.Duration(rand.Int64N(int64(retryAfter) / 4))
 	until := time.Now().Add(retryAfter + jitter)
 
