@@ -168,6 +168,12 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		messagesSynced = state.MessagesSynced
 	}
 	var latestTS string
+	// Preserve previous LastSyncedTS during pagination so an interrupted sync
+	// doesn't advance the high-water mark past unfetched messages.
+	previousLastSyncedTS := ""
+	if state != nil {
+		previousLastSyncedTS = state.LastSyncedTS
+	}
 
 	for {
 		select {
@@ -205,19 +211,27 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		messagesSynced += count
 		o.progress.AddMessages(count)
 
-		// Update sync state with progress
+		done := !resp.HasMore
+
+		// Save cursor and message count for resumability, but only advance
+		// LastSyncedTS once all pages have been fetched. This prevents an
+		// interrupted sync from permanently skipping unfetched messages.
+		savedTS := previousLastSyncedTS
+		if done {
+			savedTS = latestTS
+		}
 		syncState := db.SyncState{
-			LastSyncedTS:         latestTS,
-			OldestSyncedTS:       oldest,
-			IsInitialSyncComplete: !isInitial || !resp.HasMore,
-			Cursor:               resp.NextCursor,
-			MessagesSynced:       messagesSynced,
+			LastSyncedTS:          savedTS,
+			OldestSyncedTS:        oldest,
+			IsInitialSyncComplete: !isInitial || done,
+			Cursor:                resp.NextCursor,
+			MessagesSynced:        messagesSynced,
 		}
 		if err := o.db.UpdateSyncState(channelID, syncState); err != nil {
 			return fmt.Errorf("updating sync state: %w", err)
 		}
 
-		if !resp.HasMore {
+		if done {
 			break
 		}
 		cursor = resp.NextCursor
