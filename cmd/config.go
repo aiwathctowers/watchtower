@@ -58,6 +58,9 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	if workspace == "" {
 		return fmt.Errorf("workspace name is required")
 	}
+	if strings.ContainsAny(workspace, "/\\") || strings.Contains(workspace, "..") {
+		return fmt.Errorf("workspace name contains invalid characters")
+	}
 
 	// Slack token
 	fmt.Fprint(cmd.OutOrStdout(), "Slack token (xoxp-...): ")
@@ -143,6 +146,10 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	v.Set(key, typedValue)
 	if err := v.WriteConfig(); err != nil {
 		return fmt.Errorf("writing config: %w", err)
+	}
+	// Ensure file permissions remain restrictive since config contains secrets
+	if err := os.Chmod(configPath, 0o600); err != nil {
+		return fmt.Errorf("setting config file permissions: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Set %s = %s\n", key, value)
