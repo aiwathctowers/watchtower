@@ -116,6 +116,9 @@ func (c *Config) Validate() error {
 	if c.ActiveWorkspace == "" {
 		return fmt.Errorf("active_workspace is required")
 	}
+	if strings.ContainsAny(c.ActiveWorkspace, "/\\") || strings.Contains(c.ActiveWorkspace, "..") {
+		return fmt.Errorf("active_workspace %q contains invalid characters", c.ActiveWorkspace)
+	}
 	ws, err := c.GetActiveWorkspace()
 	if err != nil {
 		return err
