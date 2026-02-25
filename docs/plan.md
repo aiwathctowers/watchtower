@@ -168,7 +168,7 @@ watch:
 **Files:** `internal/sync/worker.go`
 
 ### Task 9: Metadata sync (workspace, users, channels)
-- [ ] Add `syncMetadata(ctx)` to orchestrator:
+- [x] Add `syncMetadata(ctx)` to orchestrator:
   - Call `slackClient.GetTeamInfo()` → `db.UpsertWorkspace()`
   - Call `slackClient.GetUsers()` (paginated) → for each: `db.UpsertUser()`; detect deleted users (in DB but absent from API → set is_deleted=1)
   - Call `slackClient.GetChannels()` (types=public_channel,private_channel,im,mpim, paginated) → for each: `db.UpsertChannel()` with is_member from API response
