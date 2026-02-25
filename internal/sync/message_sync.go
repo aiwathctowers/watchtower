@@ -135,6 +135,8 @@ func assignChannelPriority(ch db.Channel, watchMap map[string]string) TaskPriori
 			return PriorityWatchHigh
 		case "normal":
 			return PriorityWatchNormal
+		case "low":
+			return PriorityWatchLow
 		}
 	}
 	if ch.IsMember {

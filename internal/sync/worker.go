@@ -12,8 +12,9 @@ type TaskPriority int
 const (
 	PriorityWatchHigh   TaskPriority = 0
 	PriorityWatchNormal TaskPriority = 1
-	PriorityMember      TaskPriority = 2
-	PriorityRest        TaskPriority = 3
+	PriorityWatchLow    TaskPriority = 2
+	PriorityMember      TaskPriority = 3
+	PriorityRest        TaskPriority = 4
 )
 
 // SyncTask represents a unit of work for the worker pool.

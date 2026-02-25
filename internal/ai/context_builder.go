@@ -225,7 +225,7 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 			channelBudget = budget * 3 / 4
 		}
 		for _, chName := range query.Channels {
-			if tokensUsed >= budget {
+			if channelBudget-tokensUsed <= 0 {
 				break
 			}
 			ch, err := cb.db.GetChannelByName(chName)

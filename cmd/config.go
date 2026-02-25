@@ -145,12 +145,12 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		typedValue = true
 	} else if value == "false" {
 		typedValue = false
+	} else if i, err := strconv.Atoi(value); err == nil {
+		typedValue = i
 	} else if _, err := time.ParseDuration(value); err == nil {
 		// Store duration strings as-is (e.g., "15m", "900s") so viper
 		// can parse them correctly into time.Duration on read.
 		typedValue = value
-	} else if i, err := strconv.Atoi(value); err == nil {
-		typedValue = i
 	}
 	v.Set(key, typedValue)
 	if err := v.WriteConfig(); err != nil {

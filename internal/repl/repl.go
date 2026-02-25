@@ -94,6 +94,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamDoneMsg:
 		m.streaming = false
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		if msg.sources != "" {
 			m.output.WriteString("\n\n" + msg.sources)
 		}
@@ -104,6 +108,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamErrMsg:
 		m.streaming = false
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		m.output.WriteString("\n" + errorStyle.Render("Error: "+msg.err.Error()) + "\n")
 		m.lines = splitLines(m.output.String())
 		m.scroll = 0
@@ -111,6 +119,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commandResultMsg:
 		m.streaming = false
+		if m.cancel != nil {
+			m.cancel()
+			m.cancel = nil
+		}
 		m.output.WriteString(msg.output + "\n")
 		m.lines = splitLines(m.output.String())
 		m.scroll = 0
