@@ -14,7 +14,8 @@ import (
 	"watchtower/internal/db"
 )
 
-// messageMux creates a mock Slack API that includes conversations.history responses.
+// messageMux creates a mock Slack API that includes conversations.history responses
+// and an empty conversations.replies handler.
 func messageMux(channelMessages map[string][]map[string]any) *http.ServeMux {
 	mux := baseMux()
 
@@ -60,6 +61,16 @@ func messageMux(channelMessages map[string][]map[string]any) *http.ServeMux {
 			"response_metadata": map[string]any{
 				"next_cursor": nextCursor,
 			},
+		})
+	})
+
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"messages": []any{},
+			"has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
 

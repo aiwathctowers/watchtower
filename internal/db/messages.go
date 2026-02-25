@@ -130,6 +130,46 @@ func (db *DB) GetThreadReplies(channelID, threadTS string) ([]Message, error) {
 	return scanMessages(rows)
 }
 
+// GetThreadParents returns messages with reply_count > 0 that likely need
+// thread reply syncing. A thread is considered "needs sync" when the number
+// of replies stored in the DB is less than the parent's reply_count.
+func (db *DB) GetThreadParents(channelID string) ([]Message, error) {
+	rows, err := db.Query(`
+		SELECT m.channel_id, m.ts, m.user_id, m.text, m.thread_ts, m.reply_count,
+			m.is_edited, m.is_deleted, m.subtype, m.permalink, m.ts_unix, m.raw_json
+		FROM messages m
+		WHERE m.channel_id = ? AND m.reply_count > 0
+			AND (SELECT COUNT(*) FROM messages r WHERE r.channel_id = m.channel_id AND r.thread_ts = m.ts) < m.reply_count
+		ORDER BY m.ts_unix DESC`,
+		channelID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying thread parents: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
+// GetAllThreadParents returns all messages with reply_count > 0 across all channels
+// that likely need thread reply syncing.
+func (db *DB) GetAllThreadParents() ([]Message, error) {
+	rows, err := db.Query(`
+		SELECT m.channel_id, m.ts, m.user_id, m.text, m.thread_ts, m.reply_count,
+			m.is_edited, m.is_deleted, m.subtype, m.permalink, m.ts_unix, m.raw_json
+		FROM messages m
+		WHERE m.reply_count > 0
+			AND (SELECT COUNT(*) FROM messages r WHERE r.channel_id = m.channel_id AND r.thread_ts = m.ts) < m.reply_count
+		ORDER BY m.ts_unix DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying all thread parents: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
 func scanMessages(rows *sql.Rows) ([]Message, error) {
 	var messages []Message
 	for rows.Next() {

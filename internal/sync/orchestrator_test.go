@@ -132,11 +132,21 @@ func baseMux() *http.ServeMux {
 }
 
 // defaultMux creates a mock Slack API server with standard responses,
-// including an empty conversations.history handler.
+// including an empty conversations.history and conversations.replies handler.
 func defaultMux() *http.ServeMux {
 	mux := baseMux()
 
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"messages": []any{},
+			"has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"ok":       true,

@@ -67,7 +67,7 @@ func (o *Orchestrator) Run(ctx context.Context, opts SyncOptions) error {
 		return fmt.Errorf("message sync: %w", err)
 	}
 
-	// Phase 3: threads (stub — implemented in Task 11)
+	// Phase 3: threads
 	o.logger.Println("phase 3: syncing threads")
 	if err := o.syncThreads(ctx, opts); err != nil {
 		return fmt.Errorf("thread sync: %w", err)
@@ -172,11 +172,7 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 
 // syncMessages is implemented in message_sync.go.
 
-// syncThreads is a stub for thread sync (implemented in Task 11).
-func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error {
-	// Will be implemented in Task 11 (thread_sync.go)
-	return nil
-}
+// syncThreads is implemented in thread_sync.go.
 
 // isNonFatalError returns true for Slack errors that should be logged but not stop the sync.
 func isNonFatalError(err error) bool {

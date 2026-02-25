@@ -190,7 +190,7 @@ watch:
 **Files:** `internal/sync/message_sync.go`
 
 ### Task 11: Thread sync
-- [ ] Create `internal/sync/thread_sync.go`:
+- [x] Create `internal/sync/thread_sync.go`:
   - `syncThreads(ctx, opts)` — skip entirely if `config.sync.sync_threads == false`
   - Query messages with `reply_count > 0` that don't have all replies synced yet
   - For each thread parent: submit SyncTask(type=thread) to WorkerPool
