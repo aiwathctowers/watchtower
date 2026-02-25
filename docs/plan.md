@@ -279,7 +279,7 @@ watch:
 **Files:** `internal/ai/client.go`, `internal/ai/prompt.go`
 
 ### Task 17: Response renderer (internal/ai/response_renderer.go)
-- [ ] Create `internal/ai/response_renderer.go`:
+- [x] Create `internal/ai/response_renderer.go`:
   - `type ResponseRenderer struct` with db (for permalink lookups), domain
   - `Render(response string) (string, error)`:
     - Detects message references (patterns like `#channel-name YYYY-MM-DD HH:MM`) → looks up in DB → converts to Slack permalinks (`https://{domain}.slack.com/archives/{channelID}/p{ts_no_dot}`)
