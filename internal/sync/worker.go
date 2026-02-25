@@ -6,14 +6,6 @@ import (
 	"sync"
 )
 
-// TaskType distinguishes between channel message sync and thread reply sync.
-type TaskType int
-
-const (
-	TaskChannel TaskType = iota
-	TaskThread
-)
-
 // TaskPriority determines the processing order of sync tasks.
 type TaskPriority int
 
@@ -26,7 +18,6 @@ const (
 
 // SyncTask represents a unit of work for the worker pool.
 type SyncTask struct {
-	Type      TaskType
 	ChannelID string
 	ThreadTS  string
 	Priority  TaskPriority
@@ -37,6 +28,7 @@ type WorkerPool struct {
 	workers int
 	tasks   chan SyncTask
 	wg      sync.WaitGroup
+	cancel  context.CancelFunc // if set, called on first error to stop other workers
 
 	mu   sync.Mutex
 	errs []error
@@ -72,6 +64,9 @@ func (wp *WorkerPool) Start(ctx context.Context, handler func(ctx context.Contex
 						wp.mu.Lock()
 						wp.errs = append(wp.errs, err)
 						wp.mu.Unlock()
+						if wp.cancel != nil {
+							wp.cancel()
+						}
 					}
 				}
 			}

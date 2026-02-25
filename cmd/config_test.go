@@ -128,7 +128,7 @@ func TestConfigShow_NoFile(t *testing.T) {
 func TestMaskValue(t *testing.T) {
 	assert.Equal(t, "****", maskValue("short"))
 	assert.Equal(t, "****", maskValue("twelve-char"))
-	assert.Equal(t, "****here", maskValue("xoxp-secret-token-here"))
+	assert.Equal(t, "****", maskValue("xoxp-secret-token-here"))
 }
 
 func TestIsSensitiveKey(t *testing.T) {

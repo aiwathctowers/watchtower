@@ -1,5 +1,3 @@
-//go:build linux
-
 package daemon
 
 import (
@@ -8,14 +6,8 @@ import (
 )
 
 // WatchWake returns a channel that fires when the system appears to have woken
-// from sleep. On Linux we use the same time-jump heuristic as macOS: if the
-// wall-clock gap since the last check exceeds twice the poll interval, we
-// assume the machine was asleep.
-//
-// A D-Bus subscription to org.freedesktop.login1.Manager.PrepareForSleep
-// would be more reliable, but it adds a heavy dependency (godbus) that is not
-// worth pulling in for a fallback platform. The time-jump approach works well
-// enough for typical laptop sleep/wake cycles.
+// from sleep. It uses a time-jump heuristic: if the wall-clock gap since the
+// last check exceeds twice the poll interval, we assume the machine was asleep.
 func WatchWake(ctx context.Context, pollInterval time.Duration) <-chan struct{} {
 	ch := make(chan struct{}, 1)
 	go func() {

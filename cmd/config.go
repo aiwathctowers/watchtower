@@ -187,8 +187,5 @@ func isSensitiveKey(key string) bool {
 }
 
 func maskValue(val string) string {
-	if len(val) <= 12 {
-		return "****"
-	}
-	return "****" + val[len(val)-4:]
+	return "****"
 }

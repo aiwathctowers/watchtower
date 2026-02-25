@@ -17,10 +17,9 @@ import (
 
 // SyncOptions configures how a sync run behaves.
 type SyncOptions struct {
-	Full       bool     // Re-fetch all history within the initial_history_days window
-	Channels   []string // Limit sync to specific channel names/IDs (empty = all)
-	Workers    int      // Number of concurrent sync workers (0 = use config default)
-	DaemonMode bool     // Running as background daemon
+	Full     bool     // Re-fetch all history within the initial_history_days window
+	Channels []string // Limit sync to specific channel names/IDs (empty = all)
+	Workers  int      // Number of concurrent sync workers (0 = use config default)
 }
 
 // Orchestrator coordinates the sync phases.
@@ -201,6 +200,7 @@ func isNonFatalError(err error) bool {
 		"is_archived",
 		"not_in_channel",
 		"missing_scope",
+		"access_denied",
 	}
 	for _, nf := range nonFatal {
 		if strings.Contains(msg, nf) {

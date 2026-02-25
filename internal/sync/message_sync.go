@@ -38,8 +38,12 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 
 	o.progress.SetMessageChannels(len(channels))
 
+	poolCtx, poolCancel := context.WithCancel(ctx)
+	defer poolCancel()
+
 	pool := NewWorkerPool(workers)
-	pool.Start(ctx, func(ctx context.Context, task SyncTask) error {
+	pool.cancel = poolCancel
+	pool.Start(poolCtx, func(ctx context.Context, task SyncTask) error {
 		o.progress.SetCurrentChannel(task.ChannelID)
 		if err := o.syncChannel(ctx, task.ChannelID, opts.Full); err != nil {
 			if isNonFatalError(err) {
@@ -54,7 +58,7 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 	})
 
 	for _, task := range channels {
-		if !pool.Submit(ctx, task) {
+		if !pool.Submit(poolCtx, task) {
 			break
 		}
 	}
@@ -113,7 +117,6 @@ func (o *Orchestrator) buildChannelQueue(opts SyncOptions) ([]SyncTask, error) {
 
 		priority := assignChannelPriority(ch, watchMap)
 		tasks = append(tasks, SyncTask{
-			Type:      TaskChannel,
 			ChannelID: ch.ID,
 			Priority:  priority,
 		})

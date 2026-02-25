@@ -37,7 +37,6 @@ func TestWorkerPoolProcessesTasks(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		wp.Submit(context.Background(), SyncTask{
-			Type:      TaskChannel,
 			ChannelID: "C001",
 			Priority:  PriorityMember,
 		})
@@ -150,22 +149,18 @@ func TestWorkerPoolNoTasksReturnsCleanly(t *testing.T) {
 	assert.Empty(t, errs)
 }
 
-func TestSyncTaskTypes(t *testing.T) {
+func TestSyncTaskFields(t *testing.T) {
 	channelTask := SyncTask{
-		Type:      TaskChannel,
 		ChannelID: "C001",
 		Priority:  PriorityWatchHigh,
 	}
-	assert.Equal(t, TaskChannel, channelTask.Type)
 	assert.Empty(t, channelTask.ThreadTS)
 
 	threadTask := SyncTask{
-		Type:      TaskThread,
 		ChannelID: "C001",
 		ThreadTS:  "1234567890.123456",
 		Priority:  PriorityMember,
 	}
-	assert.Equal(t, TaskThread, threadTask.Type)
 	assert.Equal(t, "1234567890.123456", threadTask.ThreadTS)
 }
 

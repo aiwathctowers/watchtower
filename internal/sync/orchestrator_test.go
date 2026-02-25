@@ -372,7 +372,6 @@ func TestSyncOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.Full)
 	assert.Empty(t, opts.Channels)
 	assert.Equal(t, 0, opts.Workers)
-	assert.False(t, opts.DaemonMode)
 }
 
 func TestIsNonFatalError(t *testing.T) {
@@ -385,6 +384,7 @@ func TestIsNonFatalError(t *testing.T) {
 		{"is_archived", true},
 		{"not_in_channel", true},
 		{"missing_scope", true},
+		{"access_denied", true},
 		{"some random db error", false},
 		{"", false},
 	}

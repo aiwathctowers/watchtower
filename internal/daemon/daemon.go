@@ -78,9 +78,7 @@ func (d *Daemon) wakeChannel() <-chan struct{} {
 }
 
 func (d *Daemon) runSync(ctx context.Context) {
-	opts := sync.SyncOptions{
-		DaemonMode: true,
-	}
+	opts := sync.SyncOptions{}
 	if err := d.orchestrator.Run(ctx, opts); err != nil {
 		d.logger.Printf("sync error: %v", err)
 	}

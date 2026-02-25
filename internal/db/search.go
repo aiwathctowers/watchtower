@@ -92,7 +92,7 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
-		return query
+		return ""
 	}
 	// FTS5 reserved operators (case-insensitive)
 	operators := map[string]bool{

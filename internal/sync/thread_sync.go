@@ -3,6 +3,9 @@ package sync
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"watchtower/internal/db"
 )
 
 // syncThreads fetches replies for threads that have reply_count > 0 but
@@ -17,6 +20,11 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 	threadParents, err := o.db.GetAllThreadParents()
 	if err != nil {
 		return fmt.Errorf("querying thread parents: %w", err)
+	}
+
+	// Apply --channels filter to thread parents
+	if len(opts.Channels) > 0 {
+		threadParents = filterThreadParentsByChannel(threadParents, opts.Channels, o.db)
 	}
 
 	if len(threadParents) == 0 {
@@ -35,8 +43,12 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 		workers = 1
 	}
 
+	poolCtx, poolCancel := context.WithCancel(ctx)
+	defer poolCancel()
+
 	pool := NewWorkerPool(workers)
-	pool.Start(ctx, func(ctx context.Context, task SyncTask) error {
+	pool.cancel = poolCancel
+	pool.Start(poolCtx, func(ctx context.Context, task SyncTask) error {
 		replyCount, err := o.syncThread(ctx, task.ChannelID, task.ThreadTS)
 		if err != nil {
 			if isNonFatalError(err) {
@@ -54,8 +66,7 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 	// differentiate thread priority; the channel priority already handled
 	// ordering during message sync.
 	for _, parent := range threadParents {
-		if !pool.Submit(ctx, SyncTask{
-			Type:      TaskThread,
+		if !pool.Submit(poolCtx, SyncTask{
 			ChannelID: parent.ChannelID,
 			ThreadTS:  parent.TS,
 			Priority:  PriorityRest,
@@ -71,6 +82,35 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 	}
 
 	return nil
+}
+
+// filterThreadParentsByChannel keeps only thread parents whose channel matches the filter.
+// Matches by channel name or ID, case-insensitive (consistent with buildChannelQueue).
+func filterThreadParentsByChannel(parents []db.Message, channels []string, database *db.DB) []db.Message {
+	filterSet := make(map[string]bool, len(channels))
+	for _, ch := range channels {
+		filterSet[strings.ToLower(ch)] = true
+	}
+
+	// Build name-to-ID mapping from DB so we can match by name
+	allChannels, err := database.GetChannels(db.ChannelFilter{})
+	if err != nil {
+		return parents // on error, don't filter
+	}
+	allowedIDs := make(map[string]bool, len(channels))
+	for _, ch := range allChannels {
+		if filterSet[strings.ToLower(ch.Name)] || filterSet[strings.ToLower(ch.ID)] {
+			allowedIDs[ch.ID] = true
+		}
+	}
+
+	var filtered []db.Message
+	for _, p := range parents {
+		if allowedIDs[p.ChannelID] {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
 }
 
 // syncThread fetches all replies for a single thread and upserts them.
