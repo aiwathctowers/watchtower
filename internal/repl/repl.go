@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"watchtower/internal/ai"
 	"watchtower/internal/config"
@@ -179,7 +180,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyBackspace:
 		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
+			_, size := utf8.DecodeLastRuneInString(m.input)
+			m.input = m.input[:len(m.input)-size]
 		}
 		return m, nil
 

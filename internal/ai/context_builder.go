@@ -261,7 +261,11 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 				continue
 			}
 			from, to := cb.effectiveTimeRange(query)
-			section, msgKeys, err := cb.formatUserMessagesDedup(u.ID, u.Name, from, to, userBudget, seen)
+			remaining := userBudget - tokensUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		section, msgKeys, err := cb.formatUserMessagesDedup(u.ID, u.Name, from, to, remaining, seen)
 			if err != nil {
 				continue
 			}
@@ -308,7 +312,11 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 			Limit:      100,
 		})
 		if err == nil && len(results) > 0 {
-			section := cb.formatSearchResults(results, searchBudget, seen)
+			remaining := searchBudget - tokensUsed
+			if remaining < 0 {
+				remaining = 0
+			}
+			section := cb.formatSearchResults(results, remaining, seen)
 			if section != "" {
 				b.WriteString(section)
 				tokensUsed += estimateTokens(section)
@@ -534,8 +542,9 @@ func (cb *ContextBuilder) formatMessage(channelName string, msg db.Message) stri
 	}
 
 	text := msg.Text
-	if len(text) > 500 {
-		text = text[:497] + "..."
+	runes := []rune(text)
+	if len(runes) > 500 {
+		text = string(runes[:497]) + "..."
 	}
 
 	return fmt.Sprintf("#%s | %s | %s: %s\n", channelName, timeStr, userLabel, text)
@@ -577,8 +586,9 @@ func (cb *ContextBuilder) formatThreadSummary(channelID, threadTS, channelName s
 		reply := threadReplies[i]
 		userName, _ := cb.resolveUser(reply.UserID)
 		text := reply.Text
-		if len(text) > 200 {
-			text = text[:197] + "..."
+		runes := []rune(text)
+		if len(runes) > 200 {
+			text = string(runes[:197]) + "..."
 		}
 		line := fmt.Sprintf("    > @%s: %s\n", userName, text)
 		if tokensUsed+estimateTokens(line) > budget {

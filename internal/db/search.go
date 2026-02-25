@@ -107,7 +107,7 @@ func sanitizeFTS5Query(query string) string {
 		// Strip FTS5 special characters: * ^ : "
 		w = strings.Map(func(r rune) rune {
 			switch r {
-			case '*', '^', ':', '"':
+			case '*', '^', ':', '"', '(', ')', '+':
 				return -1
 			default:
 				return r

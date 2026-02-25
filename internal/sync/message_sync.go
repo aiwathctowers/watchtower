@@ -159,7 +159,7 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		cursor = state.Cursor
 	}
 
-	isInitial := state == nil || !state.IsInitialSyncComplete
+	isInitial := state == nil || !state.IsInitialSyncComplete || full
 	messagesSynced := 0
 	if state != nil {
 		messagesSynced = state.MessagesSynced
