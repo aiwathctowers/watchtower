@@ -27,10 +27,10 @@ Watchtower is an open-source Go CLI tool that syncs a Slack workspace into a loc
 **Files:** `go.mod`, `go.sum`, `main.go`, `Makefile`
 
 ### Task 2: Cobra root command and global flags
-- [ ] Create `cmd/root.go` with root cobra command
-- [ ] Add global persistent flags: `--workspace` (string), `--config` (string, default `~/.config/watchtower/config.yaml`), `--verbose` (bool)
-- [ ] Root command with no subcommand should print help (REPL mode added later in Task 18)
-- [ ] Create `cmd/version.go` that prints version info (embed via ldflags)
+- [x] Create `cmd/root.go` with root cobra command
+- [x] Add global persistent flags: `--workspace` (string), `--config` (string, default `~/.config/watchtower/config.yaml`), `--verbose` (bool)
+- [x] Root command with no subcommand should print help (REPL mode added later in Task 18)
+- [x] Create `cmd/version.go` that prints version info (embed via ldflags)
 
 **Files:** `cmd/root.go`, `cmd/version.go`
 
