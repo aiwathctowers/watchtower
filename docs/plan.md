@@ -35,14 +35,14 @@ Watchtower is an open-source Go CLI tool that syncs a Slack workspace into a loc
 **Files:** `cmd/root.go`, `cmd/version.go`
 
 ### Task 3: Config system (internal/config/)
-- [ ] Create `internal/config/defaults.go` with default values for all config fields
-- [ ] Create `internal/config/config.go` with:
+- [x] Create `internal/config/defaults.go` with default values for all config fields
+- [x] Create `internal/config/config.go` with:
   - `Config` struct: `ActiveWorkspace`, `Workspaces` map (each has `SlackToken`), `AI` (ApiKey, Model, MaxTokens, ContextBudget), `Sync` (Workers, InitialHistoryDays, PollInterval, SyncThreads, SyncOnWake), `Watch` (Channels, Users)
   - `Load(configPath string) (*Config, error)` using viper: reads YAML, binds env vars (`WATCHTOWER_SLACK_TOKEN`, `ANTHROPIC_API_KEY`, `WATCHTOWER_AI_MODEL`, `WATCHTOWER_SYNC_WORKERS`)
   - `Validate() error` — checks required fields
   - `GetActiveWorkspace() (*WorkspaceConfig, error)`
   - `DBPath() string` — returns `~/.local/share/watchtower/<workspace>/watchtower.db`
-- [ ] Create `cmd/config.go`:
+- [x] Create `cmd/config.go`:
   - `config init` subcommand: interactive wizard that asks for Slack token, Anthropic API key, tests connections, writes config YAML, creates DB directory
   - `config set <key> <value>` subcommand: dot-notation setter (e.g., `ai.model`)
   - `config show` subcommand: prints current config (masks tokens)
