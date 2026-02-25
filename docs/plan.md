@@ -326,14 +326,14 @@ watch:
 **Files:** `cmd/channels.go`, `cmd/users.go`
 
 ### Task 21: REPL mode (internal/repl/)
-- [ ] Create `internal/repl/repl.go`:
+- [x] Create `internal/repl/repl.go`:
   - Bubbletea model with text input area + scrollable output area
   - On Enter: send input through AI pipeline (parse → context → Claude → render), stream response to output
   - Command history via up/down arrow keys
   - Ctrl+C or `/quit` to exit
-- [ ] Create `internal/repl/commands.go`:
+- [x] Create `internal/repl/commands.go`:
   - Slash command handler for: `/sync` (trigger incremental sync), `/status` (show DB stats), `/catchup` (run catchup), `/quit` or `/exit` (exit), `/help` (list commands)
-- [ ] Wire REPL into `cmd/root.go`: when no subcommand is given, launch REPL
+- [x] Wire REPL into `cmd/root.go`: when no subcommand is given, launch REPL
 
 **Files:** `internal/repl/repl.go`, `internal/repl/commands.go`, `cmd/root.go` (modify)
 
