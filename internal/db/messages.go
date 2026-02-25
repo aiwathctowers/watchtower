@@ -9,6 +9,8 @@ import (
 type MessageOpts struct {
 	ChannelID string
 	UserID    string
+	FromUnix  float64
+	ToUnix    float64
 	Limit     int
 }
 
@@ -50,6 +52,14 @@ func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 	if opts.UserID != "" {
 		conditions = append(conditions, "user_id = ?")
 		args = append(args, opts.UserID)
+	}
+	if opts.FromUnix > 0 {
+		conditions = append(conditions, "ts_unix >= ?")
+		args = append(args, opts.FromUnix)
+	}
+	if opts.ToUnix > 0 {
+		conditions = append(conditions, "ts_unix <= ?")
+		args = append(args, opts.ToUnix)
 	}
 
 	if len(conditions) > 0 {

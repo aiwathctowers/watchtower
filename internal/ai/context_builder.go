@@ -316,7 +316,10 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 			Limit:      100,
 		})
 		if err == nil && len(results) > 0 {
-			remaining := searchBudget - tokensUsed
+			remaining := budget - tokensUsed
+			if remaining > searchBudget {
+				remaining = searchBudget
+			}
 			if remaining < 0 {
 				remaining = 0
 			}
@@ -458,20 +461,16 @@ func (cb *ContextBuilder) formatUserMessages(userID, userName string, from, to f
 // Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatUserMessagesDedup(userID, userName string, from, to float64, budget int, seen map[string]bool) (string, []string, error) {
 	msgs, err := cb.db.GetMessages(db.MessageOpts{
-		UserID: userID,
-		Limit:  200,
+		UserID:   userID,
+		FromUnix: from,
+		ToUnix:   to,
+		Limit:    200,
 	})
 	if err != nil {
 		return "", nil, err
 	}
 
-	var filtered []db.Message
-	for _, msg := range msgs {
-		if msg.TSUnix >= from && msg.TSUnix <= to {
-			filtered = append(filtered, msg)
-		}
-	}
-	if len(filtered) == 0 {
+	if len(msgs) == 0 {
 		return "", nil, nil
 	}
 
@@ -480,7 +479,7 @@ func (cb *ContextBuilder) formatUserMessagesDedup(userID, userName string, from,
 	tokensUsed := estimateTokens(b.String())
 	var keys []string
 
-	for _, msg := range filtered {
+	for _, msg := range msgs {
 		key := msg.ChannelID + "|" + msg.TS
 		if seen != nil && seen[key] {
 			continue
