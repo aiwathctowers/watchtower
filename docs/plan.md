@@ -338,14 +338,14 @@ watch:
 **Files:** `internal/repl/repl.go`, `internal/repl/commands.go`, `cmd/root.go` (modify)
 
 ### Task 22: Daemon mode with wake detection (internal/daemon/)
-- [ ] Create `internal/daemon/daemon.go`:
+- [x] Create `internal/daemon/daemon.go`:
   - `type Daemon struct` with orchestrator, config, poll ticker
   - `Run(ctx context.Context) error` — poll loop: on ticker (config poll_interval) or wake signal → run incremental sync
   - Graceful shutdown on SIGINT/SIGTERM via context cancellation
-- [ ] Create `internal/daemon/wake_darwin.go` (build tag `//go:build darwin`):
+- [x] Create `internal/daemon/wake_darwin.go` (build tag `//go:build darwin`):
   - Detect wake-from-sleep: poll-based approach checking system uptime discontinuity (if `time.Since(lastCheck) > 2 * pollInterval` → assume wake)
   - Returns `<-chan struct{}` that fires on wake
-- [ ] Create `internal/daemon/wake_linux.go` (build tag `//go:build linux`):
+- [x] Create `internal/daemon/wake_linux.go` (build tag `//go:build linux`):
   - D-Bus subscription to `org.freedesktop.login1.Manager.PrepareForSleep(false)`
   - Returns `<-chan struct{}` that fires on wake
   - Fallback: same time-jump detection as darwin
