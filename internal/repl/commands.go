@@ -219,7 +219,7 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 
 	systemPrompt := ai.BuildSystemPrompt(deps.Workspace, deps.Domain)
 	question := "What happened since I was last here? Give me a structured catchup summary."
-	userMessage := ai.AssembleUserMessage("", msgContext, question)
+	userMessage := ai.AssembleUserMessage(msgContext, question)
 
 	aiClient := ai.NewClient(cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.MaxTokens)
 	textCh, errCh := aiClient.Query(ctx, systemPrompt, userMessage)

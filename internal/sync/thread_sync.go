@@ -24,7 +24,10 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 
 	// Apply --channels filter to thread parents
 	if len(opts.Channels) > 0 {
-		threadParents = filterThreadParentsByChannel(threadParents, opts.Channels, o.db)
+		threadParents, err = filterThreadParentsByChannel(threadParents, opts.Channels, o.db)
+		if err != nil {
+			return fmt.Errorf("filtering thread parents by channel: %w", err)
+		}
 	}
 
 	if len(threadParents) == 0 {
@@ -86,7 +89,7 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 
 // filterThreadParentsByChannel keeps only thread parents whose channel matches the filter.
 // Matches by channel name or ID, case-insensitive (consistent with buildChannelQueue).
-func filterThreadParentsByChannel(parents []db.Message, channels []string, database *db.DB) []db.Message {
+func filterThreadParentsByChannel(parents []db.Message, channels []string, database *db.DB) ([]db.Message, error) {
 	filterSet := make(map[string]bool, len(channels))
 	for _, ch := range channels {
 		filterSet[strings.ToLower(ch)] = true
@@ -95,7 +98,7 @@ func filterThreadParentsByChannel(parents []db.Message, channels []string, datab
 	// Build name-to-ID mapping from DB so we can match by name
 	allChannels, err := database.GetChannels(db.ChannelFilter{})
 	if err != nil {
-		return parents // on error, don't filter
+		return nil, fmt.Errorf("fetching channels for thread filter: %w", err)
 	}
 	allowedIDs := make(map[string]bool, len(channels))
 	for _, ch := range allChannels {
@@ -110,7 +113,7 @@ func filterThreadParentsByChannel(parents []db.Message, channels []string, datab
 			filtered = append(filtered, p)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 // syncThread fetches all replies for a single thread and upserts them.

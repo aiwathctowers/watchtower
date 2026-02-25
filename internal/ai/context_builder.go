@@ -58,6 +58,9 @@ func (cb *ContextBuilder) Build(query ParsedQuery) (string, error) {
 
 	var sections []string
 
+	// Shared dedup map so relevant context skips messages already in priority context.
+	seen := make(map[string]bool)
+
 	// 1. Workspace summary
 	summary, err := cb.buildWorkspaceSummary(summaryBudget)
 	if err != nil {
@@ -68,7 +71,7 @@ func (cb *ContextBuilder) Build(query ParsedQuery) (string, error) {
 	}
 
 	// 2. Priority context — watched channels and users
-	priority, err := cb.buildPriorityContext(query, priorityBudget)
+	priority, err := cb.buildPriorityContext(query, priorityBudget, seen)
 	if err != nil {
 		return "", fmt.Errorf("building priority context: %w", err)
 	}
@@ -77,7 +80,7 @@ func (cb *ContextBuilder) Build(query ParsedQuery) (string, error) {
 	}
 
 	// 3. Relevant context — query-specific messages
-	relevant, err := cb.buildRelevantContext(query, relevantBudget)
+	relevant, err := cb.buildRelevantContext(query, relevantBudget, seen)
 	if err != nil {
 		return "", fmt.Errorf("building relevant context: %w", err)
 	}
@@ -152,7 +155,8 @@ func (cb *ContextBuilder) buildWorkspaceSummary(budget int) (string, error) {
 }
 
 // buildPriorityContext fetches recent messages from high-priority watched entities.
-func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (string, error) {
+// It populates the seen map so downstream tiers can skip duplicates.
+func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int, seen map[string]bool) (string, error) {
 	watchList, err := cb.db.GetWatchList()
 	if err != nil {
 		return "", err
@@ -174,13 +178,16 @@ func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (s
 			break
 		}
 		if w.EntityType == "channel" {
-			section, _, err := cb.formatChannelMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, nil)
+			section, msgKeys, err := cb.formatChannelMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, seen)
 			if err != nil {
 				continue
 			}
 			if section != "" {
 				b.WriteString(section)
 				tokensUsed += estimateTokens(section)
+				for _, k := range msgKeys {
+					seen[k] = true
+				}
 			}
 		}
 	}
@@ -191,13 +198,16 @@ func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (s
 			break
 		}
 		if w.EntityType == "user" {
-			section, _, err := cb.formatUserMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, nil)
+			section, msgKeys, err := cb.formatUserMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, seen)
 			if err != nil {
 				continue
 			}
 			if section != "" {
 				b.WriteString(section)
 				tokensUsed += estimateTokens(section)
+				for _, k := range msgKeys {
+					seen[k] = true
+				}
 			}
 		}
 	}
@@ -211,12 +221,11 @@ func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (s
 
 // buildRelevantContext assembles context specific to the query: channel messages,
 // user messages, FTS5 search results, and time-range filtered messages.
-func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (string, error) {
+// The seen map is shared with buildPriorityContext to skip already-included messages.
+func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int, seen map[string]bool) (string, error) {
 	var b strings.Builder
 	b.WriteString("=== Relevant Context ===\n")
 	tokensUsed := estimateTokens(b.String())
-
-	seen := make(map[string]bool) // key: channelID+ts to deduplicate
 
 	// Channel-specific messages
 	if len(query.Channels) > 0 {

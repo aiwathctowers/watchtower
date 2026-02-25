@@ -116,7 +116,7 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 		question += fmt.Sprintf(" Focus on #%s.", catchupFlagChannel)
 	}
 
-	userMessage := ai.AssembleUserMessage("", msgContext, question)
+	userMessage := ai.AssembleUserMessage(msgContext, question)
 
 	// Create AI client and query
 	aiClient := ai.NewClient(cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.MaxTokens)

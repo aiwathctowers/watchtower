@@ -424,7 +424,7 @@ func TestBuildPriorityContext_NoWatchList(t *testing.T) {
 			To:   refTime,
 		},
 	}
-	result, err := cb.buildPriorityContext(query, 50000)
+	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool))
 	require.NoError(t, err)
 	assert.Empty(t, result) // No watched items
 }
@@ -441,7 +441,7 @@ func TestBuildPriorityContext_WithWatchedChannel(t *testing.T) {
 			To:   refTime,
 		},
 	}
-	result, err := cb.buildPriorityContext(query, 50000)
+	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Priority Context")
 	assert.Contains(t, result, "#engineering")
@@ -459,7 +459,7 @@ func TestBuildRelevantContext_NoMatchingData(t *testing.T) {
 			To:   refTime,
 		},
 	}
-	result, err := cb.buildRelevantContext(query, 50000)
+	result, err := cb.buildRelevantContext(query, 50000, make(map[string]bool))
 	require.NoError(t, err)
 	assert.Empty(t, result) // Channel doesn't exist
 }

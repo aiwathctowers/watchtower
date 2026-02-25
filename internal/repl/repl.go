@@ -345,7 +345,7 @@ func runAIQueryStreaming(ctx context.Context, p *tea.Program, deps Deps, questio
 	}
 
 	systemPrompt := ai.BuildSystemPrompt(deps.Workspace, deps.Domain)
-	userMessage := ai.AssembleUserMessage("", msgContext, question)
+	userMessage := ai.AssembleUserMessage(msgContext, question)
 
 	aiClient := ai.NewClient(cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.MaxTokens)
 	textCh, errCh := aiClient.Query(ctx, systemPrompt, userMessage)

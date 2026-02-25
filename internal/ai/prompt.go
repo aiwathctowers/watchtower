@@ -21,20 +21,14 @@ Guidelines:
 
 // BuildSystemPrompt generates the system prompt with workspace context.
 func BuildSystemPrompt(workspaceName, domain string) string {
-	now := time.Now().Format("2006-01-02 15:04 MST")
+	now := time.Now().UTC().Format("2006-01-02 15:04 UTC")
 	return fmt.Sprintf(systemPromptTemplate, workspaceName, domain, now)
 }
 
-// AssembleUserMessage combines the workspace summary, message context, and
-// user question into a single prompt for the AI.
-func AssembleUserMessage(summary, context, question string) string {
+// AssembleUserMessage combines the message context (which includes the workspace
+// summary) and user question into a single prompt for the AI.
+func AssembleUserMessage(context, question string) string {
 	var b strings.Builder
-
-	if summary != "" {
-		b.WriteString("=== Workspace Summary ===\n")
-		b.WriteString(summary)
-		b.WriteString("\n\n")
-	}
 
 	if context != "" {
 		b.WriteString("=== Message Context ===\n")

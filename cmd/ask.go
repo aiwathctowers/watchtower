@@ -94,7 +94,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	// Assemble prompt
 	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain)
-	userMessage := ai.AssembleUserMessage("", msgContext, question)
+	userMessage := ai.AssembleUserMessage(msgContext, question)
 
 	// Determine model
 	model := cfg.AI.Model

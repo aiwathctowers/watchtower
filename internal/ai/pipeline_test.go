@@ -265,7 +265,7 @@ func TestIntegrationAIPromptAssembly(t *testing.T) {
 	assert.Contains(t, systemPrompt, "Watchtower")
 	assert.Contains(t, systemPrompt, "my-company")
 
-	userMessage := AssembleUserMessage("", messageContext, "summarize #general")
+	userMessage := AssembleUserMessage(messageContext, "summarize #general")
 	assert.Contains(t, userMessage, "Message Context")
 	assert.Contains(t, userMessage, "summarize #general")
 	assert.Contains(t, userMessage, "deploying v2.3")
@@ -332,7 +332,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 
 	// Step 3: Build prompts
 	systemPrompt := BuildSystemPrompt("my-company", "my-company")
-	userMessage := AssembleUserMessage("", messageContext, question)
+	userMessage := AssembleUserMessage(messageContext, question)
 
 	assert.Contains(t, systemPrompt, "Watchtower")
 	assert.Contains(t, userMessage, "deploying v2.3")
@@ -393,7 +393,7 @@ func TestIntegrationEndToEndStreaming(t *testing.T) {
 	assert.Contains(t, messageContext, "CI pipeline optimization")
 
 	systemPrompt := BuildSystemPrompt("my-company", "my-company")
-	userMessage := AssembleUserMessage("", messageContext, question)
+	userMessage := AssembleUserMessage(messageContext, question)
 
 	mockResponseText := "Bob optimized the CI pipeline, reducing build time by 40% through parallel test execution and better caching."
 
