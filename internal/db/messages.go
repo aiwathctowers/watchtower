@@ -170,6 +170,34 @@ func (db *DB) GetAllThreadParents() ([]Message, error) {
 	return scanMessages(rows)
 }
 
+// GetMessageNear finds the message in a channel closest to the given Unix
+// timestamp, within a tolerance of +/- 60 seconds. Returns nil if no match.
+func (db *DB) GetMessageNear(channelID string, tsUnix float64) (*Message, error) {
+	const tolerance = 60.0
+	row := db.QueryRow(`
+		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
+		FROM messages
+		WHERE channel_id = ? AND ts_unix >= ? AND ts_unix <= ?
+		ORDER BY ABS(ts_unix - ?) ASC
+		LIMIT 1`,
+		channelID, tsUnix-tolerance, tsUnix+tolerance, tsUnix,
+	)
+
+	var msg Message
+	err := row.Scan(
+		&msg.ChannelID, &msg.TS, &msg.UserID, &msg.Text, &msg.ThreadTS,
+		&msg.ReplyCount, &msg.IsEdited, &msg.IsDeleted, &msg.Subtype,
+		&msg.Permalink, &msg.TSUnix, &msg.RawJSON,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting message near ts %f in %s: %w", tsUnix, channelID, err)
+	}
+	return &msg, nil
+}
+
 func scanMessages(rows *sql.Rows) ([]Message, error) {
 	var messages []Message
 	for rows.Next() {
