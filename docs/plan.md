@@ -234,7 +234,7 @@ watch:
 **Files:** `cmd/sync.go`, `cmd/status.go`
 
 ### Task 14: AI query parser (internal/ai/query_parser.go)
-- [ ] Create `internal/ai/query_parser.go`:
+- [x] Create `internal/ai/query_parser.go`:
   - `type ParsedQuery struct`: RawText, TimeRange (*TimeRange with From/To time.Time), Channels ([]string), Users ([]string), Topics ([]string for FTS5), Intent (QueryIntent enum)
   - `type QueryIntent int` constants: IntentGeneral, IntentCatchup, IntentSearch, IntentPerson, IntentChannel
   - `Parse(input string) ParsedQuery` — deterministic, no AI calls:
