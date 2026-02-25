@@ -74,6 +74,7 @@ func Parse(input string) ParsedQuery {
 
 var channelLiteralRe = regexp.MustCompile(`#([\w-]+)`)
 var channelFuzzyRe = regexp.MustCompile(`(?i)\b(?:in|from)\s+([\w-]+)\s+channel\b`)
+var inChannelRe = regexp.MustCompile(`(?i)\bin\s+([\w-]+)\b`)
 
 func extractChannels(pq *ParsedQuery, text string) string {
 	// Literal #channel-name
@@ -90,15 +91,14 @@ func extractChannels(pq *ParsedQuery, text string) string {
 
 	// "summarize #X" pattern is handled by channel literal above.
 	// "in <name>" without "channel" — more generic pattern
-	inRe := regexp.MustCompile(`(?i)\bin\s+([\w-]+)\b`)
-	for _, m := range inRe.FindAllStringSubmatch(text, -1) {
+	for _, m := range inChannelRe.FindAllStringSubmatch(text, -1) {
 		word := strings.ToLower(m[1])
 		if isStopWord(word) {
 			continue
 		}
 		pq.Channels = append(pq.Channels, m[1])
 	}
-	text = removeMatchedChannels(text, inRe)
+	text = removeMatchedChannels(text, inChannelRe)
 
 	pq.Channels = dedup(pq.Channels)
 	return text
@@ -120,6 +120,7 @@ var userLiteralRe = regexp.MustCompile(`@([\w.-]+)`)
 var userFromRe = regexp.MustCompile(`(?i)\b(?:from|by)\s+([\w.-]+)\b`)
 var userSaidRe = regexp.MustCompile(`(?i)\b([\w.-]+)\s+said\b`)
 var userWhatDidRe = regexp.MustCompile(`(?i)\bwhat\s+did\s+([\w.-]+)\b`)
+var punctuationRe = regexp.MustCompile(`[^\w\s-]`)
 
 func extractUsers(pq *ParsedQuery, text string) string {
 	// Literal @username
@@ -203,11 +204,15 @@ func extractTimeRange(pq *ParsedQuery, text string) string {
 	if strings.Contains(lower, "this morning") {
 		morning := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, now.Location())
 		noon := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
+		from := morning
+		if now.Before(morning) {
+			from = todayStart
+		}
 		to := noon
 		if now.Before(noon) {
 			to = now
 		}
-		pq.TimeRange = &TimeRange{From: morning, To: to}
+		pq.TimeRange = &TimeRange{From: from, To: to}
 		return removeWord(text, `(?i)\bthis\s+morning\b`)
 	}
 
@@ -399,7 +404,7 @@ func isStopWord(w string) bool {
 
 func extractTopics(pq *ParsedQuery, text string) {
 	// Remove punctuation except hyphens within words
-	cleaned := regexp.MustCompile(`[^\w\s-]`).ReplaceAllString(text, " ")
+	cleaned := punctuationRe.ReplaceAllString(text, " ")
 	words := strings.Fields(cleaned)
 	var topics []string
 	for _, w := range words {

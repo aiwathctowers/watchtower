@@ -34,10 +34,17 @@ func (m *Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/status":
 		m.streaming = true
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
 		p := m.program
 		deps := m.deps
 		go func() {
 			output := runStatus(deps)
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			p.Send(commandResultMsg{output: output})
 		}()
 		return m, nil
