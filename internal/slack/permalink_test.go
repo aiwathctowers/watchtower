@@ -35,6 +35,20 @@ func TestGeneratePermalink(t *testing.T) {
 			ts:        "1609459200.001200",
 			want:      "https://team.slack.com/archives/D0123ABC/p1609459200001200",
 		},
+		{
+			name:      "group dm channel",
+			domain:    "team",
+			channelID: "G012345ABC",
+			ts:        "1700000000.000100",
+			want:      "https://team.slack.com/archives/G012345ABC/p1700000000000100",
+		},
+		{
+			name:      "hyphenated domain",
+			domain:    "my-company-name",
+			channelID: "C001",
+			ts:        "1700000000.000001",
+			want:      "https://my-company-name.slack.com/archives/C001/p1700000000000001",
+		},
 	}
 
 	for _, tt := range tests {

@@ -589,3 +589,51 @@ func TestFormatSearchResults_Dedup(t *testing.T) {
 	assert.NotContains(t, result, "first")
 	assert.Contains(t, result, "second")
 }
+
+func TestBuild_SmallBudgetStillProducesSummary(t *testing.T) {
+	database, _ := setupTestDB(t)
+
+	// Very small budget - should still produce at least workspace summary
+	cb := NewContextBuilder(database, 100, "test-corp")
+
+	query := ParsedQuery{RawText: "hello"}
+	result, err := cb.Build(query)
+	require.NoError(t, err)
+	assert.Contains(t, result, "Workspace Summary")
+}
+
+func TestBuild_MultipleChannelQuery(t *testing.T) {
+	database, refTime := setupTestDB(t)
+	cb := NewContextBuilder(database, 150000, "test-corp")
+
+	query := ParsedQuery{
+		RawText:  "compare #engineering and #design",
+		Channels: []string{"engineering", "design"},
+		TimeRange: &TimeRange{
+			From: refTime.Add(-4 * time.Hour),
+			To:   refTime,
+		},
+		Intent: IntentChannel,
+	}
+	result, err := cb.Build(query)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "#engineering")
+	assert.Contains(t, result, "#design")
+}
+
+func TestBuild_EmptyDB(t *testing.T) {
+	database, err := db.Open(":memory:")
+	require.NoError(t, err)
+	defer database.Close()
+
+	cb := NewContextBuilder(database, 150000, "empty-corp")
+
+	query := ParsedQuery{RawText: "what happened"}
+	result, err := cb.Build(query)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Workspace Summary")
+	assert.Contains(t, result, "Channels: 0")
+	assert.Contains(t, result, "Users: 0")
+}

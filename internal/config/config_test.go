@@ -165,3 +165,76 @@ func TestDBPath(t *testing.T) {
 	path := cfg.DBPath()
 	assert.Contains(t, path, filepath.Join(".local", "share", "watchtower", "my-company", "watchtower.db"))
 }
+
+func TestLoad_PartialConfig(t *testing.T) {
+	yaml := `
+active_workspace: test
+workspaces:
+  test:
+    slack_token: "xoxp-partial"
+`
+	path := writeTestConfig(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test", cfg.ActiveWorkspace)
+	assert.Equal(t, "xoxp-partial", cfg.Workspaces["test"].SlackToken)
+
+	// Unspecified values should use defaults
+	assert.Equal(t, DefaultAIModel, cfg.AI.Model)
+	assert.Equal(t, DefaultSyncWorkers, cfg.Sync.Workers)
+	assert.Equal(t, DefaultSyncThreads, cfg.Sync.SyncThreads)
+}
+
+func TestLoad_EnvVarOverride_AIModel(t *testing.T) {
+	path := writeTestConfig(t, "")
+
+	t.Setenv("WATCHTOWER_AI_MODEL", "claude-opus-4-20250514")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-opus-4-20250514", cfg.AI.Model)
+}
+
+func TestLoad_EnvVarOverride_Workers(t *testing.T) {
+	path := writeTestConfig(t, "")
+
+	t.Setenv("WATCHTOWER_SYNC_WORKERS", "20")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 20, cfg.Sync.Workers)
+}
+
+func TestValidate_NilWorkspaces(t *testing.T) {
+	cfg := &Config{
+		ActiveWorkspace: "test",
+		Workspaces:      nil,
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestLoad_MultipleWorkspaces(t *testing.T) {
+	yaml := `
+active_workspace: prod
+workspaces:
+  prod:
+    slack_token: "xoxp-prod"
+  staging:
+    slack_token: "xoxp-staging"
+`
+	path := writeTestConfig(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "prod", cfg.ActiveWorkspace)
+	assert.Len(t, cfg.Workspaces, 2)
+	assert.Equal(t, "xoxp-prod", cfg.Workspaces["prod"].SlackToken)
+	assert.Equal(t, "xoxp-staging", cfg.Workspaces["staging"].SlackToken)
+
+	ws, err := cfg.GetActiveWorkspace()
+	require.NoError(t, err)
+	assert.Equal(t, "xoxp-prod", ws.SlackToken)
+}

@@ -353,10 +353,10 @@ watch:
 **Files:** `internal/daemon/daemon.go`, `internal/daemon/wake_darwin.go`, `internal/daemon/wake_linux.go`
 
 ### Task 23: Unit tests
-- [ ] `internal/db/` tests: CRUD operations for all entities, FTS5 search (stemming, multi-word, channel/user filter), migrations on fresh DB, edge cases (duplicate upsert, empty text, unicode)
-- [ ] `internal/slack/` tests: rate limiter timing (wait blocks correctly, handles 429 backoff), permalink generation (dot removal, URL format)
-- [ ] `internal/ai/` tests: QueryParser — table-driven tests for time expressions ("yesterday", "last 2h", "since Monday"), channel/user extraction, intent detection; ContextBuilder — budget allocation stays within limits, message formatting matches spec
-- [ ] `internal/config/` tests: loading from YAML, env var override, validation of missing fields
+- [x] `internal/db/` tests: CRUD operations for all entities, FTS5 search (stemming, multi-word, channel/user filter), migrations on fresh DB, edge cases (duplicate upsert, empty text, unicode)
+- [x] `internal/slack/` tests: rate limiter timing (wait blocks correctly, handles 429 backoff), permalink generation (dot removal, URL format)
+- [x] `internal/ai/` tests: QueryParser — table-driven tests for time expressions ("yesterday", "last 2h", "since Monday"), channel/user extraction, intent detection; ContextBuilder — budget allocation stays within limits, message formatting matches spec
+- [x] `internal/config/` tests: loading from YAML, env var override, validation of missing fields
 
 **Test infrastructure:** `testing.T` + `testify/assert`, in-memory SQLite (`:memory:`), `httptest.Server` for Slack API mocking, table-driven tests
 

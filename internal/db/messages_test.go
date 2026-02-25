@@ -213,3 +213,143 @@ func TestGetThreadRepliesEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
 }
+
+func TestGetThreadParents(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	threadTS := "1700000000.000001"
+	// Parent with reply_count=2 but only 1 reply synced — needs sync
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: threadTS, UserID: "U001", Text: "thread parent", ReplyCount: 2, RawJSON: "{}"}))
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000001.000001", UserID: "U002", Text: "reply1", ThreadTS: sql.NullString{String: threadTS, Valid: true}, RawJSON: "{}"}))
+
+	// Fully synced thread — reply_count=1 and 1 reply present
+	fullyTS := "1700000010.000001"
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: fullyTS, UserID: "U001", Text: "fully synced parent", ReplyCount: 1, RawJSON: "{}"}))
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000011.000001", UserID: "U002", Text: "reply", ThreadTS: sql.NullString{String: fullyTS, Valid: true}, RawJSON: "{}"}))
+
+	// Non-thread message
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000020.000001", UserID: "U001", Text: "no thread", RawJSON: "{}"}))
+
+	// Different channel thread
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C002", TS: "1700000030.000001", UserID: "U001", Text: "other channel thread", ReplyCount: 3, RawJSON: "{}"}))
+
+	parents, err := db.GetThreadParents("C001")
+	require.NoError(t, err)
+	require.Len(t, parents, 1)
+	assert.Equal(t, threadTS, parents[0].TS)
+	assert.Equal(t, "thread parent", parents[0].Text)
+}
+
+func TestGetThreadParentsEmpty(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	parents, err := db.GetThreadParents("C001")
+	require.NoError(t, err)
+	assert.Empty(t, parents)
+}
+
+func TestGetAllThreadParents(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Channel 1: needs sync
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000000.000001", UserID: "U001", Text: "ch1 thread", ReplyCount: 2, RawJSON: "{}"}))
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000001.000001", UserID: "U002", Text: "reply", ThreadTS: sql.NullString{String: "1700000000.000001", Valid: true}, RawJSON: "{}"}))
+
+	// Channel 2: needs sync
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C002", TS: "1700000010.000001", UserID: "U001", Text: "ch2 thread", ReplyCount: 5, RawJSON: "{}"}))
+
+	// Channel 3: fully synced — should not appear
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C003", TS: "1700000020.000001", UserID: "U001", Text: "synced", ReplyCount: 1, RawJSON: "{}"}))
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C003", TS: "1700000021.000001", UserID: "U002", Text: "reply", ThreadTS: sql.NullString{String: "1700000020.000001", Valid: true}, RawJSON: "{}"}))
+
+	parents, err := db.GetAllThreadParents()
+	require.NoError(t, err)
+	require.Len(t, parents, 2)
+
+	// Should be sorted by ts_unix DESC
+	assert.Equal(t, "C002", parents[0].ChannelID)
+	assert.Equal(t, "C001", parents[1].ChannelID)
+}
+
+func TestGetAllThreadParentsEmpty(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	parents, err := db.GetAllThreadParents()
+	require.NoError(t, err)
+	assert.Empty(t, parents)
+}
+
+func TestUpsertMessageUnicode(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	msg := Message{
+		ChannelID: "C001",
+		TS:        "1700000000.000001",
+		UserID:    "U001",
+		Text:      "Hello 世界! 🚀 café naïve Ñoño デプロイメント",
+		RawJSON:   "{}",
+	}
+	require.NoError(t, db.UpsertMessage(msg))
+
+	msgs, err := db.GetMessagesByChannel("C001", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, msg.Text, msgs[0].Text)
+}
+
+func TestUpsertMessageEmptyText(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	msg := Message{
+		ChannelID: "C001",
+		TS:        "1700000000.000001",
+		UserID:    "U001",
+		Text:      "",
+		RawJSON:   "{}",
+	}
+	require.NoError(t, db.UpsertMessage(msg))
+
+	msgs, err := db.GetMessagesByChannel("C001", 10)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "", msgs[0].Text)
+}
+
+func TestGetMessageNearEdgeCases(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Insert two messages close together
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000000.000001", UserID: "U001", Text: "first", RawJSON: "{}"}))
+	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000030.000001", UserID: "U001", Text: "second", RawJSON: "{}"}))
+
+	// Closest to first message
+	msg, err := db.GetMessageNear("C001", 1700000010)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "first", msg.Text)
+
+	// Closest to second message
+	msg, err = db.GetMessageNear("C001", 1700000025)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	assert.Equal(t, "second", msg.Text)
+
+	// Outside tolerance (>60s from any message)
+	msg, err = db.GetMessageNear("C001", 1700000200)
+	require.NoError(t, err)
+	assert.Nil(t, msg)
+}

@@ -84,3 +84,36 @@ func TestTierConstants(t *testing.T) {
 	assert.Equal(t, 2, Tier2)
 	assert.Equal(t, 3, Tier3)
 }
+
+func TestUnlimitedRateLimiter(t *testing.T) {
+	rl := NewUnlimitedRateLimiter()
+
+	// Should be able to make many rapid calls without blocking
+	start := time.Now()
+	for i := 0; i < 100; i++ {
+		err := rl.Wait(context.Background(), Tier2)
+		require.NoError(t, err)
+		err = rl.Wait(context.Background(), Tier3)
+		require.NoError(t, err)
+	}
+	elapsed := time.Since(start)
+	assert.Less(t, elapsed, 1*time.Second, "unlimited limiter should not throttle")
+}
+
+func TestBackoffExpires(t *testing.T) {
+	rl := NewRateLimiter()
+
+	// Set a very short backoff
+	rl.HandleRateLimit(Tier2, 10*time.Millisecond)
+
+	// Wait for backoff to expire
+	time.Sleep(50 * time.Millisecond)
+
+	// Should succeed without significant delay
+	start := time.Now()
+	err := rl.Wait(context.Background(), Tier2)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 500*time.Millisecond, "expired backoff should not cause delay")
+}

@@ -322,3 +322,41 @@ func TestParse_OnlyStopWords(t *testing.T) {
 	pq := Parse("what is the")
 	assert.Nil(t, pq.Topics)
 }
+
+func TestParse_TimeRange_SinceFriday(t *testing.T) {
+	withFixedTime(t)
+	// 2025-02-26 is Wednesday. "since Friday" = Friday Feb 21
+	pq := Parse("since Friday")
+	assert.NotNil(t, pq.TimeRange)
+	assert.Equal(t, time.Date(2025, 2, 21, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
+	assert.Equal(t, fixedNow(), pq.TimeRange.To)
+}
+
+func TestParse_Users_AtWithDot(t *testing.T) {
+	pq := Parse("what did @jane.doe say")
+	assert.Contains(t, pq.Users, "jane.doe")
+}
+
+func TestParse_Channels_HyphenatedName(t *testing.T) {
+	pq := Parse("check #team-backend-infra")
+	assert.Contains(t, pq.Channels, "team-backend-infra")
+}
+
+func TestParse_Intent_PersonWithoutUser(t *testing.T) {
+	// Person patterns without actual user extraction should not trigger person intent
+	pq := Parse("what did the team say about release")
+	assert.NotEqual(t, IntentPerson, pq.Intent)
+}
+
+func TestParse_Intent_ChannelWithoutChannel(t *testing.T) {
+	// Channel pattern without actual channel extraction should not trigger channel intent
+	pq := Parse("what's happening in the office")
+	assert.NotEqual(t, IntentChannel, pq.Intent)
+}
+
+func TestParse_MultipleUsers(t *testing.T) {
+	pq := Parse("what did @alice and @bob discuss")
+	assert.Contains(t, pq.Users, "alice")
+	assert.Contains(t, pq.Users, "bob")
+	assert.Len(t, pq.Users, 2)
+}
