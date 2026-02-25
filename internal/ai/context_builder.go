@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"watchtower/internal/db"
 )
@@ -261,11 +262,14 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 				continue
 			}
 			from, to := cb.effectiveTimeRange(query)
-			remaining := userBudget - tokensUsed
-		if remaining < 0 {
-			remaining = 0
-		}
-		section, msgKeys, err := cb.formatUserMessagesDedup(u.ID, u.Name, from, to, remaining, seen)
+			remaining := userBudget
+			if tokensUsed > budget-userBudget {
+				remaining = budget - tokensUsed
+			}
+			if remaining < 0 {
+				remaining = 0
+			}
+			section, msgKeys, err := cb.formatUserMessagesDedup(u.ID, u.Name, from, to, remaining, seen)
 			if err != nil {
 				continue
 			}
@@ -654,18 +658,15 @@ func estimateTokens(s string) int {
 }
 
 // truncateToTokens truncates a string to approximately fit within a token budget.
+// Uses byte length consistent with estimateTokens.
 func truncateToTokens(s string, budget int) string {
-	maxChars := budget * tokenRatio
-	if len(s) <= maxChars {
+	maxBytes := budget * tokenRatio
+	if len(s) <= maxBytes {
 		return s
 	}
-	// Slice at a rune boundary to avoid splitting multi-byte UTF-8 characters.
-	count := 0
-	for i := range s {
-		if count >= maxChars {
-			return s[:i]
-		}
-		count++
+	// Ensure we don't cut in the middle of a UTF-8 rune.
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
 	}
-	return s
+	return s[:maxBytes]
 }
