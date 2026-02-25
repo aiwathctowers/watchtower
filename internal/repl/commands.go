@@ -45,10 +45,12 @@ func (m *Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "/sync":
 		m.streaming = true
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
 		p := m.program
 		deps := m.deps
 		go func() {
-			output := runSyncCommand(deps)
+			output := runSyncCommand(ctx, deps)
 			p.Send(commandResultMsg{output: output})
 		}()
 		return m, nil
@@ -146,7 +148,7 @@ func runStatus(deps Deps) string {
 	return b.String()
 }
 
-func runSyncCommand(deps Deps) string {
+func runSyncCommand(ctx context.Context, deps Deps) string {
 	cfg := deps.Config
 	database := deps.DB
 
@@ -163,7 +165,6 @@ func runSyncCommand(deps Deps) string {
 		Workers: cfg.Sync.Workers,
 	}
 
-	ctx := context.Background()
 	if err := orch.Run(ctx, opts); err != nil {
 		return errorStyle.Render("Sync failed: " + err.Error())
 	}

@@ -2,7 +2,6 @@ package ai
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -233,7 +232,7 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int) (s
 				continue
 			}
 			from, to := cb.effectiveTimeRange(query)
-			section, msgKeys, err := cb.formatChannelMessagesDedup(ch.ID, ch.Name, from, to, channelBudget-tokensUsed+estimateTokens(b.String()), seen)
+			section, msgKeys, err := cb.formatChannelMessagesDedup(ch.ID, ch.Name, from, to, channelBudget-tokensUsed, seen)
 			if err != nil {
 				continue
 			}
@@ -331,58 +330,18 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 
 	from, to := cb.effectiveTimeRange(query)
 
-	// Get all channels and find ones with recent activity
-	channels, err := cb.db.GetChannels(db.ChannelFilter{})
+	tokensUsed := estimateTokens(b.String())
+
+	// Get top active channels using aggregate query (avoids loading full messages)
+	channelCounts, err := cb.db.GetChannelActivityCounts(from, to, 10)
 	if err != nil {
 		return "", err
 	}
 
-	type channelActivity struct {
-		name     string
-		id       string
-		msgCount int
-		msgs     []db.Message
-	}
-
-	var activities []channelActivity
-	userActivity := make(map[string]int) // userID -> count
-	for _, ch := range channels {
-		if ch.IsArchived {
-			continue
-		}
-		msgs, err := cb.db.GetMessagesByTimeRange(ch.ID, from, to)
-		if err != nil {
-			continue
-		}
-		if len(msgs) > 0 {
-			activities = append(activities, channelActivity{
-				name:     ch.Name,
-				id:       ch.ID,
-				msgCount: len(msgs),
-				msgs:     msgs,
-			})
-			for _, msg := range msgs {
-				if msg.UserID != "" {
-					userActivity[msg.UserID]++
-				}
-			}
-		}
-	}
-
-	sort.Slice(activities, func(i, j int) bool {
-		return activities[i].msgCount > activities[j].msgCount
-	})
-
-	tokensUsed := estimateTokens(b.String())
-
-	if len(activities) > 0 {
+	if len(channelCounts) > 0 {
 		b.WriteString("Active channels (by message count):\n")
-		limit := 10
-		if len(activities) < limit {
-			limit = len(activities)
-		}
-		for i := 0; i < limit; i++ {
-			line := fmt.Sprintf("  #%s: %d messages\n", activities[i].name, activities[i].msgCount)
+		for _, ch := range channelCounts {
+			line := fmt.Sprintf("  #%s: %d messages\n", ch.Name, ch.Count)
 			if tokensUsed+estimateTokens(line) > budget {
 				break
 			}
@@ -391,34 +350,24 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 		}
 	}
 
-	if len(userActivity) > 0 {
-		type userCount struct {
-			id    string
-			count int
-		}
-		var topUsers []userCount
-		for id, count := range userActivity {
-			topUsers = append(topUsers, userCount{id, count})
-		}
-		sort.Slice(topUsers, func(i, j int) bool {
-			return topUsers[i].count > topUsers[j].count
-		})
+	// Get top active users using aggregate query
+	userCounts, err := cb.db.GetUserActivityCounts(from, to, 5)
+	if err != nil {
+		return "", err
+	}
 
+	if len(userCounts) > 0 {
 		b.WriteString("Top active users:\n")
-		limit := 5
-		if len(topUsers) < limit {
-			limit = len(topUsers)
-		}
-		for i := 0; i < limit; i++ {
-			u, err := cb.db.GetUserByID(topUsers[i].id)
-			name := topUsers[i].id
+		for _, uc := range userCounts {
+			u, err := cb.db.GetUserByID(uc.UserID)
+			name := uc.UserID
 			if err == nil && u != nil {
 				name = u.Name
 				if u.DisplayName != "" {
 					name = u.DisplayName
 				}
 			}
-			line := fmt.Sprintf("  @%s: %d messages\n", name, topUsers[i].count)
+			line := fmt.Sprintf("  @%s: %d messages\n", name, uc.Count)
 			if tokensUsed+estimateTokens(line) > budget {
 				break
 			}

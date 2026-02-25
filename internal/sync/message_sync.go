@@ -220,18 +220,6 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		cursor = resp.NextCursor
 	}
 
-	// Mark initial sync complete if this was the first sync
-	if isInitial {
-		if err := o.db.UpdateSyncState(channelID, db.SyncState{
-			LastSyncedTS:         latestTS,
-			OldestSyncedTS:       oldest,
-			IsInitialSyncComplete: true,
-			MessagesSynced:       messagesSynced,
-		}); err != nil {
-			return fmt.Errorf("marking sync complete: %w", err)
-		}
-	}
-
 	return nil
 }
 

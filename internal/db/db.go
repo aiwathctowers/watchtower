@@ -23,7 +23,7 @@ type DB struct {
 func Open(dbPath string) (*DB, error) {
 	if dbPath != ":memory:" {
 		dir := filepath.Dir(dbPath)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("creating database directory: %w", err)
 		}
 	}

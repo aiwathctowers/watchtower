@@ -84,18 +84,38 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 }
 
 // sanitizeFTS5Query escapes user input for safe use in FTS5 MATCH queries.
-// Each word is wrapped in double quotes to treat it as a literal token,
-// preventing FTS5 operator injection (AND, OR, NOT, NEAR, etc.).
+// FTS5 operators (AND, OR, NOT, NEAR) and special characters are stripped,
+// while normal words are left unquoted so the porter stemmer can work.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
 		return query
 	}
-	quoted := make([]string, len(words))
-	for i, w := range words {
-		// Escape any embedded double quotes
-		w = strings.ReplaceAll(w, `"`, `""`)
-		quoted[i] = `"` + w + `"`
+	// FTS5 reserved operators (case-insensitive)
+	operators := map[string]bool{
+		"AND": true, "OR": true, "NOT": true, "NEAR": true,
 	}
-	return strings.Join(quoted, " ")
+	var safe []string
+	for _, w := range words {
+		// Skip FTS5 operators
+		if operators[strings.ToUpper(w)] {
+			continue
+		}
+		// Strip FTS5 special characters: * ^ : "
+		w = strings.Map(func(r rune) rune {
+			switch r {
+			case '*', '^', ':', '"':
+				return -1
+			default:
+				return r
+			}
+		}, w)
+		if w != "" {
+			safe = append(safe, w)
+		}
+	}
+	if len(safe) == 0 {
+		return ""
+	}
+	return strings.Join(safe, " ")
 }

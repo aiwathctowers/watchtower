@@ -92,6 +92,82 @@ func (db *DB) GetMessagesByTimeRange(channelID string, from, to float64) ([]Mess
 	return scanMessages(rows)
 }
 
+// ChannelMessageCount holds a channel ID/name pair with a message count.
+type ChannelMessageCount struct {
+	ChannelID string
+	Name      string
+	Count     int
+}
+
+// UserMessageCount holds a user ID with a message count.
+type UserMessageCount struct {
+	UserID string
+	Count  int
+}
+
+// GetChannelActivityCounts returns message counts per non-archived channel in a time range,
+// ordered by count descending, limited to the top N channels.
+func (db *DB) GetChannelActivityCounts(from, to float64, limit int) ([]ChannelMessageCount, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := db.Query(`
+		SELECT m.channel_id, c.name, COUNT(*) as cnt
+		FROM messages m
+		JOIN channels c ON c.id = m.channel_id
+		WHERE m.ts_unix >= ? AND m.ts_unix <= ? AND c.is_archived = 0
+		GROUP BY m.channel_id
+		ORDER BY cnt DESC
+		LIMIT ?`,
+		from, to, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying channel activity counts: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ChannelMessageCount
+	for rows.Next() {
+		var r ChannelMessageCount
+		if err := rows.Scan(&r.ChannelID, &r.Name, &r.Count); err != nil {
+			return nil, fmt.Errorf("scanning channel activity count: %w", err)
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// GetUserActivityCounts returns message counts per user in a time range,
+// ordered by count descending, limited to the top N users.
+func (db *DB) GetUserActivityCounts(from, to float64, limit int) ([]UserMessageCount, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := db.Query(`
+		SELECT user_id, COUNT(*) as cnt
+		FROM messages
+		WHERE ts_unix >= ? AND ts_unix <= ? AND user_id != ''
+		GROUP BY user_id
+		ORDER BY cnt DESC
+		LIMIT ?`,
+		from, to, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying user activity counts: %w", err)
+	}
+	defer rows.Close()
+
+	var results []UserMessageCount
+	for rows.Next() {
+		var r UserMessageCount
+		if err := rows.Scan(&r.UserID, &r.Count); err != nil {
+			return nil, fmt.Errorf("scanning user activity count: %w", err)
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 // GetMessagesByChannel returns the most recent messages in a channel.
 func (db *DB) GetMessagesByChannel(channelID string, limit int) ([]Message, error) {
 	if limit <= 0 {
