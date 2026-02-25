@@ -306,7 +306,7 @@ watch:
 **Files:** `cmd/ask.go`, `cmd/catchup.go`
 
 ### Task 19: Watch list CLI (cmd/watch.go)
-- [ ] Create `cmd/watch.go`:
+- [x] Create `cmd/watch.go`:
   - `watchtower watch add <target> [--priority high|normal|low]` — resolves `#channel-name` or `@username` to entity ID via DB lookup, calls `db.AddWatch()`
   - `watchtower watch remove <target>` — resolves target, calls `db.RemoveWatch()`
   - `watchtower watch list` — calls `db.GetWatchList()`, formats output with entity name, type, priority
