@@ -247,7 +247,7 @@ watch:
 **Files:** `internal/ai/query_parser.go`
 
 ### Task 15: AI context builder (internal/ai/context_builder.go)
-- [ ] Create `internal/ai/context_builder.go`:
+- [x] Create `internal/ai/context_builder.go`:
   - `type ContextBuilder struct` with db, config, domain
   - `Build(query ParsedQuery) (string, error)` — assembles context string within token budget (~150K tokens)
   - Token budget allocation: system prompt ~2K (fixed), workspace summary ~1K, priority context 40% (~60K), relevant context 50% (~75K), broad context 10% (~12K)
