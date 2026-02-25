@@ -80,7 +80,7 @@ watch:
 **Files:** `internal/config/config.go`, `internal/config/defaults.go`, `cmd/config.go`
 
 ### Task 4: SQLite database layer (internal/db/)
-- [ ] Create `internal/db/schema.sql` with all DDL (embedded via `go:embed`):
+- [x] Create `internal/db/schema.sql` with all DDL (embedded via `go:embed`):
   - `workspace` table: id (TEXT PK, team_id), name, domain, synced_at
   - `users` table: id (TEXT PK), name, display_name, real_name, email, is_bot, is_deleted, profile_json, updated_at; indexes on name, is_bot
   - `channels` table: id (TEXT PK), name, type (CHECK public/private/dm/group_dm), topic, purpose, is_archived, is_member, dm_user_id, num_members, updated_at; indexes on name, type, is_archived
@@ -91,12 +91,12 @@ watch:
   - `sync_state` table: channel_id (TEXT PK), last_synced_ts, oldest_synced_ts, is_initial_sync_complete, cursor, messages_synced, last_sync_at, error
   - `watch_list` table: PK(entity_type, entity_id), entity_name, priority (CHECK high/normal/low), created_at
   - `user_checkpoints` table: id (INTEGER PK, CHECK id=1 singleton), last_checked_at
-- [ ] Create `internal/db/db.go`:
+- [x] Create `internal/db/db.go`:
   - `type DB struct` wrapping `*sql.DB`
   - `Open(dbPath string) (*DB, error)` — creates directories, opens DB, sets pragmas (WAL, busy_timeout=5000, foreign_keys=ON, synchronous=NORMAL), runs migrations
   - `Close() error`
   - Migration system using `PRAGMA user_version`
-- [ ] Create `internal/db/models.go` with Go structs: `Workspace`, `User`, `Channel`, `Message`, `Reaction`, `File`, `SyncState`, `WatchItem`, `UserCheckpoint`
+- [x] Create `internal/db/models.go` with Go structs: `Workspace`, `User`, `Channel`, `Message`, `Reaction`, `File`, `SyncState`, `WatchItem`, `UserCheckpoint`
 
 **Key decisions:**
 - `ts` stored as TEXT (Slack timestamp = unique message ID like `1234567890.123456`)
