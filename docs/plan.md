@@ -289,11 +289,11 @@ watch:
 **Files:** `internal/ai/response_renderer.go`
 
 ### Task 18: CLI ask and catchup commands
-- [ ] Create `cmd/ask.go`:
+- [x] Create `cmd/ask.go`:
   - `watchtower ask "<question>"` command
   - Flags: `--model` (string), `--no-stream` (bool), `--channel` (string), `--since` (duration)
   - Pipeline: parse query → build context → assemble prompt → call Claude (streaming) → render response → print
-- [ ] Create `cmd/catchup.go`:
+- [x] Create `cmd/catchup.go`:
   - `watchtower catchup` command
   - Flags: `--since` (duration, overrides checkpoint), `--watched-only` (bool), `--channel` (string)
   - Behavior:
