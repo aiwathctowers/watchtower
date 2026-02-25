@@ -121,16 +121,16 @@ watch:
 **Files:** `internal/db/channels.go`, `internal/db/users.go`, `internal/db/messages.go`, `internal/db/search.go`, `internal/db/sync_state.go`, `internal/db/watch.go`
 
 ### Task 6: Slack client with rate limiting (internal/slack/)
-- [ ] Create `internal/slack/ratelimit.go`:
+- [x] Create `internal/slack/ratelimit.go`:
   - `type RateLimiter struct` with per-tier `*rate.Limiter` map (Tier2: 20/min, Tier3: 50/min) and per-method backoff tracking
   - `Wait(ctx context.Context, tier int) error` — blocks until token available, respects 429 backoff
   - `HandleRateLimit(method string, retryAfter time.Duration)` — sets backoff with jitter for all callers of that tier
-- [ ] Create `internal/slack/client.go`:
+- [x] Create `internal/slack/client.go`:
   - `type Client struct` wrapping `*slack.Client` + `*RateLimiter`
   - `NewClient(token string) *Client`
   - Rate-limited wrappers: `GetTeamInfo(ctx)`, `GetUsers(ctx)` (paginated), `GetChannels(ctx)` (paginated, all types), `GetConversationHistory(ctx, channelID, opts)`, `GetConversationReplies(ctx, channelID, threadTS)`
   - Each method calls `rateLimiter.Wait()` before API call, handles 429 response
-- [ ] Create `internal/slack/permalink.go`:
+- [x] Create `internal/slack/permalink.go`:
   - `GeneratePermalink(domain, channelID, ts string) string` — format: `https://{domain}.slack.com/archives/{channelID}/p{ts_without_dot}`
 
 **Rate limit tiers:**
