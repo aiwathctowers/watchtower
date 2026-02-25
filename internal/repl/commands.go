@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"watchtower/internal/ai"
-	"watchtower/internal/db"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 
@@ -183,7 +182,7 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 		return
 	}
 
-	sinceTime, err := determineSinceTime(database)
+	sinceTime, err := database.DetermineSinceTime(0)
 	if err != nil {
 		p.Send(streamErrMsg{err: fmt.Errorf("determining catchup window: %w", err)})
 		return
@@ -244,19 +243,3 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 	p.Send(streamDoneMsg{sources: sources})
 }
 
-func determineSinceTime(database *db.DB) (time.Time, error) {
-	now := time.Now()
-
-	cp, err := database.GetCheckpoint()
-	if err != nil {
-		return time.Time{}, err
-	}
-	if cp != nil {
-		t, err := time.Parse("2006-01-02T15:04:05Z", cp.LastCheckedAt)
-		if err == nil {
-			return t, nil
-		}
-	}
-
-	return now.Add(-24 * time.Hour), nil
-}

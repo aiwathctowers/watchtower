@@ -66,7 +66,7 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	}
 
 	// Determine the "since" time
-	sinceTime, err := determineSinceTime(database, catchupFlagSince)
+	sinceTime, err := database.DetermineSinceTime(catchupFlagSince)
 	if err != nil {
 		return fmt.Errorf("determining catchup window: %w", err)
 	}
@@ -156,30 +156,3 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// determineSinceTime resolves the catchup start time from:
-// 1. --since flag (explicit duration)
-// 2. user_checkpoints.last_checked_at (previous catchup)
-// 3. default: last 24 hours
-func determineSinceTime(database *db.DB, sinceDuration time.Duration) (time.Time, error) {
-	now := time.Now()
-
-	// Explicit --since flag takes priority
-	if sinceDuration > 0 {
-		return now.Add(-sinceDuration), nil
-	}
-
-	// Check for saved checkpoint
-	cp, err := database.GetCheckpoint()
-	if err != nil {
-		return time.Time{}, err
-	}
-	if cp != nil {
-		t, err := time.Parse("2006-01-02T15:04:05Z", cp.LastCheckedAt)
-		if err == nil {
-			return t, nil
-		}
-	}
-
-	// Default: last 24 hours
-	return now.Add(-24 * time.Hour), nil
-}

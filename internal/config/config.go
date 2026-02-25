@@ -29,19 +29,14 @@ type SyncConfig struct {
 	SyncOnWake        bool          `mapstructure:"sync_on_wake"`
 }
 
-type WatchChannel struct {
-	Name     string `mapstructure:"name"`
-	Priority string `mapstructure:"priority"`
-}
-
-type WatchUser struct {
+type WatchTarget struct {
 	Name     string `mapstructure:"name"`
 	Priority string `mapstructure:"priority"`
 }
 
 type WatchConfig struct {
-	Channels []WatchChannel `mapstructure:"channels"`
-	Users    []WatchUser    `mapstructure:"users"`
+	Channels []WatchTarget `mapstructure:"channels"`
+	Users    []WatchTarget `mapstructure:"users"`
 }
 
 type Config struct {

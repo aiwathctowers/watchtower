@@ -214,44 +214,6 @@ func TestGetThreadRepliesEmpty(t *testing.T) {
 	assert.Empty(t, msgs)
 }
 
-func TestGetThreadParents(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	threadTS := "1700000000.000001"
-	// Parent with reply_count=2 but only 1 reply synced — needs sync
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: threadTS, UserID: "U001", Text: "thread parent", ReplyCount: 2, RawJSON: "{}"}))
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000001.000001", UserID: "U002", Text: "reply1", ThreadTS: sql.NullString{String: threadTS, Valid: true}, RawJSON: "{}"}))
-
-	// Fully synced thread — reply_count=1 and 1 reply present
-	fullyTS := "1700000010.000001"
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: fullyTS, UserID: "U001", Text: "fully synced parent", ReplyCount: 1, RawJSON: "{}"}))
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000011.000001", UserID: "U002", Text: "reply", ThreadTS: sql.NullString{String: fullyTS, Valid: true}, RawJSON: "{}"}))
-
-	// Non-thread message
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C001", TS: "1700000020.000001", UserID: "U001", Text: "no thread", RawJSON: "{}"}))
-
-	// Different channel thread
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C002", TS: "1700000030.000001", UserID: "U001", Text: "other channel thread", ReplyCount: 3, RawJSON: "{}"}))
-
-	parents, err := db.GetThreadParents("C001")
-	require.NoError(t, err)
-	require.Len(t, parents, 1)
-	assert.Equal(t, threadTS, parents[0].TS)
-	assert.Equal(t, "thread parent", parents[0].Text)
-}
-
-func TestGetThreadParentsEmpty(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	parents, err := db.GetThreadParents("C001")
-	require.NoError(t, err)
-	assert.Empty(t, parents)
-}
-
 func TestGetAllThreadParents(t *testing.T) {
 	db, err := Open(":memory:")
 	require.NoError(t, err)

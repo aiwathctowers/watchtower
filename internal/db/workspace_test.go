@@ -69,14 +69,18 @@ func TestUpsertWorkspaceSyncedAtUpdated(t *testing.T) {
 	first, err := db.GetWorkspace()
 	require.NoError(t, err)
 	require.NotNil(t, first)
-	firstSyncedAt := first.SyncedAt
+	require.NotEmpty(t, first.SyncedAt)
 
-	// Upsert again — synced_at should be updated
+	// Set synced_at to a known old value to verify upsert updates it
+	_, err = db.Exec(`UPDATE workspace SET synced_at = '2020-01-01T00:00:00Z' WHERE id = 'T001'`)
+	require.NoError(t, err)
+
+	// Upsert again — synced_at should be updated to now
 	require.NoError(t, db.UpsertWorkspace(ws))
 
 	second, err := db.GetWorkspace()
 	require.NoError(t, err)
 	require.NotNil(t, second)
-	assert.Equal(t, firstSyncedAt, second.SyncedAt) // Same second, so may be equal
+	assert.NotEqual(t, "2020-01-01T00:00:00Z", second.SyncedAt)
 	assert.NotEmpty(t, second.SyncedAt)
 }

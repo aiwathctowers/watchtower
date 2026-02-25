@@ -382,7 +382,7 @@ func TestSyncThreadsCrossChannel(t *testing.T) {
 	assert.Len(t, msgs2, 2)
 }
 
-func TestGetThreadParentsDB(t *testing.T) {
+func TestGetAllThreadParentsDB(t *testing.T) {
 	database, err := db.Open(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
@@ -407,19 +407,14 @@ func TestGetThreadParentsDB(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// GetThreadParents should return the parent
-	parents, err := database.GetThreadParents("C001")
-	require.NoError(t, err)
-	assert.Len(t, parents, 1)
-	assert.Equal(t, "1700000001.000000", parents[0].TS)
-
-	// GetAllThreadParents should also return it
+	// GetAllThreadParents should return only the parent with unsynced replies
 	allParents, err := database.GetAllThreadParents()
 	require.NoError(t, err)
 	assert.Len(t, allParents, 1)
+	assert.Equal(t, "1700000001.000000", allParents[0].TS)
 }
 
-func TestGetThreadParentsAlreadySynced(t *testing.T) {
+func TestGetAllThreadParentsAlreadySynced(t *testing.T) {
 	database, err := db.Open(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
@@ -445,7 +440,7 @@ func TestGetThreadParentsAlreadySynced(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return empty since reply_count matches actual reply count
-	parents, err := database.GetThreadParents("C001")
+	parents, err := database.GetAllThreadParents()
 	require.NoError(t, err)
 	assert.Len(t, parents, 0)
 }

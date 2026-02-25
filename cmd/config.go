@@ -137,11 +137,15 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading config: %w", err)
 	}
 
-	// Type-aware parsing: durations first (so "15m" or "900s" are stored
-	// correctly), then integers, then fall back to string. Avoid
-	// ParseBool/ParseFloat which can misinterpret values like "t" or "f".
+	// Type-aware parsing: booleans (exact "true"/"false" only), then
+	// durations (so "15m" or "900s" are stored correctly), then integers,
+	// then fall back to string.
 	var typedValue interface{} = value
-	if _, err := time.ParseDuration(value); err == nil {
+	if value == "true" {
+		typedValue = true
+	} else if value == "false" {
+		typedValue = false
+	} else if _, err := time.ParseDuration(value); err == nil {
 		// Store duration strings as-is (e.g., "15m", "900s") so viper
 		// can parse them correctly into time.Duration on read.
 		typedValue = value

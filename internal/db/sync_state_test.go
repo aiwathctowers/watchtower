@@ -85,36 +85,3 @@ func TestUpdateSyncStateWithError(t *testing.T) {
 	assert.Equal(t, "channel_not_found", got.Error)
 }
 
-func TestMarkInitialSyncComplete(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	// Create sync state first
-	require.NoError(t, db.UpdateSyncState("C001", SyncState{
-		Cursor:         "somepage",
-		Error:          "partial",
-		MessagesSynced: 100,
-	}))
-
-	err = db.MarkInitialSyncComplete("C001")
-	require.NoError(t, err)
-
-	got, err := db.GetSyncState("C001")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.True(t, got.IsInitialSyncComplete)
-	assert.Empty(t, got.Cursor)
-	assert.Empty(t, got.Error)
-	assert.Equal(t, 100, got.MessagesSynced) // Should be preserved
-}
-
-func TestMarkInitialSyncCompleteNoState(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	err = db.MarkInitialSyncComplete("C999")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no sync state found")
-}

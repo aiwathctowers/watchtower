@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS messages (
     is_deleted   INTEGER NOT NULL DEFAULT 0,
     subtype      TEXT NOT NULL DEFAULT '',
     permalink    TEXT NOT NULL DEFAULT '',
-    ts_unix      REAL GENERATED ALWAYS AS (CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL)) STORED,
+    ts_unix      REAL GENERATED ALWAYS AS (CASE WHEN INSTR(ts, '.') > 0 THEN CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL) ELSE CAST(ts AS REAL) END) STORED,
     raw_json     TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (channel_id, ts)
 );

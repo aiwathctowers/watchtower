@@ -271,5 +271,5 @@ func TestSetPhaseResetsTimer(t *testing.T) {
 	snap2 := p.Snapshot()
 
 	// The phase start time should be later for the second phase
-	assert.True(t, snap2.PhaseStartTime.After(snap1.PhaseStartTime) || snap2.PhaseStartTime.Equal(snap1.PhaseStartTime))
+	assert.True(t, snap2.PhaseStartTime.After(snap1.PhaseStartTime))
 }

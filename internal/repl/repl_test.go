@@ -3,6 +3,7 @@ package repl
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"watchtower/internal/ai"
 	"watchtower/internal/config"
@@ -414,9 +415,9 @@ func TestDetermineSinceTime(t *testing.T) {
 	defer database.Close()
 
 	// No checkpoint — should default to 24h ago
-	since, err := determineSinceTime(database)
+	since, err := database.DetermineSinceTime(0)
 	require.NoError(t, err)
-	assert.WithinDuration(t, since, since, 1) // just check it didn't error
+	assert.WithinDuration(t, time.Now().Add(-24*time.Hour), since, 5*time.Second)
 }
 
 func TestOutputHeight(t *testing.T) {

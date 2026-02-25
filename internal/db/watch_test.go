@@ -105,38 +105,6 @@ func TestGetWatchListOrdering(t *testing.T) {
 	assert.Equal(t, "low", items[3].Priority)
 }
 
-func TestIsWatched(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, db.AddWatch("channel", "C001", "general", "high"))
-
-	watched, err := db.IsWatched("channel", "C001")
-	require.NoError(t, err)
-	assert.True(t, watched)
-
-	watched, err = db.IsWatched("channel", "C999")
-	require.NoError(t, err)
-	assert.False(t, watched)
-
-	watched, err = db.IsWatched("user", "C001")
-	require.NoError(t, err)
-	assert.False(t, watched) // Different entity type
-}
-
-func TestIsWatchedUser(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, db.AddWatch("user", "U001", "alice", "normal"))
-
-	watched, err := db.IsWatched("user", "U001")
-	require.NoError(t, err)
-	assert.True(t, watched)
-}
-
 func TestGetWatchListEmpty(t *testing.T) {
 	db, err := Open(":memory:")
 	require.NoError(t, err)

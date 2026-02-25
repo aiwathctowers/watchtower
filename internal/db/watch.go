@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 )
 
@@ -66,15 +65,3 @@ func (db *DB) GetWatchList() ([]WatchItem, error) {
 	return items, rows.Err()
 }
 
-// IsWatched returns true if the given entity is in the watch list.
-func (db *DB) IsWatched(entityType, entityID string) (bool, error) {
-	var count int
-	err := db.QueryRow(
-		`SELECT COUNT(*) FROM watch_list WHERE entity_type = ? AND entity_id = ?`,
-		entityType, entityID,
-	).Scan(&count)
-	if err != nil && err != sql.ErrNoRows {
-		return false, fmt.Errorf("checking watch for %s/%s: %w", entityType, entityID, err)
-	}
-	return count > 0, nil
-}

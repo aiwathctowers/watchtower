@@ -174,7 +174,7 @@ func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (s
 			break
 		}
 		if w.EntityType == "channel" {
-			section, err := cb.formatChannelMessages(w.EntityID, w.EntityName, from, to, budget-tokensUsed)
+			section, _, err := cb.formatChannelMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, nil)
 			if err != nil {
 				continue
 			}
@@ -191,7 +191,7 @@ func (cb *ContextBuilder) buildPriorityContext(query ParsedQuery, budget int) (s
 			break
 		}
 		if w.EntityType == "user" {
-			section, err := cb.formatUserMessages(w.EntityID, w.EntityName, from, to, budget-tokensUsed)
+			section, _, err := cb.formatUserMessagesDedup(w.EntityID, w.EntityName, from, to, budget-tokensUsed, nil)
 			if err != nil {
 				continue
 			}
@@ -398,13 +398,6 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 	return result, nil
 }
 
-// formatChannelMessages formats recent messages from a channel within the token budget.
-// Pass nil for seen to skip deduplication.
-func (cb *ContextBuilder) formatChannelMessages(channelID, channelName string, from, to float64, budget int) (string, error) {
-	section, _, err := cb.formatChannelMessagesDedup(channelID, channelName, from, to, budget, nil)
-	return section, err
-}
-
 // formatChannelMessagesDedup formats recent messages from a channel, tracking and skipping duplicates.
 // Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatChannelMessagesDedup(channelID, channelName string, from, to float64, budget int, seen map[string]bool) (string, []string, error) {
@@ -451,12 +444,6 @@ func (cb *ContextBuilder) formatChannelMessagesDedup(channelID, channelName stri
 }
 
 // formatUserMessages formats recent messages from a specific user.
-// Pass nil for seen to skip deduplication.
-func (cb *ContextBuilder) formatUserMessages(userID, userName string, from, to float64, budget int) (string, error) {
-	section, _, err := cb.formatUserMessagesDedup(userID, userName, from, to, budget, nil)
-	return section, err
-}
-
 // formatUserMessagesDedup formats recent messages from a user, tracking and skipping duplicates.
 // Pass nil for seen to skip deduplication.
 func (cb *ContextBuilder) formatUserMessagesDedup(userID, userName string, from, to float64, budget int, seen map[string]bool) (string, []string, error) {

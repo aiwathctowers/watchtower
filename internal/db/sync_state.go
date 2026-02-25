@@ -48,26 +48,3 @@ func (db *DB) UpdateSyncState(channelID string, state SyncState) error {
 	return nil
 }
 
-// MarkInitialSyncComplete marks the initial sync as complete for a channel
-// and clears any cursor or error.
-func (db *DB) MarkInitialSyncComplete(channelID string) error {
-	result, err := db.Exec(`
-		UPDATE sync_state SET
-			is_initial_sync_complete = 1,
-			cursor = '',
-			error = '',
-			last_sync_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-		WHERE channel_id = ?`, channelID,
-	)
-	if err != nil {
-		return fmt.Errorf("marking initial sync complete for %s: %w", channelID, err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking rows affected: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("no sync state found for channel %s", channelID)
-	}
-	return nil
-}
