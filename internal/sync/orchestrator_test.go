@@ -56,8 +56,11 @@ func newTestSetup(t *testing.T, mux *http.ServeMux) *testSetup {
 	return &testSetup{db: database, orch: orch, srv: srv}
 }
 
-// defaultMux creates a mock Slack API server with standard responses.
-func defaultMux() *http.ServeMux {
+// baseMux creates a mock Slack API server with metadata endpoints
+// (team.info, users.list, conversations.list) but no conversations.history.
+// Use defaultMux() for a fully functional mock, or call baseMux() and add
+// your own conversations.history handler.
+func baseMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/team.info", func(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +124,24 @@ func defaultMux() *http.ServeMux {
 					"purpose": map[string]any{"value": ""},
 				},
 			},
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	return mux
+}
+
+// defaultMux creates a mock Slack API server with standard responses,
+// including an empty conversations.history handler.
+func defaultMux() *http.ServeMux {
+	mux := baseMux()
+
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":       true,
+			"messages": []any{},
+			"has_more": false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})

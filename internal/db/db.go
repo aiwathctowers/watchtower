@@ -33,6 +33,13 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// For in-memory databases, limit to 1 connection so all operations
+	// share the same database instance (each connection to :memory: gets
+	// its own independent database).
+	if dbPath == ":memory:" {
+		sqlDB.SetMaxOpenConns(1)
+	}
+
 	db := &DB{DB: sqlDB}
 
 	if err := db.setPragmas(); err != nil {

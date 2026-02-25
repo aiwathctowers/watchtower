@@ -61,7 +61,7 @@ func (o *Orchestrator) Run(ctx context.Context, opts SyncOptions) error {
 		return fmt.Errorf("metadata sync: %w", err)
 	}
 
-	// Phase 2: messages (stub — implemented in Task 10)
+	// Phase 2: messages
 	o.logger.Println("phase 2: syncing messages")
 	if err := o.syncMessages(ctx, opts); err != nil {
 		return fmt.Errorf("message sync: %w", err)
@@ -170,11 +170,7 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 	return nil
 }
 
-// syncMessages is a stub for message sync (implemented in Task 10).
-func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error {
-	// Will be implemented in Task 10 (message_sync.go)
-	return nil
-}
+// syncMessages is implemented in message_sync.go.
 
 // syncThreads is a stub for thread sync (implemented in Task 11).
 func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error {

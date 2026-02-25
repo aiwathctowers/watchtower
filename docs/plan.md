@@ -176,7 +176,7 @@ watch:
 **Files:** `internal/sync/orchestrator.go` (extend)
 
 ### Task 10: Message sync with worker pool
-- [ ] Create `internal/sync/message_sync.go`:
+- [x] Create `internal/sync/message_sync.go`:
   - `syncMessages(ctx, opts)` — builds channel priority queue, submits SyncTask per channel to WorkerPool
   - Channel prioritization: watch high → watch normal → is_member (sorted by activity) → non-archived rest
   - `syncChannel(ctx, channel, syncState)` — per-channel logic:
