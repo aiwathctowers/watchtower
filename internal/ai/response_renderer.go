@@ -178,3 +178,12 @@ func (r *ResponseRenderer) buildSourcesSection(refs []messageRef) string {
 	}
 	return b.String()
 }
+
+// ExtractSourcesSection returns the "Sources:" section from rendered output, if present.
+func ExtractSourcesSection(rendered string) string {
+	idx := strings.LastIndex(rendered, "Sources:\n")
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rendered[idx:])
+}

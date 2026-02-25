@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
 )
 
@@ -87,59 +85,5 @@ func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS strin
 		return 0, nil
 	}
 
-	tx, err := o.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`
-		INSERT INTO messages (channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(channel_id, ts) DO UPDATE SET
-			user_id = excluded.user_id,
-			text = excluded.text,
-			thread_ts = excluded.thread_ts,
-			reply_count = excluded.reply_count,
-			is_edited = excluded.is_edited,
-			is_deleted = excluded.is_deleted,
-			subtype = excluded.subtype,
-			permalink = excluded.permalink,
-			raw_json = excluded.raw_json`)
-	if err != nil {
-		return 0, fmt.Errorf("preparing statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, msg := range replies {
-		rawJSON, _ := json.Marshal(msg)
-		threadTSVal := sql.NullString{}
-		if msg.ThreadTimestamp != "" && msg.ThreadTimestamp != msg.Timestamp {
-			threadTSVal = sql.NullString{String: msg.ThreadTimestamp, Valid: true}
-		}
-		isEdited := msg.Edited != nil
-
-		_, err := stmt.Exec(
-			channelID,
-			msg.Timestamp,
-			msg.User,
-			msg.Text,
-			threadTSVal,
-			msg.ReplyCount,
-			isEdited,
-			false, // is_deleted
-			msg.SubType,
-			"", // permalink generated later
-			string(rawJSON),
-		)
-		if err != nil {
-			return 0, fmt.Errorf("upserting thread reply %s: %w", msg.Timestamp, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing transaction: %w", err)
-	}
-
-	return len(replies), nil
+	return o.upsertMessagePage(channelID, replies)
 }
