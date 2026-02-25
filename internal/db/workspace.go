@@ -1,6 +1,10 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
 
 // UpsertWorkspace inserts or updates a workspace.
 func (db *DB) UpsertWorkspace(ws Workspace) error {
@@ -26,7 +30,7 @@ func (db *DB) GetWorkspace() (*Workspace, error) {
 		SELECT id, name, domain, synced_at FROM workspace LIMIT 1`,
 	).Scan(&ws.ID, &ws.Name, &ws.Domain, &ws.SyncedAt)
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting workspace: %w", err)

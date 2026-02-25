@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"watchtower/internal/ai"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 
@@ -327,7 +328,7 @@ func TestExtractSourcesSection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractSourcesSection(tt.input)
+			result := ai.ExtractSourcesSection(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

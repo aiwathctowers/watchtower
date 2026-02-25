@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -96,6 +97,10 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	if err := v.WriteConfigAs(configPath); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
+	// Restrict file permissions since it contains secrets (tokens, API keys)
+	if err := os.Chmod(configPath, 0o600); err != nil {
+		return fmt.Errorf("setting config file permissions: %w", err)
+	}
 
 	// Create DB directory
 	home, err := os.UserHomeDir()
@@ -126,7 +131,16 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading config: %w", err)
 	}
 
-	v.Set(key, value)
+	// Parse value to appropriate type so YAML stores typed values
+	var typedValue interface{} = value
+	if i, err := strconv.Atoi(value); err == nil {
+		typedValue = i
+	} else if b, err := strconv.ParseBool(value); err == nil {
+		typedValue = b
+	} else if f, err := strconv.ParseFloat(value, 64); err == nil {
+		typedValue = f
+	}
+	v.Set(key, typedValue)
 	if err := v.WriteConfig(); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
@@ -166,8 +180,8 @@ func isSensitiveKey(key string) bool {
 }
 
 func maskValue(val string) string {
-	if len(val) <= 8 {
+	if len(val) <= 12 {
 		return "****"
 	}
-	return val[:4] + "****" + val[len(val)-4:]
+	return "****" + val[len(val)-4:]
 }

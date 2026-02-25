@@ -295,31 +295,39 @@ func removeWord(text, pattern string) string {
 // --- Intent detection ---
 
 var (
-	catchupPatterns = []string{
+	catchupPatterns = compilePatterns([]string{
 		`(?i)\bwhat(?:'s| is| has)?\s+(?:happened|new|going on|up)\b`,
 		`(?i)\bcatch\s*(?:me\s+)?up\b`,
 		`(?i)\bsummar(?:y|ize|ise)\b`,
 		`(?i)\bupdate\s+me\b`,
 		`(?i)\bbring\s+me\s+up\s+to\s+(?:speed|date)\b`,
 		`(?i)\bwhat\s+did\s+i\s+miss\b`,
-	}
-	searchPatterns = []string{
+	})
+	searchPatterns = compilePatterns([]string{
 		`(?i)\bfind\s+(?:messages?|conversations?)\s+about\b`,
 		`(?i)\bsearch\s+(?:for|messages?)?\b`,
 		`(?i)\blook\s+(?:for|up)\b`,
 		`(?i)\bshow\s+me\s+messages?\b`,
-	}
-	personPatterns = []string{
+	})
+	personPatterns = compilePatterns([]string{
 		`(?i)\bwhat\s+did\s+\S+\s+say\b`,
 		`(?i)\bwhat\s+has\s+\S+\s+(?:been|said|posted|mentioned)\b`,
 		`(?i)\b\S+(?:'s| is)\s+(?:messages?|activity|posts?)\b`,
-	}
-	channelPatterns = []string{
+	})
+	channelPatterns = compilePatterns([]string{
 		`(?i)\bsummar(?:y|ize|ise)\s+#`,
 		`(?i)\bwhat(?:'s| is)\s+(?:happening|going on)\s+in\b`,
 		`(?i)\b(?:activity|discussion|updates?)\s+in\b`,
-	}
+	})
 )
+
+func compilePatterns(patterns []string) []*regexp.Regexp {
+	compiled := make([]*regexp.Regexp, len(patterns))
+	for i, p := range patterns {
+		compiled[i] = regexp.MustCompile(p)
+	}
+	return compiled
+}
 
 func detectIntent(pq *ParsedQuery, text string) {
 	// Check in order of specificity
@@ -342,9 +350,9 @@ func detectIntent(pq *ParsedQuery, text string) {
 	pq.Intent = IntentGeneral
 }
 
-func matchesAny(text string, patterns []string) bool {
-	for _, p := range patterns {
-		if regexp.MustCompile(p).MatchString(text) {
+func matchesAny(text string, patterns []*regexp.Regexp) bool {
+	for _, re := range patterns {
+		if re.MatchString(text) {
 			return true
 		}
 	}

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -287,21 +288,13 @@ func renderThreads(snap Snapshot) string {
 func progressBar(done, total int) string {
 	const barWidth = 24
 	if total <= 0 {
-		return "[" + repeat("░", barWidth) + "]"
+		return "[" + strings.Repeat("░", barWidth) + "]"
 	}
 	filled := (done * barWidth) / total
 	if filled > barWidth {
 		filled = barWidth
 	}
-	return "[" + repeat("█", filled) + repeat("░", barWidth-filled) + "]"
-}
-
-func repeat(s string, n int) string {
-	result := ""
-	for i := 0; i < n; i++ {
-		result += s
-	}
-	return result
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled) + "]"
 }
 
 func percentage(done, total int) string {

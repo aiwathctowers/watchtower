@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"watchtower/internal/config"
+	"watchtower/internal/daemon"
 	"watchtower/internal/db"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
@@ -70,15 +71,23 @@ func runSync(cmd *cobra.Command, args []string) error {
 		orch.SetLogger(log.New(io.Discard, "", 0))
 	}
 
-	opts := sync.SyncOptions{
-		Full:       syncFlagFull,
-		Channels:   syncFlagChannels,
-		Workers:    syncFlagWorkers,
-		DaemonMode: syncFlagDaemon,
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	// Daemon mode: run periodic syncs until interrupted
+	if syncFlagDaemon {
+		d := daemon.New(orch, cfg)
+		if !flagVerbose {
+			d.SetLogger(log.New(io.Discard, "", 0))
+		}
+		return d.Run(ctx)
+	}
+
+	opts := sync.SyncOptions{
+		Full:     syncFlagFull,
+		Channels: syncFlagChannels,
+		Workers:  syncFlagWorkers,
+	}
 
 	out := cmd.OutOrStdout()
 

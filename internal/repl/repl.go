@@ -316,6 +316,11 @@ func runAIQueryStreaming(ctx context.Context, p *tea.Program, deps Deps, questio
 
 	cfg := deps.Config
 
+	if cfg.AI.ApiKey == "" {
+		p.Send(streamErrMsg{err: fmt.Errorf("Anthropic API key not configured — set ANTHROPIC_API_KEY or config ai.api_key")})
+		return
+	}
+
 	pq := ai.Parse(question)
 
 	ctxBuilder := ai.NewContextBuilder(deps.DB, cfg.AI.ContextBudget, deps.Domain)
@@ -347,16 +352,9 @@ func runAIQueryStreaming(ctx context.Context, p *tea.Program, deps Deps, questio
 	rendered, err := renderer.Render(fullResponse.String())
 	sources := ""
 	if err == nil {
-		sources = extractSourcesSection(rendered)
+		sources = ai.ExtractSourcesSection(rendered)
 	}
 
 	p.Send(streamDoneMsg{sources: sources})
 }
 
-func extractSourcesSection(rendered string) string {
-	idx := strings.LastIndex(rendered, "Sources:\n")
-	if idx < 0 {
-		return ""
-	}
-	return strings.TrimSpace(rendered[idx:])
-}
