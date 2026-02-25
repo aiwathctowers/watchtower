@@ -32,8 +32,11 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 	var conditions []string
 	var args []interface{}
 
-	// Sanitize FTS5 query: quote each term to prevent FTS5 syntax injection
+	// Sanitize FTS5 query: strip operators and special characters
 	sanitizedQuery := sanitizeFTS5Query(query)
+	if sanitizedQuery == "" {
+		return nil, nil
+	}
 	conditions = append(conditions, "messages_fts MATCH ?")
 	args = append(args, sanitizedQuery)
 
