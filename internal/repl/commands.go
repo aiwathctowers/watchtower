@@ -156,6 +156,10 @@ func runSyncCommand(ctx context.Context, deps Deps) string {
 		return errorStyle.Render("Error: " + err.Error())
 	}
 
+	if ws.SlackToken == "" {
+		return errorStyle.Render("Error: Slack token not configured. Run: watchtower config set workspaces.<name>.slack_token xoxb-...")
+	}
+
 	slackClient := watchtowerslack.NewClient(ws.SlackToken)
 	orch := sync.NewOrchestrator(database, slackClient, cfg)
 	orch.SetLogger(log.New(io.Discard, "", 0))

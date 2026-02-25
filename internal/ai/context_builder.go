@@ -646,6 +646,9 @@ func estimateTokens(s string) int {
 // truncateToTokens truncates a string to approximately fit within a token budget.
 // Uses byte length consistent with estimateTokens.
 func truncateToTokens(s string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
 	maxBytes := budget * tokenRatio
 	if len(s) <= maxBytes {
 		return s

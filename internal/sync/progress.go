@@ -211,8 +211,6 @@ func RenderSnapshot(snap Snapshot, workspace string) string {
 func renderMetadata(snap Snapshot) string {
 	prefix := "  Metadata: "
 	switch {
-	case snap.Phase < PhaseMetadata:
-		return labelStyle.Render(prefix) + waitStyle.Render("waiting...")
 	case snap.Phase == PhaseMetadata:
 		users := fmt.Sprintf("users %s/%s", humanize.Comma(int64(snap.UsersDone)), humanize.Comma(int64(snap.UsersTotal)))
 		channels := fmt.Sprintf("channels %s/%s", humanize.Comma(int64(snap.ChannelsDone)), humanize.Comma(int64(snap.ChannelsTotal)))

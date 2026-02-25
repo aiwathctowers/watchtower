@@ -119,17 +119,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 }
 
 func printProgress(w io.Writer, p *sync.Progress, workspace string) {
-	if f, ok := w.(*os.File); ok && isTerminal(f.Fd()) {
+	if f, ok := w.(*os.File); ok && isTerminal(f) {
 		fmt.Fprint(w, "\033[2J\033[H") // clear screen, move cursor to top
 	}
 	fmt.Fprintln(w, p.Render(workspace))
 }
 
-func isTerminal(fd uintptr) bool {
-	// Check if the file descriptor refers to a terminal by attempting
-	// a tcgetattr-equivalent: os.File.Stat() on a terminal has a
-	// Mode() that includes os.ModeCharDevice.
-	fi, err := os.NewFile(fd, "").Stat()
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}
