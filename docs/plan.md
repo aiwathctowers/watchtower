@@ -216,11 +216,11 @@ watch:
 **Files:** `internal/sync/progress.go`
 
 ### Task 13: CLI sync and status commands
-- [ ] Create `cmd/sync.go`:
+- [x] Create `cmd/sync.go`:
   - `watchtower sync` command with flags: `--full`, `--daemon`, `--channels` (string slice), `--workers` (int)
   - Loads config, opens DB, creates Slack client, creates Orchestrator, runs sync
   - Shows progress during sync, summary on completion
-- [ ] Create `cmd/status.go`:
+- [x] Create `cmd/status.go`:
   - `watchtower status` command (no flags)
   - Queries DB for: workspace info, channel count (+ watched count), user count, message count, thread count (messages with reply_count>0), DB file size, last sync timestamp
   - Formats and prints summary:
