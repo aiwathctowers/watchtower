@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -188,22 +189,30 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 
 // syncThreads is implemented in thread_sync.go.
 
+// nonFatalSlackErrors are Slack API error codes that should be logged but not stop the sync.
+var nonFatalSlackErrors = map[string]bool{
+	"channel_not_found": true,
+	"account_inactive":  true,
+	"is_archived":       true,
+	"not_in_channel":    true,
+	"missing_scope":     true,
+	"access_denied":     true,
+}
+
 // isNonFatalError returns true for Slack errors that should be logged but not stop the sync.
 func isNonFatalError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	nonFatal := []string{
-		"channel_not_found",
-		"account_inactive",
-		"is_archived",
-		"not_in_channel",
-		"missing_scope",
-		"access_denied",
+	// Check for structured Slack API errors first.
+	var slackErr slack.SlackErrorResponse
+	if errors.As(err, &slackErr) {
+		return nonFatalSlackErrors[slackErr.Err]
 	}
-	for _, nf := range nonFatal {
-		if strings.Contains(msg, nf) {
+	// Fallback: string matching for wrapped or non-typed errors.
+	msg := err.Error()
+	for code := range nonFatalSlackErrors {
+		if strings.Contains(msg, code) {
 			return true
 		}
 	}

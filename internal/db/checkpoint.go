@@ -39,9 +39,10 @@ func (db *DB) DetermineSinceTime(sinceDuration time.Duration) (time.Time, error)
 	}
 	if cp != nil {
 		t, err := time.Parse("2006-01-02T15:04:05Z", cp.LastCheckedAt)
-		if err == nil {
-			return t, nil
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parsing checkpoint timestamp %q: %w", cp.LastCheckedAt, err)
 		}
+		return t, nil
 	}
 
 	return now.Add(-24 * time.Hour), nil

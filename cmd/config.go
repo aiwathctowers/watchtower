@@ -66,7 +66,7 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Slack token
-	fmt.Fprint(cmd.OutOrStdout(), "Slack token (xoxp-...): ")
+	fmt.Fprint(cmd.OutOrStdout(), "Slack token (xoxb-... or xoxp-...): ")
 	slackToken, _ := reader.ReadString('\n')
 	slackToken = strings.TrimSpace(slackToken)
 	if slackToken == "" {

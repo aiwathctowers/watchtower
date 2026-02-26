@@ -29,22 +29,11 @@ type SyncConfig struct {
 	SyncOnWake        bool          `mapstructure:"sync_on_wake"`
 }
 
-type WatchTarget struct {
-	Name     string `mapstructure:"name"`
-	Priority string `mapstructure:"priority"`
-}
-
-type WatchConfig struct {
-	Channels []WatchTarget `mapstructure:"channels"`
-	Users    []WatchTarget `mapstructure:"users"`
-}
-
 type Config struct {
 	ActiveWorkspace string                      `mapstructure:"active_workspace"`
 	Workspaces      map[string]*WorkspaceConfig `mapstructure:"workspaces"`
 	AI              AIConfig                    `mapstructure:"ai"`
 	Sync            SyncConfig                  `mapstructure:"sync"`
-	Watch           WatchConfig                 `mapstructure:"watch"`
 }
 
 // Load reads config from the given path, binds env vars, and returns the config.

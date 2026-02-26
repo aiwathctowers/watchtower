@@ -49,8 +49,7 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 	poolCtx, poolCancel := context.WithCancel(ctx)
 	defer poolCancel()
 
-	pool := NewWorkerPool(workers)
-	pool.cancel = poolCancel
+	pool := NewWorkerPool(workers, poolCancel)
 	pool.Start(poolCtx, func(ctx context.Context, task SyncTask) error {
 		replyCount, err := o.syncThread(ctx, task.ChannelID, task.ThreadTS)
 		if err != nil {

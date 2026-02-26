@@ -56,11 +56,6 @@ watch:
 	assert.Equal(t, 60, cfg.Sync.InitialHistoryDays)
 	assert.False(t, cfg.Sync.SyncThreads)
 	assert.False(t, cfg.Sync.SyncOnWake)
-	assert.Len(t, cfg.Watch.Channels, 1)
-	assert.Equal(t, "engineering", cfg.Watch.Channels[0].Name)
-	assert.Equal(t, "high", cfg.Watch.Channels[0].Priority)
-	assert.Len(t, cfg.Watch.Users, 1)
-	assert.Equal(t, "alice.smith", cfg.Watch.Users[0].Name)
 }
 
 func TestLoad_DefaultValues(t *testing.T) {

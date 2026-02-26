@@ -98,13 +98,15 @@ func extractChannels(pq *ParsedQuery, text string) string {
 		}
 		pq.Channels = append(pq.Channels, m[1])
 	}
-	text = removeMatchedChannels(text, inChannelRe)
+	text = removeMatchedNonStopWords(text, inChannelRe)
 
 	pq.Channels = dedup(pq.Channels)
 	return text
 }
 
-func removeMatchedChannels(text string, re *regexp.Regexp) string {
+// removeMatchedNonStopWords removes regex matches whose first capture group is
+// not a stop word. Matches on stop words are left intact.
+func removeMatchedNonStopWords(text string, re *regexp.Regexp) string {
 	return re.ReplaceAllStringFunc(text, func(match string) string {
 		sub := re.FindStringSubmatch(match)
 		if len(sub) > 1 && isStopWord(strings.ToLower(sub[1])) {
@@ -137,7 +139,7 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedUsers(text, userFromRe)
+	text = removeMatchedNonStopWords(text,userFromRe)
 
 	// "alice said"
 	for _, m := range userSaidRe.FindAllStringSubmatch(text, -1) {
@@ -147,7 +149,7 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedUsers(text, userSaidRe)
+	text = removeMatchedNonStopWords(text,userSaidRe)
 
 	// "what did alice"
 	for _, m := range userWhatDidRe.FindAllStringSubmatch(text, -1) {
@@ -157,20 +159,10 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedUsers(text, userWhatDidRe)
+	text = removeMatchedNonStopWords(text,userWhatDidRe)
 
 	pq.Users = dedup(pq.Users)
 	return text
-}
-
-func removeMatchedUsers(text string, re *regexp.Regexp) string {
-	return re.ReplaceAllStringFunc(text, func(match string) string {
-		sub := re.FindStringSubmatch(match)
-		if len(sub) > 1 && isStopWord(strings.ToLower(sub[1])) {
-			return match
-		}
-		return ""
-	})
 }
 
 // --- Time range extraction ---

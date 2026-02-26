@@ -41,8 +41,7 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 	poolCtx, poolCancel := context.WithCancel(ctx)
 	defer poolCancel()
 
-	pool := NewWorkerPool(workers)
-	pool.cancel = poolCancel
+	pool := NewWorkerPool(workers, poolCancel)
 	pool.Start(poolCtx, func(ctx context.Context, task SyncTask) error {
 		o.progress.SetCurrentChannel(task.ChannelID)
 		if err := o.syncChannel(ctx, task.ChannelID, opts.Full); err != nil {

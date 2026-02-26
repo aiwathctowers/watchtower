@@ -29,20 +29,22 @@ type WorkerPool struct {
 	workers int
 	tasks   chan SyncTask
 	wg      sync.WaitGroup
-	cancel  context.CancelFunc // if set, called on first error to stop other workers
+	cancel  context.CancelFunc // called on first error to stop other workers
 
 	mu   sync.Mutex
 	errs []error
 }
 
 // NewWorkerPool creates a worker pool with the given concurrency level.
-func NewWorkerPool(workers int) *WorkerPool {
+// The cancel function is called on the first worker error to stop all workers.
+func NewWorkerPool(workers int, cancel context.CancelFunc) *WorkerPool {
 	if workers < 1 {
 		workers = 1
 	}
 	return &WorkerPool{
 		workers: workers,
 		tasks:   make(chan SyncTask, workers*2),
+		cancel:  cancel,
 	}
 }
 

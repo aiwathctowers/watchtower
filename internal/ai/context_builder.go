@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"watchtower/internal/db"
+	watchtowerslack "watchtower/internal/slack"
 )
 
 // tokenRatio is the heuristic for estimating tokens: 1 token ≈ 4 characters.
@@ -527,7 +528,7 @@ func (cb *ContextBuilder) formatSearchResults(msgs []db.Message, budget int, see
 }
 
 // formatMessage formats a single message in the compact format:
-// #channel | 2025-02-24 14:30 | @user (Display Name): message text
+// #channel | 2025-02-24 14:30 | @user (Display Name): message text [permalink]
 func (cb *ContextBuilder) formatMessage(channelName string, msg db.Message) string {
 	t := time.Unix(int64(msg.TSUnix), 0).UTC()
 	timeStr := t.Format("2006-01-02 15:04")
@@ -546,7 +547,12 @@ func (cb *ContextBuilder) formatMessage(channelName string, msg db.Message) stri
 		text = string(runes[:497]) + "..."
 	}
 
-	return fmt.Sprintf("#%s | %s | %s: %s\n", channelName, timeStr, userLabel, text)
+	line := fmt.Sprintf("#%s | %s | %s: %s", channelName, timeStr, userLabel, text)
+	if cb.domain != "" {
+		permalink := watchtowerslack.GeneratePermalink(cb.domain, msg.ChannelID, msg.TS)
+		line += " [" + permalink + "]"
+	}
+	return line + "\n"
 }
 
 // formatThreadSummary adds a brief summary of thread replies.
@@ -649,7 +655,7 @@ func (cb *ContextBuilder) resolveUser(userID string) (name, displayName string) 
 
 // estimateTokens estimates the number of tokens for a string using the 4 chars/token heuristic.
 func estimateTokens(s string) int {
-	return (len(s) + tokenRatio - 1) / tokenRatio
+	return (utf8.RuneCountInString(s) + tokenRatio - 1) / tokenRatio
 }
 
 // truncateToTokens truncates a string to approximately fit within a token budget.

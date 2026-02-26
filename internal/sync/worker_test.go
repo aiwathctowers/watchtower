@@ -13,21 +13,21 @@ import (
 )
 
 func TestNewWorkerPool(t *testing.T) {
-	wp := NewWorkerPool(5)
+	wp := NewWorkerPool(5, nil)
 	assert.Equal(t, 5, wp.workers)
 	assert.NotNil(t, wp.tasks)
 }
 
 func TestNewWorkerPoolMinimumOne(t *testing.T) {
-	wp := NewWorkerPool(0)
+	wp := NewWorkerPool(0, nil)
 	assert.Equal(t, 1, wp.workers)
 
-	wp = NewWorkerPool(-3)
+	wp = NewWorkerPool(-3, nil)
 	assert.Equal(t, 1, wp.workers)
 }
 
 func TestWorkerPoolProcessesTasks(t *testing.T) {
-	wp := NewWorkerPool(2)
+	wp := NewWorkerPool(2, nil)
 
 	var processed atomic.Int32
 	wp.Start(context.Background(), func(ctx context.Context, task SyncTask) error {
@@ -49,7 +49,7 @@ func TestWorkerPoolProcessesTasks(t *testing.T) {
 }
 
 func TestWorkerPoolCollectsErrors(t *testing.T) {
-	wp := NewWorkerPool(2)
+	wp := NewWorkerPool(2, nil)
 
 	wp.Start(context.Background(), func(ctx context.Context, task SyncTask) error {
 		if task.ChannelID == "fail" {
@@ -72,8 +72,8 @@ func TestWorkerPoolCollectsErrors(t *testing.T) {
 }
 
 func TestWorkerPoolContextCancellation(t *testing.T) {
-	wp := NewWorkerPool(2)
 	ctx, cancel := context.WithCancel(context.Background())
+	wp := NewWorkerPool(2, nil)
 
 	var processed atomic.Int32
 	wp.Start(ctx, func(ctx context.Context, task SyncTask) error {
@@ -100,7 +100,7 @@ func TestWorkerPoolContextCancellation(t *testing.T) {
 }
 
 func TestWorkerPoolSubmitReturnsFalseOnCancel(t *testing.T) {
-	wp := NewWorkerPool(1)
+	wp := NewWorkerPool(1, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before submit
@@ -110,7 +110,7 @@ func TestWorkerPoolSubmitReturnsFalseOnCancel(t *testing.T) {
 }
 
 func TestWorkerPoolConcurrency(t *testing.T) {
-	wp := NewWorkerPool(3)
+	wp := NewWorkerPool(3, nil)
 
 	var concurrent atomic.Int32
 	var maxConcurrent atomic.Int32
@@ -140,7 +140,7 @@ func TestWorkerPoolConcurrency(t *testing.T) {
 }
 
 func TestWorkerPoolNoTasksReturnsCleanly(t *testing.T) {
-	wp := NewWorkerPool(2)
+	wp := NewWorkerPool(2, nil)
 	wp.Start(context.Background(), func(ctx context.Context, task SyncTask) error {
 		return nil
 	})
@@ -197,7 +197,7 @@ func TestSortTasksByPrioritySingle(t *testing.T) {
 
 func TestWorkerPoolTaskOrder(t *testing.T) {
 	// Use 1 worker to guarantee serial processing
-	wp := NewWorkerPool(1)
+	wp := NewWorkerPool(1, nil)
 
 	var order []string
 	var mu = &sync.Mutex{}
@@ -231,7 +231,7 @@ func TestWorkerPoolTaskOrder(t *testing.T) {
 }
 
 func TestWorkerPoolHandlerReceivesContext(t *testing.T) {
-	wp := NewWorkerPool(1)
+	wp := NewWorkerPool(1, nil)
 	ctx := context.WithValue(context.Background(), contextKey("test"), "value")
 
 	var received string

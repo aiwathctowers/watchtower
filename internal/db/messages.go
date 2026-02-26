@@ -223,8 +223,13 @@ func (db *DB) GetAllThreadParents() ([]Message, error) {
 		SELECT m.channel_id, m.ts, m.user_id, m.text, m.thread_ts, m.reply_count,
 			m.is_edited, m.is_deleted, m.subtype, m.permalink, m.ts_unix, m.raw_json
 		FROM messages m
-		WHERE m.reply_count > 0
-			AND (SELECT COUNT(*) FROM messages r WHERE r.channel_id = m.channel_id AND r.thread_ts = m.ts) < m.reply_count
+		LEFT JOIN (
+			SELECT channel_id, thread_ts, COUNT(*) as cnt
+			FROM messages
+			WHERE thread_ts IS NOT NULL
+			GROUP BY channel_id, thread_ts
+		) r ON r.channel_id = m.channel_id AND r.thread_ts = m.ts
+		WHERE m.reply_count > 0 AND COALESCE(r.cnt, 0) < m.reply_count
 		ORDER BY m.ts_unix DESC`,
 	)
 	if err != nil {
