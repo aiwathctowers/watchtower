@@ -199,9 +199,24 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 		return
 	}
 
+	now := time.Now()
+	fromUnix := float64(sinceTime.Unix())
+	toUnix := float64(now.Unix())
+
+	// Quick check: are there any messages in the catchup window?
+	msgCount, err := database.CountMessagesByTimeRange(fromUnix, toUnix)
+	if err != nil {
+		p.Send(streamErrMsg{err: fmt.Errorf("counting messages: %w", err)})
+		return
+	}
+	if msgCount == 0 {
+		_ = database.UpdateCheckpoint(now)
+		p.Send(commandResultMsg{output: "No new activity found since your last catchup."})
+		return
+	}
+
 	p.Send(streamChunkMsg{text: dimStyle.Render(fmt.Sprintf("Catching up since %s...", sinceTime.Format("2006-01-02 15:04 MST"))) + "\n\n"})
 
-	now := time.Now()
 	pq := ai.ParsedQuery{
 		RawText: "What happened since I was last here? Summarize activity by channel, highlight decisions, action items, and anything unusual.",
 		TimeRange: &ai.TimeRange{
@@ -215,12 +230,6 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 	msgContext, err := ctxBuilder.Build(pq)
 	if err != nil {
 		p.Send(streamErrMsg{err: fmt.Errorf("building context: %w", err)})
-		return
-	}
-
-	if strings.TrimSpace(msgContext) == "" {
-		_ = database.UpdateCheckpoint(now)
-		p.Send(commandResultMsg{output: "No new activity found since your last catchup."})
 		return
 	}
 
