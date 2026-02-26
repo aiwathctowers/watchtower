@@ -143,9 +143,9 @@ func TestGetMessagesByTimeRange(t *testing.T) {
 	msgs, err = db.GetMessagesByTimeRange("C001", 1700000000, 1700002000)
 	require.NoError(t, err)
 	assert.Len(t, msgs, 3)
-	// Should be sorted ascending
-	assert.Equal(t, "early", msgs[0].Text)
-	assert.Equal(t, "late", msgs[2].Text)
+	// Should be sorted descending (newest first)
+	assert.Equal(t, "late", msgs[0].Text)
+	assert.Equal(t, "early", msgs[2].Text)
 }
 
 func TestGetMessagesByTimeRangeEmpty(t *testing.T) {

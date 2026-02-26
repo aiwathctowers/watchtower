@@ -91,7 +91,7 @@ func (db *DB) GetMessagesByTimeRange(channelID string, from, to float64) ([]Mess
 		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
 		FROM messages
 		WHERE channel_id = ? AND ts_unix >= ? AND ts_unix <= ?
-		ORDER BY ts_unix ASC`,
+		ORDER BY ts_unix DESC`,
 		channelID, from, to,
 	)
 	if err != nil {

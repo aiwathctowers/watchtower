@@ -302,7 +302,7 @@ func (o *Orchestrator) upsertMessagePage(channelID string, messages []goslack.Me
 			isEdited,
 			false, // is_deleted
 			msg.SubType,
-			"", // permalink generated later
+			"", // permalink generated at query time by context builder
 			string(rawJSON),
 		)
 		if err != nil {
