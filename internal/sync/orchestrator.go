@@ -113,11 +113,6 @@ func (o *Orchestrator) syncMetadata(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetching existing users: %w", err)
 	}
-	existingUserIDs := make(map[string]bool, len(existingUsers))
-	for _, u := range existingUsers {
-		existingUserIDs[u.ID] = true
-	}
-
 	apiUserIDs := make(map[string]bool, len(users))
 	o.progress.SetMetadataUsers(len(users), 0)
 	for i, u := range users {
@@ -203,6 +198,11 @@ var nonFatalSlackErrors = map[string]bool{
 func isNonFatalError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// Rate limit errors are non-fatal; the next sync run will resume via cursor.
+	var rlErr *slack.RateLimitedError
+	if errors.As(err, &rlErr) {
+		return true
 	}
 	// Check for structured Slack API errors first.
 	var slackErr slack.SlackErrorResponse
