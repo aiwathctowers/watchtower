@@ -86,12 +86,14 @@ func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 }
 
 // GetMessagesByTimeRange returns messages in a channel within a Unix timestamp range.
+// Results are limited to 500 rows (newest first) to bound memory usage.
 func (db *DB) GetMessagesByTimeRange(channelID string, from, to float64) ([]Message, error) {
 	rows, err := db.Query(`
 		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
 		FROM messages
 		WHERE channel_id = ? AND ts_unix >= ? AND ts_unix <= ?
-		ORDER BY ts_unix DESC`,
+		ORDER BY ts_unix DESC
+		LIMIT 500`,
 		channelID, from, to,
 	)
 	if err != nil {
@@ -100,6 +102,13 @@ func (db *DB) GetMessagesByTimeRange(channelID string, from, to float64) ([]Mess
 	defer rows.Close()
 
 	return scanMessages(rows)
+}
+
+// CountMessagesByTimeRange returns the number of messages in a time range.
+func (db *DB) CountMessagesByTimeRange(from, to float64) (int, error) {
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM messages WHERE ts_unix >= ? AND ts_unix <= ?`, from, to).Scan(&count)
+	return count, err
 }
 
 // ChannelMessageCount holds a channel ID/name pair with a message count.

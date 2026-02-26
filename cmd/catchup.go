@@ -74,8 +74,24 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Catching up since %s...\n\n", sinceTime.Format("2006-01-02 15:04 MST"))
 
-	// Build a catchup query
 	now := time.Now()
+	fromUnix := float64(sinceTime.Unix())
+	toUnix := float64(now.Unix())
+
+	// Quick check: are there any messages in the catchup window?
+	msgCount, err := database.CountMessagesByTimeRange(fromUnix, toUnix)
+	if err != nil {
+		return fmt.Errorf("counting messages: %w", err)
+	}
+	if msgCount == 0 {
+		fmt.Fprintln(out, "No new activity found since your last catchup.")
+		if err := database.UpdateCheckpoint(now); err != nil {
+			return fmt.Errorf("updating checkpoint: %w", err)
+		}
+		return nil
+	}
+
+	// Build a catchup query
 	pq := ai.ParsedQuery{
 		RawText: "What happened since I was last here? Summarize activity by channel, highlight decisions, action items, and anything unusual.",
 		TimeRange: &ai.TimeRange{
@@ -94,15 +110,6 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	msgContext, err := ctxBuilder.Build(pq)
 	if err != nil {
 		return fmt.Errorf("building context: %w", err)
-	}
-
-	if strings.TrimSpace(msgContext) == "" {
-		fmt.Fprintln(out, "No new activity found since your last catchup.")
-		// Still update checkpoint
-		if err := database.UpdateCheckpoint(now); err != nil {
-			return fmt.Errorf("updating checkpoint: %w", err)
-		}
-		return nil
 	}
 
 	// Assemble prompt
