@@ -659,18 +659,16 @@ func estimateTokens(s string) int {
 }
 
 // truncateToTokens truncates a string to approximately fit within a token budget.
-// Uses byte length consistent with estimateTokens.
+// Uses rune count consistent with estimateTokens.
 func truncateToTokens(s string, budget int) string {
 	if budget <= 0 {
 		return ""
 	}
-	maxBytes := budget * tokenRatio
-	if len(s) <= maxBytes {
+	maxRunes := budget * tokenRatio
+	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
-	// Ensure we don't cut in the middle of a UTF-8 rune.
-	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
-		maxBytes--
-	}
-	return s[:maxBytes]
+	// Truncate at the rune level.
+	runes := []rune(s)
+	return string(runes[:maxRunes])
 }
