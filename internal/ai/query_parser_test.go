@@ -13,34 +13,24 @@ func fixedNow() time.Time {
 	return time.Date(2025, 2, 26, 14, 30, 0, 0, time.UTC)
 }
 
-func withFixedTime(t *testing.T) {
-	t.Helper()
-	orig := nowFunc
-	nowFunc = fixedNow
-	t.Cleanup(func() { nowFunc = orig })
-}
-
 // --- Time range parsing ---
 
 func TestParse_TimeRange_Yesterday(t *testing.T) {
-	withFixedTime(t)
-	pq := Parse("what happened yesterday")
+	pq := ParseAt("what happened yesterday", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 25, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, time.Date(2025, 2, 25, 23, 59, 59, 0, time.UTC), pq.TimeRange.To)
 }
 
 func TestParse_TimeRange_Today(t *testing.T) {
-	withFixedTime(t)
-	pq := Parse("what's new today")
+	pq := ParseAt("what's new today", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 26, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, fixedNow(), pq.TimeRange.To)
 }
 
 func TestParse_TimeRange_ThisMorning(t *testing.T) {
-	withFixedTime(t)
-	pq := Parse("what happened this morning")
+	pq := ParseAt("what happened this morning", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 26, 6, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	// now (14:30) is after noon, so To should be noon
@@ -48,22 +38,16 @@ func TestParse_TimeRange_ThisMorning(t *testing.T) {
 }
 
 func TestParse_TimeRange_ThisMorning_BeforeNoon(t *testing.T) {
-	orig := nowFunc
-	nowFunc = func() time.Time {
-		return time.Date(2025, 2, 26, 10, 0, 0, 0, time.UTC)
-	}
-	defer func() { nowFunc = orig }()
-
-	pq := Parse("this morning activity")
+	beforeNoon := time.Date(2025, 2, 26, 10, 0, 0, 0, time.UTC)
+	pq := ParseAt("this morning activity", beforeNoon)
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 26, 6, 0, 0, 0, time.UTC), pq.TimeRange.From)
-	assert.Equal(t, time.Date(2025, 2, 26, 10, 0, 0, 0, time.UTC), pq.TimeRange.To)
+	assert.Equal(t, beforeNoon, pq.TimeRange.To)
 }
 
 func TestParse_TimeRange_LastWeek(t *testing.T) {
-	withFixedTime(t)
 	// 2025-02-26 is Wednesday. Last week = Mon Feb 17 - Sun Feb 23
-	pq := Parse("show me last week")
+	pq := ParseAt("show me last week", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 17, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, time.Date(2025, 2, 23, 23, 59, 59, 0, time.UTC), pq.TimeRange.To)
@@ -86,8 +70,7 @@ func TestParse_TimeRange_RelativeDuration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			withFixedTime(t)
-			pq := Parse(tt.input)
+			pq := ParseAt(tt.input, fixedNow())
 			assert.NotNil(t, pq.TimeRange, "expected time range for %q", tt.input)
 			now := fixedNow()
 			assert.Equal(t, now.Add(-tt.duration), pq.TimeRange.From)
@@ -97,18 +80,16 @@ func TestParse_TimeRange_RelativeDuration(t *testing.T) {
 }
 
 func TestParse_TimeRange_SinceWeekday(t *testing.T) {
-	withFixedTime(t)
 	// 2025-02-26 is Wednesday. "since Monday" = Monday Feb 24
-	pq := Parse("since Monday")
+	pq := ParseAt("since Monday", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 24, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, fixedNow(), pq.TimeRange.To)
 }
 
 func TestParse_TimeRange_SinceToday(t *testing.T) {
-	withFixedTime(t)
 	// "since Wednesday" when it is Wednesday = today
-	pq := Parse("since Wednesday")
+	pq := ParseAt("since Wednesday", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 26, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, fixedNow(), pq.TimeRange.To)
@@ -270,8 +251,7 @@ func TestParse_Topics_NoDuplicates(t *testing.T) {
 // --- Combined parsing ---
 
 func TestParse_Combined_FullQuery(t *testing.T) {
-	withFixedTime(t)
-	pq := Parse("what did @alice say about deployment in #engineering yesterday")
+	pq := ParseAt("what did @alice say about deployment in #engineering yesterday", fixedNow())
 
 	assert.Equal(t, IntentPerson, pq.Intent)
 	assert.Contains(t, pq.Users, "alice")
@@ -282,8 +262,7 @@ func TestParse_Combined_FullQuery(t *testing.T) {
 }
 
 func TestParse_Combined_CatchupSince(t *testing.T) {
-	withFixedTime(t)
-	pq := Parse("catch me up since Monday")
+	pq := ParseAt("catch me up since Monday", fixedNow())
 
 	assert.Equal(t, IntentCatchup, pq.Intent)
 	assert.NotNil(t, pq.TimeRange)
@@ -324,9 +303,8 @@ func TestParse_OnlyStopWords(t *testing.T) {
 }
 
 func TestParse_TimeRange_SinceFriday(t *testing.T) {
-	withFixedTime(t)
 	// 2025-02-26 is Wednesday. "since Friday" = Friday Feb 21
-	pq := Parse("since Friday")
+	pq := ParseAt("since Friday", fixedNow())
 	assert.NotNil(t, pq.TimeRange)
 	assert.Equal(t, time.Date(2025, 2, 21, 0, 0, 0, 0, time.UTC), pq.TimeRange.From)
 	assert.Equal(t, fixedNow(), pq.TimeRange.To)

@@ -36,9 +36,9 @@ func threadMux(channelMessages map[string][]map[string]any, threadReplies map[st
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": msgs,
-			"has_more": false,
+			"ok":                true,
+			"messages":          msgs,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -56,9 +56,9 @@ func threadMux(channelMessages map[string][]map[string]any, threadReplies map[st
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": replies,
-			"has_more": false,
+			"ok":                true,
+			"messages":          replies,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -94,7 +94,7 @@ func TestSyncThreadsBasic(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, threadMux(channelMsgs, threadReplies))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// Should have parent + 2 replies = 3 messages
@@ -158,7 +158,7 @@ func TestSyncThreadsDisabled(t *testing.T) {
 	orch := NewOrchestrator(database, slackClient, cfg)
 	orch.SetLogger(log.New(os.Stderr, "[test] ", 0))
 
-	err = orch.Run(context.Background(), SyncOptions{})
+	err = orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// Should only have the parent message from history (no thread replies synced)
@@ -180,7 +180,7 @@ func TestSyncThreadsNoThreadsToSync(t *testing.T) {
 	threadReplies := map[string][]map[string]any{}
 
 	ts := newTestSetup(t, threadMux(channelMsgs, threadReplies))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// Only the regular message, no thread sync needed
@@ -227,7 +227,7 @@ func TestSyncThreadsMultipleThreads(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, threadMux(channelMsgs, threadReplies))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// 2 parents + 2 replies = 4 messages
@@ -258,9 +258,9 @@ func TestSyncThreadsNonFatalErrorSkipsThread(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": msgs,
-			"has_more": false,
+			"ok":                true,
+			"messages":          msgs,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -274,12 +274,15 @@ func TestSyncThreadsNonFatalErrorSkipsThread(t *testing.T) {
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err) // non-fatal error should not fail the sync
 }
 
 func TestSyncThreadsAlreadySynced(t *testing.T) {
-	// If all replies are already in the DB, syncThreads should have nothing to do.
+	// When conversations.history returns both the parent and its reply,
+	// inline thread sync (Phase 3) will still call conversations.replies
+	// for the thread parent. But Phase 5 (syncThreads) should find no
+	// additional work because reply_count matches actual replies in DB.
 	channelMsgs := map[string][]map[string]any{
 		"C001": {
 			{
@@ -293,41 +296,32 @@ func TestSyncThreadsAlreadySynced(t *testing.T) {
 		},
 	}
 
-	// If GetAllThreadParents finds nothing because reply_count == actual replies,
-	// the conversations.replies endpoint should never be called.
-	repliesCalled := false
-	mux := baseMux()
-	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		channelID := r.Form.Get("channel")
-		msgs, ok := channelMsgs[channelID]
-		if !ok {
-			msgs = []map[string]any{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": msgs,
-			"has_more": false,
-			"response_metadata": map[string]any{"next_cursor": ""},
-		})
-	})
-	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
-		repliesCalled = true
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []any{},
-			"has_more": false,
-		})
-	})
+	threadReplies := map[string][]map[string]any{
+		"C001:1700000001.000000": {
+			{
+				"ts": "1700000001.000000", "user": "U001", "text": "Thread parent",
+				"type": "message", "reply_count": 1, "thread_ts": "1700000001.000000",
+			},
+			{
+				"ts": "1700000002.000000", "user": "U002", "text": "Reply",
+				"type": "message", "thread_ts": "1700000001.000000",
+			},
+		},
+	}
 
-	ts := newTestSetup(t, mux)
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	ts := newTestSetup(t, threadMux(channelMsgs, threadReplies))
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
-	// reply_count is 1 and we have 1 reply in DB, so no thread sync needed
-	assert.False(t, repliesCalled, "conversations.replies should not be called when all replies are synced")
+	// Should have parent + 1 reply = 2 messages
+	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 2)
+
+	// Verify thread structure is correct
+	replies, err := ts.db.GetThreadReplies("C001", "1700000001.000000")
+	require.NoError(t, err)
+	assert.Len(t, replies, 2) // parent + reply
 }
 
 func TestSyncThreadsCrossChannel(t *testing.T) {
@@ -370,7 +364,7 @@ func TestSyncThreadsCrossChannel(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, threadMux(channelMsgs, threadReplies))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs1, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -408,7 +402,7 @@ func TestGetAllThreadParentsDB(t *testing.T) {
 	require.NoError(t, err)
 
 	// GetAllThreadParents should return only the parent with unsynced replies
-	allParents, err := database.GetAllThreadParents()
+	allParents, err := database.GetAllThreadParents(1000)
 	require.NoError(t, err)
 	assert.Len(t, allParents, 1)
 	assert.Equal(t, "1700000001.000000", allParents[0].TS)
@@ -440,7 +434,7 @@ func TestGetAllThreadParentsAlreadySynced(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return empty since reply_count matches actual reply count
-	parents, err := database.GetAllThreadParents()
+	parents, err := database.GetAllThreadParents(1000)
 	require.NoError(t, err)
 	assert.Len(t, parents, 0)
 }

@@ -230,7 +230,7 @@ func TestGetAllThreadParents(t *testing.T) {
 	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C003", TS: "1700000020.000001", UserID: "U001", Text: "synced", ReplyCount: 1, RawJSON: "{}"}))
 	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C003", TS: "1700000021.000001", UserID: "U002", Text: "reply", ThreadTS: sql.NullString{String: "1700000020.000001", Valid: true}, RawJSON: "{}"}))
 
-	parents, err := db.GetAllThreadParents()
+	parents, err := db.GetAllThreadParents(1000)
 	require.NoError(t, err)
 	require.Len(t, parents, 2)
 
@@ -244,7 +244,7 @@ func TestGetAllThreadParentsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	parents, err := db.GetAllThreadParents()
+	parents, err := db.GetAllThreadParents(1000)
 	require.NoError(t, err)
 	assert.Empty(t, parents)
 }

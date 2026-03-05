@@ -84,4 +84,3 @@ func TestUpdateSyncStateWithError(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "channel_not_found", got.Error)
 }
-

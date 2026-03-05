@@ -2,114 +2,143 @@ package ai
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// sseResponse builds an SSE response body simulating a streaming Claude response.
-func sseResponse(text string) string {
-	var b strings.Builder
-
-	// message_start event
-	b.WriteString("event: message_start\n")
-	b.WriteString(`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}`)
-	b.WriteString("\n\n")
-
-	// content_block_start event
-	b.WriteString("event: content_block_start\n")
-	b.WriteString(`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-	b.WriteString("\n\n")
-
-	// Split text into chunks for realistic streaming
-	chunks := splitIntoChunks(text, 5)
-	for _, chunk := range chunks {
-		b.WriteString("event: content_block_delta\n")
-		b.WriteString(fmt.Sprintf(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}`, chunk))
-		b.WriteString("\n\n")
-	}
-
-	// content_block_stop event
-	b.WriteString("event: content_block_stop\n")
-	b.WriteString(`data: {"type":"content_block_stop","index":0}`)
-	b.WriteString("\n\n")
-
-	// message_delta event
-	b.WriteString("event: message_delta\n")
-	b.WriteString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`)
-	b.WriteString("\n\n")
-
-	// message_stop event
-	b.WriteString("event: message_stop\n")
-	b.WriteString(`data: {"type":"message_stop"}`)
-	b.WriteString("\n\n")
-
-	return b.String()
+// writeMockClaude creates a shell script that mimics the claude CLI for testing.
+func writeMockClaude(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755)
+	require.NoError(t, err)
+	return path
 }
 
-func splitIntoChunks(s string, size int) []string {
-	var chunks []string
-	for i := 0; i < len(s); i += size {
-		end := i + size
-		if end > len(s) {
-			end = len(s)
+func TestNewClient_DefaultClaudeCmd(t *testing.T) {
+	c := NewClient("model", "")
+	assert.Equal(t, "claude", c.claudeCmd)
+	assert.Equal(t, "model", c.model)
+}
+
+func TestBuildArgs(t *testing.T) {
+	c := NewClient("claude-sonnet-4-20250514", "")
+	args := c.buildArgs("system prompt", "user message", "text", "")
+
+	assert.Contains(t, args, "-p")
+	assert.Contains(t, args, "user message")
+	assert.Contains(t, args, "--system-prompt")
+	assert.Contains(t, args, "system prompt")
+	assert.Contains(t, args, "--output-format")
+	assert.Contains(t, args, "text")
+	assert.Contains(t, args, "--model")
+	assert.Contains(t, args, "claude-sonnet-4-20250514")
+	assert.Contains(t, args, "--allowedTools")
+	assert.Contains(t, args, "mcp__sqlite__*,Bash(sqlite3*)")
+	assert.Contains(t, args, "--disallowedTools")
+	assert.Contains(t, args, "Edit,Write,NotebookEdit")
+	assert.NotContains(t, args, "--resume")
+}
+
+func TestBuildArgs_WithDBPath(t *testing.T) {
+	c := NewClient("claude-sonnet-4-20250514", "/tmp/test.db")
+	args := c.buildArgs("system prompt", "user message", "text", "")
+
+	assert.Contains(t, args, "--mcp-config")
+	// Find the mcp-config value and verify it contains the DB path
+	for i, a := range args {
+		if a == "--mcp-config" && i+1 < len(args) {
+			assert.Contains(t, args[i+1], "/tmp/test.db")
+			assert.Contains(t, args[i+1], "mcpServers")
+			assert.Contains(t, args[i+1], "sqlite")
 		}
-		chunks = append(chunks, s[i:end])
 	}
-	return chunks
 }
 
-// nonStreamingResponse builds a JSON response for a non-streaming Claude API call.
-func nonStreamingResponse(text string) string {
-	return fmt.Sprintf(`{
-		"id": "msg_test",
-		"type": "message",
-		"role": "assistant",
-		"content": [{"type": "text", "text": %q}],
-		"model": "claude-sonnet-4-20250514",
-		"stop_reason": "end_turn",
-		"stop_sequence": null,
-		"usage": {"input_tokens": 10, "output_tokens": 5}
-	}`, text)
+func TestBuildArgs_WithoutDBPath(t *testing.T) {
+	c := NewClient("claude-sonnet-4-20250514", "")
+	args := c.buildArgs("system prompt", "user message", "text", "")
+
+	assert.NotContains(t, args, "--mcp-config")
 }
 
-func newTestServer(handler http.HandlerFunc) *httptest.Server {
-	return httptest.NewServer(handler)
+func TestBuildArgs_WithSessionID(t *testing.T) {
+	c := NewClient("claude-sonnet-4-20250514", "")
+	args := c.buildArgs("system prompt", "user message", "stream-json", "session-123")
+
+	assert.Contains(t, args, "--resume")
+	assert.Contains(t, args, "session-123")
+	assert.NotContains(t, args, "--system-prompt")
 }
 
-func newTestClient(serverURL string) *Client {
-	return NewClientWithOptions(
-		"claude-sonnet-4-20250514",
-		4096,
-		option.WithBaseURL(serverURL),
-		option.WithAPIKey("test-api-key"),
-		option.WithMaxRetries(0),
-	)
+func TestQuerySync_Success(t *testing.T) {
+	mockPath := writeMockClaude(t, `echo "Hello from Claude"`)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	result, err := c.QuerySync(context.Background(), "system", "hello", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Hello from Claude", result)
+}
+
+func TestQuerySync_TrimsTrailingNewlines(t *testing.T) {
+	mockPath := writeMockClaude(t, `printf "response\n\n"`)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	result, err := c.QuerySync(context.Background(), "system", "hello", "")
+	require.NoError(t, err)
+	assert.Equal(t, "response", result)
+}
+
+func TestQuerySync_ExitError(t *testing.T) {
+	mockPath := writeMockClaude(t, `echo "something went wrong" >&2; exit 1`)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	_, err := c.QuerySync(context.Background(), "system", "hello", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude CLI failed")
+	assert.Contains(t, err.Error(), "something went wrong")
+}
+
+func TestQuerySync_ContextCancellation(t *testing.T) {
+	mockPath := writeMockClaude(t, `sleep 10; echo "too late"`)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := c.QuerySync(ctx, "system", "hello", "")
+	require.Error(t, err)
 }
 
 func TestQuery_StreamingSuccess(t *testing.T) {
-	expectedText := "Hello, this is a streaming response from Claude."
+	// Mock script outputs stream-json events
+	script := `
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "}]}}\n'
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"world!"}]}}\n'
+printf '{"type":"result","subtype":"success","result":"Hello world!","session_id":"sess-abc"}\n'
+`
+	mockPath := writeMockClaude(t, script)
 
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/v1/messages", r.URL.Path)
-		assert.Equal(t, "test-api-key", r.Header.Get("X-Api-Key"))
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
 
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseResponse(expectedText))
-	})
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	textCh, errCh := client.Query(context.Background(), "You are helpful.", "Say hello")
+	textCh, errCh, sidCh := c.Query(context.Background(), "system", "hello", "")
 
 	var result strings.Builder
 	for chunk := range textCh {
@@ -118,146 +147,190 @@ func TestQuery_StreamingSuccess(t *testing.T) {
 
 	err := <-errCh
 	require.NoError(t, err)
-	assert.Equal(t, expectedText, result.String())
+	assert.Equal(t, "Hello world!", result.String())
+
+	sid := <-sidCh
+	assert.Equal(t, "sess-abc", sid)
+}
+
+func TestQuery_StreamingIgnoresNonTextEvents(t *testing.T) {
+	script := `
+printf '{"type":"system","subtype":"init","session_id":"test"}\n'
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"response"}]}}\n'
+printf '{"type":"result","subtype":"success","result":"response","session_id":"sess-xyz"}\n'
+`
+	mockPath := writeMockClaude(t, script)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	textCh, errCh, _ := c.Query(context.Background(), "system", "hello", "")
+
+	var result strings.Builder
+	for chunk := range textCh {
+		result.WriteString(chunk)
+	}
+
+	err := <-errCh
+	require.NoError(t, err)
+	assert.Equal(t, "response", result.String())
+}
+
+func TestQuery_StreamingError(t *testing.T) {
+	mockPath := writeMockClaude(t, `echo "error occurred" >&2; exit 1`)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	textCh, errCh, _ := c.Query(context.Background(), "system", "hello", "")
+
+	for range textCh {
+	}
+
+	err := <-errCh
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude CLI failed")
 }
 
 func TestQuery_ContextCancellation(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate a slow response
-		time.Sleep(2 * time.Second)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseResponse("slow response"))
-	})
-	defer server.Close()
+	mockPath := writeMockClaude(t, `sleep 10`)
 
-	client := newTestClient(server.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	textCh, errCh := client.Query(ctx, "system", "hello")
+	textCh, errCh, _ := c.Query(ctx, "system", "hello", "")
 
-	// Drain text channel
 	for range textCh {
 	}
 
-	// Should get a context error
 	err := <-errCh
 	if err != nil {
-		assert.True(t, strings.Contains(err.Error(), "context") || strings.Contains(err.Error(), "deadline"))
+		// Either context error or kill error is acceptable
+		assert.True(t, strings.Contains(err.Error(), "context") ||
+			strings.Contains(err.Error(), "signal") ||
+			strings.Contains(err.Error(), "killed") ||
+			strings.Contains(err.Error(), "claude CLI"))
 	}
 }
 
-func TestQuery_AuthenticationError(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`)
-	})
-	defer server.Close()
+func TestQuery_SessionIDFromResultEvent(t *testing.T) {
+	script := `
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+printf '{"type":"result","subtype":"success","result":"hi","session_id":"new-session-42"}\n'
+`
+	mockPath := writeMockClaude(t, script)
 
-	client := newTestClient(server.URL)
-	textCh, errCh := client.Query(context.Background(), "system", "hello")
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	textCh, errCh, sidCh := c.Query(context.Background(), "system", "hello", "")
 
 	for range textCh {
 	}
+	require.NoError(t, <-errCh)
 
-	err := <-errCh
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid Anthropic API key")
+	sid := <-sidCh
+	assert.Equal(t, "new-session-42", sid)
 }
 
-func TestQuery_RateLimitError(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}`)
-	})
-	defer server.Close()
+func TestQuery_NoSessionIDWhenMissing(t *testing.T) {
+	script := `
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+printf '{"type":"result","subtype":"success","result":"hi"}\n'
+`
+	mockPath := writeMockClaude(t, script)
 
-	client := newTestClient(server.URL)
-	textCh, errCh := client.Query(context.Background(), "system", "hello")
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	textCh, errCh, sidCh := c.Query(context.Background(), "system", "hello", "")
 
 	for range textCh {
 	}
+	require.NoError(t, <-errCh)
 
-	err := <-errCh
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rate limit")
+	// Channel should be closed with no value
+	sid, ok := <-sidCh
+	assert.False(t, ok)
+	assert.Empty(t, sid)
 }
 
-func TestQuery_OverloadedError(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(529)
-		fmt.Fprint(w, `{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}`)
-	})
-	defer server.Close()
+func TestClassifyError_NotFound(t *testing.T) {
+	err := classifyError(&exec.Error{Name: "claude", Err: exec.ErrNotFound}, "")
+	assert.Contains(t, err.Error(), "claude CLI not found")
+}
 
-	client := newTestClient(server.URL)
-	textCh, errCh := client.Query(context.Background(), "system", "hello")
+func TestClassifyError_ExitError(t *testing.T) {
+	err := classifyError(&exec.ExitError{}, "auth failed")
+	assert.Contains(t, err.Error(), "claude CLI failed")
+	assert.Contains(t, err.Error(), "auth failed")
+}
 
-	for range textCh {
+func TestStreamEvent_ExtractText(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    streamEvent
+		expected string
+	}{
+		{"assistant message", streamEvent{Type: "assistant", Message: &streamMessage{Content: []streamContent{{Type: "text", Text: "hello"}}}}, "hello"},
+		{"result event", streamEvent{Type: "result", Subtype: "success", Result: "full"}, ""},
+		{"system event", streamEvent{Type: "system", Subtype: "init"}, ""},
+		{"assistant no message", streamEvent{Type: "assistant"}, ""},
+		{"assistant empty content", streamEvent{Type: "assistant", Message: &streamMessage{}}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.event.extractText())
+		})
+	}
+}
+
+func TestQuery_IgnoresMalformedJSON(t *testing.T) {
+	script := `
+printf 'not json\n'
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"valid"}]}}\n'
+printf '{broken json\n'
+`
+	mockPath := writeMockClaude(t, script)
+
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
+
+	textCh, errCh, _ := c.Query(context.Background(), "system", "hello", "")
+
+	var result strings.Builder
+	for chunk := range textCh {
+		result.WriteString(chunk)
 	}
 
 	err := <-errCh
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "overloaded")
-}
-
-func TestQuerySync_Success(t *testing.T) {
-	expectedText := "This is a sync response."
-
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, nonStreamingResponse(expectedText))
-	})
-	defer server.Close()
-
-	client := newTestClient(server.URL)
-	result, err := client.QuerySync(context.Background(), "You are helpful.", "Say hello")
-
 	require.NoError(t, err)
-	assert.Equal(t, expectedText, result)
+	assert.Equal(t, "valid", result.String())
 }
 
-func TestQuerySync_AuthError(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `{"type":"error","error":{"type":"authentication_error","message":"invalid"}}`)
-	})
-	defer server.Close()
+func TestQuery_SkipsEmptyLines(t *testing.T) {
+	script := `
+printf '\n'
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"data"}]}}\n'
+printf '\n'
+`
+	mockPath := writeMockClaude(t, script)
 
-	client := newTestClient(server.URL)
-	_, err := client.QuerySync(context.Background(), "system", "hello")
+	c := NewClient("test-model", "")
+	c.claudeCmd = mockPath
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid Anthropic API key")
-}
+	textCh, errCh, _ := c.Query(context.Background(), "system", "hello", "")
 
-func TestQuerySync_BadRequest(t *testing.T) {
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"type":"error","error":{"type":"invalid_request_error","message":"prompt too long"}}`)
-	})
-	defer server.Close()
+	var result strings.Builder
+	for chunk := range textCh {
+		result.WriteString(chunk)
+	}
 
-	client := newTestClient(server.URL)
-	_, err := client.QuerySync(context.Background(), "system", "hello")
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "context may be too long")
-}
-
-func TestNewClient_DefaultMaxTokens(t *testing.T) {
-	c := NewClient("key", "model", 0)
-	assert.Equal(t, 4096, c.maxTokens)
-}
-
-func TestNewClient_CustomMaxTokens(t *testing.T) {
-	c := NewClient("key", "model", 8192)
-	assert.Equal(t, 8192, c.maxTokens)
+	err := <-errCh
+	require.NoError(t, err)
+	assert.Equal(t, "data", result.String())
 }

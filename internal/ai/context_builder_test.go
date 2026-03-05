@@ -408,7 +408,7 @@ func TestBuildWorkspaceSummary_EmptyDB(t *testing.T) {
 	defer database.Close()
 
 	cb := NewContextBuilder(database, 150000, "test-corp")
-	summary, err := cb.buildWorkspaceSummary(1000)
+	summary, err := cb.buildWorkspaceSummary(1000, nil)
 	require.NoError(t, err)
 	assert.Contains(t, summary, "Workspace Summary")
 	assert.Contains(t, summary, "Channels: 0")
@@ -424,7 +424,7 @@ func TestBuildPriorityContext_NoWatchList(t *testing.T) {
 			To:   refTime,
 		},
 	}
-	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool))
+	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool), nil)
 	require.NoError(t, err)
 	assert.Empty(t, result) // No watched items
 }
@@ -435,13 +435,16 @@ func TestBuildPriorityContext_WithWatchedChannel(t *testing.T) {
 
 	cb := NewContextBuilder(database, 150000, "test-corp")
 
+	watchList, err := database.GetWatchList()
+	require.NoError(t, err)
+
 	query := ParsedQuery{
 		TimeRange: &TimeRange{
 			From: refTime.Add(-4 * time.Hour),
 			To:   refTime,
 		},
 	}
-	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool))
+	result, err := cb.buildPriorityContext(query, 50000, make(map[string]bool), watchList)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Priority Context")
 	assert.Contains(t, result, "#engineering")

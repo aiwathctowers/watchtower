@@ -3,6 +3,15 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+)
+
+const (
+	DefaultMessageLimit         = 100
+	DefaultTimeRangeLimit       = 500
+	DefaultChannelActivityLimit = 10
+	DefaultUserActivityLimit    = 5
+	DefaultSearchLimit          = 50
 )
 
 // MessageOpts provides options for querying messages.
@@ -39,11 +48,50 @@ func (db *DB) UpsertMessage(msg Message) error {
 	return nil
 }
 
+// UpsertMessageBatch inserts or updates a batch of messages within an existing
+// transaction, using a prepared statement for efficiency.
+func (db *DB) UpsertMessageBatch(tx *sql.Tx, msgs []Message) (int, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("UpsertMessageBatch: nil transaction")
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO messages (channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, raw_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(channel_id, ts) DO UPDATE SET
+			user_id = excluded.user_id,
+			text = excluded.text,
+			thread_ts = excluded.thread_ts,
+			reply_count = excluded.reply_count,
+			is_edited = excluded.is_edited,
+			is_deleted = excluded.is_deleted,
+			subtype = excluded.subtype,
+			permalink = excluded.permalink,
+			raw_json = excluded.raw_json`)
+	if err != nil {
+		return 0, fmt.Errorf("preparing statement: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for _, msg := range msgs {
+		_, err := stmt.Exec(
+			msg.ChannelID, msg.TS, msg.UserID, msg.Text, msg.ThreadTS,
+			msg.ReplyCount, msg.IsEdited, msg.IsDeleted, msg.Subtype,
+			msg.Permalink, msg.RawJSON,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("upserting message %s/%s: %w", msg.ChannelID, msg.TS, err)
+		}
+		count++
+	}
+	return count, nil
+}
+
 // GetMessages returns messages matching the given options.
 func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 	query := `SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json FROM messages`
 	var conditions []string
-	var args []interface{}
+	var args []any
 
 	if opts.ChannelID != "" {
 		conditions = append(conditions, "channel_id = ?")
@@ -63,18 +111,16 @@ func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 	}
 
 	if len(conditions) > 0 {
-		query += " WHERE " + conditions[0]
-		for _, c := range conditions[1:] {
-			query += " AND " + c
-		}
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += " ORDER BY ts_unix DESC"
 
 	limit := opts.Limit
 	if limit <= 0 {
-		limit = 100
+		limit = DefaultMessageLimit
 	}
-	query += fmt.Sprintf(" LIMIT %d", limit)
+	query += " LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
@@ -86,15 +132,15 @@ func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 }
 
 // GetMessagesByTimeRange returns messages in a channel within a Unix timestamp range.
-// Results are limited to 500 rows (newest first) to bound memory usage.
+// Results are limited to DefaultTimeRangeLimit rows (newest first) to bound memory usage.
 func (db *DB) GetMessagesByTimeRange(channelID string, from, to float64) ([]Message, error) {
 	rows, err := db.Query(`
 		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
 		FROM messages
 		WHERE channel_id = ? AND ts_unix >= ? AND ts_unix <= ?
 		ORDER BY ts_unix DESC
-		LIMIT 500`,
-		channelID, from, to,
+		LIMIT ?`,
+		channelID, from, to, DefaultTimeRangeLimit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying messages by time range: %w", err)
@@ -128,7 +174,7 @@ type UserMessageCount struct {
 // ordered by count descending, limited to the top N channels.
 func (db *DB) GetChannelActivityCounts(from, to float64, limit int) ([]ChannelMessageCount, error) {
 	if limit <= 0 {
-		limit = 10
+		limit = DefaultChannelActivityLimit
 	}
 	rows, err := db.Query(`
 		SELECT m.channel_id, c.name, COUNT(*) as cnt
@@ -160,7 +206,7 @@ func (db *DB) GetChannelActivityCounts(from, to float64, limit int) ([]ChannelMe
 // ordered by count descending, limited to the top N users.
 func (db *DB) GetUserActivityCounts(from, to float64, limit int) ([]UserMessageCount, error) {
 	if limit <= 0 {
-		limit = 5
+		limit = DefaultUserActivityLimit
 	}
 	rows, err := db.Query(`
 		SELECT user_id, COUNT(*) as cnt
@@ -190,7 +236,7 @@ func (db *DB) GetUserActivityCounts(from, to float64, limit int) ([]UserMessageC
 // GetMessagesByChannel returns the most recent messages in a channel.
 func (db *DB) GetMessagesByChannel(channelID string, limit int) ([]Message, error) {
 	if limit <= 0 {
-		limit = 100
+		limit = DefaultMessageLimit
 	}
 	rows, err := db.Query(`
 		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
@@ -208,13 +254,14 @@ func (db *DB) GetMessagesByChannel(channelID string, limit int) ([]Message, erro
 	return scanMessages(rows)
 }
 
-// GetThreadReplies returns all messages in a thread, including the parent.
+// GetThreadReplies returns messages in a thread (including the parent), limited to 200 replies.
 func (db *DB) GetThreadReplies(channelID, threadTS string) ([]Message, error) {
 	rows, err := db.Query(`
 		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
 		FROM messages
 		WHERE channel_id = ? AND (ts = ? OR thread_ts = ?)
-		ORDER BY ts_unix ASC`,
+		ORDER BY ts_unix ASC
+		LIMIT 200`,
 		channelID, threadTS, threadTS,
 	)
 	if err != nil {
@@ -225,9 +272,14 @@ func (db *DB) GetThreadReplies(channelID, threadTS string) ([]Message, error) {
 	return scanMessages(rows)
 }
 
-// GetAllThreadParents returns all messages with reply_count > 0 across all channels
-// that likely need thread reply syncing.
-func (db *DB) GetAllThreadParents() ([]Message, error) {
+// GetAllThreadParents returns messages with reply_count > 0 across all channels
+// that likely need thread reply syncing, limited to at most `limit` rows.
+// NOTE: For large databases, consider adding an index on (channel_id, thread_ts)
+// to optimize this query's JOIN + subquery.
+func (db *DB) GetAllThreadParents(limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
 	rows, err := db.Query(`
 		SELECT m.channel_id, m.ts, m.user_id, m.text, m.thread_ts, m.reply_count,
 			m.is_edited, m.is_deleted, m.subtype, m.permalink, m.ts_unix, m.raw_json
@@ -239,7 +291,8 @@ func (db *DB) GetAllThreadParents() ([]Message, error) {
 			GROUP BY channel_id, thread_ts
 		) r ON r.channel_id = m.channel_id AND r.thread_ts = m.ts
 		WHERE m.reply_count > 0 AND COALESCE(r.cnt, 0) < m.reply_count
-		ORDER BY m.ts_unix DESC`,
+		ORDER BY m.ts_unix DESC
+		LIMIT ?`, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying all thread parents: %w", err)

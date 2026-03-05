@@ -41,7 +41,7 @@ func (db *DB) UpsertChannel(ch Channel) error {
 func (db *DB) GetChannels(filter ChannelFilter) ([]Channel, error) {
 	query := `SELECT id, name, type, topic, purpose, is_archived, is_member, dm_user_id, num_members, updated_at FROM channels`
 	var conditions []string
-	var args []interface{}
+	var args []any
 
 	if filter.Type != "" {
 		conditions = append(conditions, "type = ?")
@@ -94,6 +94,20 @@ func (db *DB) GetChannelByID(id string) (*Channel, error) {
 	return scanChannel(row)
 }
 
+// EnsureChannel inserts a minimal channel record if not already present.
+// Does NOT update existing records (INSERT ON CONFLICT DO NOTHING).
+func (db *DB) EnsureChannel(id, name, chType string) error {
+	_, err := db.Exec(`
+		INSERT INTO channels (id, name, type, is_member) VALUES (?, ?, ?, 1)
+		ON CONFLICT(id) DO NOTHING`,
+		id, name, chType,
+	)
+	if err != nil {
+		return fmt.Errorf("ensuring channel %s: %w", id, err)
+	}
+	return nil
+}
+
 func scanChannel(row *sql.Row) (*Channel, error) {
 	var ch Channel
 	err := row.Scan(
@@ -143,7 +157,7 @@ func (db *DB) GetChannelList(filter ChannelFilter, sort ChannelListSort) ([]Chan
 		LEFT JOIN watch_list w ON w.entity_type = 'channel' AND w.entity_id = c.id`
 
 	var conditions []string
-	var args []interface{}
+	var args []any
 
 	if filter.Type != "" {
 		conditions = append(conditions, "c.type = ?")

@@ -44,7 +44,7 @@ func TestDetermineSinceTimeExplicitDuration(t *testing.T) {
 	defer database.Close()
 
 	before := time.Now().Add(-2 * time.Hour)
-	result, err := database.DetermineSinceTime(2*time.Hour)
+	result, err := database.DetermineSinceTime(2 * time.Hour)
 	require.NoError(t, err)
 
 	// Result should be approximately 2 hours ago
@@ -88,7 +88,7 @@ func TestDetermineSinceTimeExplicitOverridesCheckpoint(t *testing.T) {
 
 	// But request only last 1 hour
 	before := time.Now().Add(-1 * time.Hour)
-	result, err := database.DetermineSinceTime(1*time.Hour)
+	result, err := database.DetermineSinceTime(1 * time.Hour)
 	require.NoError(t, err)
 
 	// Explicit duration should win

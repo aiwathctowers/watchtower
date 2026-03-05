@@ -30,7 +30,7 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 		JOIN messages m ON m.channel_id = fts.channel_id AND m.ts = fts.ts`
 
 	var conditions []string
-	var args []interface{}
+	var args []any
 
 	// Sanitize FTS5 query: strip operators and special characters
 	sanitizedQuery := sanitizeFTS5Query(query)
@@ -75,7 +75,8 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	sqlQuery += fmt.Sprintf(" LIMIT %d", limit)
+	sqlQuery += " LIMIT ?"
+	args = append(args, limit)
 
 	rows, err := db.Query(sqlQuery, args...)
 	if err != nil {
@@ -86,37 +87,34 @@ func (db *DB) SearchMessages(query string, opts SearchOpts) ([]Message, error) {
 	return scanMessages(rows)
 }
 
-// sanitizeFTS5Query escapes user input for safe use in FTS5 MATCH queries.
-// FTS5 operators (AND, OR, NOT, NEAR) and special characters are stripped,
-// while normal words are left unquoted so the porter stemmer can work.
+// sanitizeFTS5Query sanitizes user input for safe use in FTS5 MATCH queries.
+// Each term is individually double-quoted (allowlist approach) to prevent any
+// FTS5 operator injection. Quotes within terms are stripped so they can't
+// break out of the quoting.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
 		return ""
 	}
-	// FTS5 reserved operators (case-insensitive)
+	// FTS5 reserved operators (case-insensitive) — skip entirely
 	operators := map[string]bool{
 		"AND": true, "OR": true, "NOT": true, "NEAR": true,
 	}
 	var safe []string
 	for _, w := range words {
-		// Skip FTS5 operators
 		if operators[strings.ToUpper(w)] {
 			continue
 		}
-		// Strip FTS5 special characters: * ^ : " { } \
+		// Strip all quotes to prevent breaking out of the double-quoting
 		w = strings.Map(func(r rune) rune {
-			switch r {
-			case '*', '^', ':', '"', '(', ')', '+', '{', '}', '\\':
+			if r == '"' {
 				return -1
-			default:
-				return r
 			}
+			return r
 		}, w)
-		// Strip leading hyphens (NOT operator in FTS5)
-		w = strings.TrimLeft(w, "-")
+		w = strings.TrimSpace(w)
 		if w != "" {
-			safe = append(safe, w)
+			safe = append(safe, `"`+w+`"`)
 		}
 	}
 	if len(safe) == 0 {

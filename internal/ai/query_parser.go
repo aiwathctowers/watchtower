@@ -42,26 +42,32 @@ type TimeRange struct {
 
 // ParsedQuery holds the result of parsing a user's natural language question.
 type ParsedQuery struct {
-	RawText   string
-	TimeRange *TimeRange
-	Channels  []string
-	Users     []string
-	Topics    []string
-	Intent    QueryIntent
+	RawText     string
+	TimeRange   *TimeRange
+	Channels    []string
+	Users       []string
+	Topics      []string
+	Intent      QueryIntent
+	WatchedOnly bool // only include watched channels/users in context
 }
 
-// nowFunc can be overridden in tests to control "now".
-var nowFunc = time.Now
-
 // Parse deterministically extracts structured information from a query string.
-// It does not make any AI calls.
+// It does not make any AI calls. Uses the current time for relative time ranges.
+// For testing, use ParseAt to provide a fixed time.
 func Parse(input string) ParsedQuery {
+	return ParseAt(input, time.Now())
+}
+
+// ParseAt is like Parse but uses the provided time for resolving relative time
+// expressions (e.g. "yesterday", "last 2 hours"). This is safe for concurrent
+// use and testing without mutating global state.
+func ParseAt(input string, now time.Time) ParsedQuery {
 	pq := ParsedQuery{
 		RawText: input,
 	}
 	remaining := input
 
-	remaining = extractTimeRange(&pq, remaining)
+	remaining = extractTimeRange(&pq, remaining, now)
 	remaining = extractChannels(&pq, remaining)
 	remaining = extractUsers(&pq, remaining)
 	detectIntent(&pq, input)
@@ -139,7 +145,7 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedNonStopWords(text,userFromRe)
+	text = removeMatchedNonStopWords(text, userFromRe)
 
 	// "alice said"
 	for _, m := range userSaidRe.FindAllStringSubmatch(text, -1) {
@@ -149,7 +155,7 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedNonStopWords(text,userSaidRe)
+	text = removeMatchedNonStopWords(text, userSaidRe)
 
 	// "what did alice"
 	for _, m := range userWhatDidRe.FindAllStringSubmatch(text, -1) {
@@ -159,7 +165,7 @@ func extractUsers(pq *ParsedQuery, text string) string {
 		}
 		pq.Users = append(pq.Users, m[1])
 	}
-	text = removeMatchedNonStopWords(text,userWhatDidRe)
+	text = removeMatchedNonStopWords(text, userWhatDidRe)
 
 	pq.Users = dedup(pq.Users)
 	return text
@@ -168,12 +174,15 @@ func extractUsers(pq *ParsedQuery, text string) string {
 // --- Time range extraction ---
 
 var (
-	relDurationRe = regexp.MustCompile(`(?i)\b(?:last|past)\s+(\d+)\s*(h(?:ours?)?|m(?:in(?:utes?)?)?|d(?:ays?)?|w(?:eeks?)?)\b`)
+	relDurationRe  = regexp.MustCompile(`(?i)\b(?:last|past)\s+(\d+)\s*(h(?:ours?)?|m(?:in(?:utes?)?)?|d(?:ays?)?|w(?:eeks?)?)\b`)
 	sinceWeekdayRe = regexp.MustCompile(`(?i)\bsince\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b`)
+	yesterdayRe    = regexp.MustCompile(`(?i)\byesterday\b`)
+	todayRe        = regexp.MustCompile(`(?i)\btoday\b`)
+	thisMorningRe  = regexp.MustCompile(`(?i)\bthis\s+morning\b`)
+	lastWeekRe     = regexp.MustCompile(`(?i)\blast\s+week\b`)
 )
 
-func extractTimeRange(pq *ParsedQuery, text string) string {
-	now := nowFunc()
+func extractTimeRange(pq *ParsedQuery, text string, now time.Time) string {
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 	lower := strings.ToLower(text)
@@ -183,13 +192,13 @@ func extractTimeRange(pq *ParsedQuery, text string) string {
 		yStart := todayStart.AddDate(0, 0, -1)
 		yEnd := time.Date(yStart.Year(), yStart.Month(), yStart.Day(), 23, 59, 59, 0, now.Location())
 		pq.TimeRange = &TimeRange{From: yStart, To: yEnd}
-		return removeWord(text, `(?i)\byesterday\b`)
+		return removeWord(text, yesterdayRe)
 	}
 
 	// "today"
 	if strings.Contains(lower, "today") {
 		pq.TimeRange = &TimeRange{From: todayStart, To: now}
-		return removeWord(text, `(?i)\btoday\b`)
+		return removeWord(text, todayRe)
 	}
 
 	// "this morning"
@@ -205,7 +214,7 @@ func extractTimeRange(pq *ParsedQuery, text string) string {
 			to = now
 		}
 		pq.TimeRange = &TimeRange{From: from, To: to}
-		return removeWord(text, `(?i)\bthis\s+morning\b`)
+		return removeWord(text, thisMorningRe)
 	}
 
 	// "last week"
@@ -218,7 +227,7 @@ func extractTimeRange(pq *ParsedQuery, text string) string {
 		prevMonday := thisMonday.AddDate(0, 0, -7)
 		prevSunday := time.Date(thisMonday.Year(), thisMonday.Month(), thisMonday.Day()-1, 23, 59, 59, 0, now.Location())
 		pq.TimeRange = &TimeRange{From: prevMonday, To: prevSunday}
-		return removeWord(text, `(?i)\blast\s+week\b`)
+		return removeWord(text, lastWeekRe)
 	}
 
 	// "last N h/m/d/w" or "past N h/m/d/w"
@@ -284,8 +293,7 @@ func mostRecentWeekday(todayStart time.Time, target time.Weekday) time.Time {
 	return todayStart.AddDate(0, 0, -diff)
 }
 
-func removeWord(text, pattern string) string {
-	re := regexp.MustCompile(pattern)
+func removeWord(text string, re *regexp.Regexp) string {
 	return strings.TrimSpace(re.ReplaceAllString(text, ""))
 }
 

@@ -26,8 +26,8 @@ func TestConfigInit(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
-	// Simulate user input
-	input := "test-workspace\nxoxp-test-token\nsk-ant-key\n"
+	// Simulate user input: choose manual auth (2), then workspace name + slack token
+	input := "2\ntest-workspace\nxoxp-test-token\n"
 
 	buf := new(bytes.Buffer)
 	oldFlagConfig := flagConfig
@@ -87,7 +87,6 @@ workspaces:
   demo:
     slack_token: "xoxp-secret-token-here"
 ai:
-  api_key: "sk-ant-secret-key-12345"
   model: "claude-sonnet-4-20250514"
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o644))
@@ -105,7 +104,6 @@ ai:
 	output := buf.String()
 	// Tokens should be masked
 	assert.NotContains(t, output, "xoxp-secret-token-here")
-	assert.NotContains(t, output, "sk-ant-secret-key-12345")
 	assert.Contains(t, output, "****")
 	// Non-sensitive values should appear
 	assert.Contains(t, output, "claude-sonnet-4-20250514")
@@ -130,7 +128,6 @@ func TestConfigShow_NoFile(t *testing.T) {
 
 func TestMaskValue(t *testing.T) {
 	assert.Equal(t, "****", maskValue("short"))
-	assert.Equal(t, "****", maskValue("twelve-char"))
-	assert.Equal(t, "****", maskValue("xoxp-secret-token-here"))
+	assert.Equal(t, "twelv****", maskValue("twelve-char"))
+	assert.Equal(t, "xoxp-****", maskValue("xoxp-secret-token-here"))
 }
-

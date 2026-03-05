@@ -71,13 +71,11 @@ func TestMessageProgress(t *testing.T) {
 	p.AddMessages(200)
 	p.IncMessageChannel()
 	p.IncMessageChannel()
-	p.SetCurrentChannel("general")
 
 	snap := p.Snapshot()
 	assert.Equal(t, 50, snap.MsgChannelsTotal)
 	assert.Equal(t, 2, snap.MsgChannelsDone)
 	assert.Equal(t, 300, snap.MessagesFetched)
-	assert.Equal(t, "general", snap.CurrentChannel)
 }
 
 func TestThreadProgress(t *testing.T) {
@@ -126,10 +124,29 @@ func TestRenderSnapshotMetadataPhase(t *testing.T) {
 	output := RenderSnapshot(snap, "my-company")
 
 	assert.Contains(t, output, "my-company")
-	assert.Contains(t, output, "users 600/1,205")
-	assert.Contains(t, output, "channels 170/342")
-	assert.Contains(t, output, "Messages")
-	assert.Contains(t, output, "waiting...")
+	assert.Contains(t, output, "49%")
+	assert.Contains(t, output, "████")
+	// Lines with no data ("waiting...") are hidden
+	assert.NotContains(t, output, "Messages")
+}
+
+func TestRenderSnapshotMetadataChannelsFetching(t *testing.T) {
+	// Regression: when users are saved but channels still fetching from API,
+	// ChannelsTotal grows while ChannelsDone stays 0, which used to make
+	// the combined progress bar go backwards.
+	snap := Snapshot{
+		Phase:         PhaseMetadata,
+		UsersTotal:    2737,
+		UsersDone:     2737,
+		ChannelsTotal: 400,
+		ChannelsDone:  0,
+	}
+	output := RenderSnapshot(snap, "my-company")
+
+	// Should show "users saved, fetched channels" instead of a decreasing progress bar
+	assert.Contains(t, output, "2,737 users saved")
+	assert.Contains(t, output, "400 channels")
+	assert.NotContains(t, output, "░") // no progress bar during fetch
 }
 
 func TestRenderSnapshotMessagesPhase(t *testing.T) {
@@ -155,8 +172,8 @@ func TestRenderSnapshotMessagesPhase(t *testing.T) {
 	// Progress bar should have filled and empty segments
 	assert.Contains(t, output, "█")
 	assert.Contains(t, output, "░")
-	// Threads should be waiting
-	assert.Contains(t, output, "waiting...")
+	// Threads line hidden (no data yet)
+	assert.NotContains(t, output, "Threads")
 }
 
 func TestRenderSnapshotThreadsPhase(t *testing.T) {
@@ -187,6 +204,7 @@ func TestRenderSnapshotThreadsPhase(t *testing.T) {
 func TestRenderSnapshotDonePhase(t *testing.T) {
 	snap := Snapshot{
 		Phase:            PhaseDone,
+		StartTime:        time.Now().Add(-93 * time.Second),
 		UsersTotal:       100,
 		UsersDone:        100,
 		ChannelsTotal:    50,
@@ -204,6 +222,9 @@ func TestRenderSnapshotDonePhase(t *testing.T) {
 	assert.Contains(t, output, "done")
 	assert.Contains(t, output, "5,000 msgs done")
 	assert.Contains(t, output, "1,600 replies done")
+	// Should show "Synced" with elapsed time
+	assert.Contains(t, output, "Synced test-ws")
+	assert.Contains(t, output, "1m")
 }
 
 func TestProgressBar(t *testing.T) {
@@ -258,6 +279,34 @@ func TestEstimateETA(t *testing.T) {
 	// Longer ETA should include minutes
 	eta = estimateETA(1, 100, time.Now().Add(-10*time.Second))
 	assert.Contains(t, eta, "m")
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "<1s"},
+		{499 * time.Millisecond, "<1s"},
+		{5 * time.Second, "5s"},
+		{59 * time.Second, "59s"},
+		{60 * time.Second, "1m"},
+		{93 * time.Second, "1m33s"},
+		{5*time.Minute + 12*time.Second, "5m12s"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, formatDuration(tt.d), "formatDuration(%v)", tt.d)
+	}
+}
+
+func TestRenderSnapshotShowsElapsedDuringSync(t *testing.T) {
+	snap := Snapshot{
+		Phase:     PhaseMessages,
+		StartTime: time.Now().Add(-45 * time.Second),
+	}
+	output := RenderSnapshot(snap, "test-ws")
+	assert.Contains(t, output, "Syncing test-ws")
+	assert.Contains(t, output, "45s")
 }
 
 func TestSetPhaseResetsTimer(t *testing.T) {

@@ -17,7 +17,11 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 		return nil
 	}
 
-	threadParents, err := o.db.GetAllThreadParents()
+	threadLimit := o.config.Sync.ThreadSyncLimit
+	if threadLimit <= 0 {
+		threadLimit = 1000
+	}
+	threadParents, err := o.db.GetAllThreadParents(threadLimit)
 	if err != nil {
 		return fmt.Errorf("querying thread parents: %w", err)
 	}
@@ -35,16 +39,11 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 		return nil
 	}
 
-	o.logger.Printf("found %d threads to sync", len(threadParents))
+	o.logger.Printf("found %d threads to sync (limit: %d)", len(threadParents), threadLimit)
 	o.progress.SetThreadsTotal(len(threadParents))
 
-	workers := opts.Workers
-	if workers <= 0 {
-		workers = o.config.Sync.Workers
-	}
-	if workers <= 0 {
-		workers = 1
-	}
+	workers := o.resolveWorkerCount(opts.Workers)
+	o.logger.Printf("starting thread sync: %d threads, %d workers", len(threadParents), workers)
 
 	poolCtx, poolCancel := context.WithCancel(ctx)
 	defer poolCancel()
@@ -60,6 +59,7 @@ func (o *Orchestrator) syncThreads(ctx context.Context, opts SyncOptions) error 
 			}
 			return fmt.Errorf("syncing thread %s/%s: %w", task.ChannelID, task.ThreadTS, err)
 		}
+		o.logger.Printf("thread %s in %s: %d replies", task.ThreadTS, o.channelName(task.ChannelID), replyCount)
 		o.progress.IncThread(replyCount)
 		return nil
 	})

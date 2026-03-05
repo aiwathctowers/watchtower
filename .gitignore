@@ -5,5 +5,11 @@ watchtower
 .idea/
 *.iml
 
+# Claude Code local settings
+.claude/
+
+# Task tracking files
+TASK-*.md
+
 # ralphex progress logs
 .ralphex/progress/

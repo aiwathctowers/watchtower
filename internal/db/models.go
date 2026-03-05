@@ -74,14 +74,14 @@ type File struct {
 
 // SyncState tracks the sync progress for a channel.
 type SyncState struct {
-	ChannelID            string
-	LastSyncedTS         string
-	OldestSyncedTS       string
+	ChannelID             string
+	LastSyncedTS          string
+	OldestSyncedTS        string
 	IsInitialSyncComplete bool
-	Cursor               string
-	MessagesSynced       int
-	LastSyncAt           sql.NullString
-	Error                string
+	Cursor                string
+	MessagesSynced        int
+	LastSyncAt            sql.NullString
+	Error                 string
 }
 
 // WatchItem represents an entry in the watch list.
@@ -97,4 +97,23 @@ type WatchItem struct {
 type UserCheckpoint struct {
 	ID            int
 	LastCheckedAt string
+}
+
+// Digest represents an AI-generated summary of channel activity.
+type Digest struct {
+	ID           int
+	ChannelID    string  // "" for cross-channel digests
+	PeriodFrom   float64 // Unix timestamp
+	PeriodTo     float64 // Unix timestamp
+	Type         string  // "channel", "daily", "weekly"
+	Summary      string
+	Topics       string // JSON array
+	Decisions    string // JSON array
+	ActionItems  string // JSON array
+	MessageCount int
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	CostUSD      float64
+	CreatedAt    string
 }

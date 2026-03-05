@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 	"watchtower/internal/ai"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
+	"watchtower/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -47,10 +49,6 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if cfg.AI.ApiKey == "" {
-		return fmt.Errorf("Anthropic API key not configured — set ANTHROPIC_API_KEY or config ai.api_key")
-	}
-
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
@@ -75,8 +73,8 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(out, "Catching up since %s...\n\n", sinceTime.Format("2006-01-02 15:04 MST"))
 
 	now := time.Now()
-	fromUnix := float64(sinceTime.Unix())
-	toUnix := float64(now.Unix())
+	fromUnix := float64(sinceTime.Unix()) + float64(sinceTime.Nanosecond())/1e9
+	toUnix := float64(now.Unix()) + float64(now.Nanosecond())/1e9
 
 	// Quick check: are there any messages in the catchup window?
 	msgCount, err := database.CountMessagesByTimeRange(fromUnix, toUnix)
@@ -91,29 +89,28 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Build a catchup query
+	// Fast path: if digests are available for this period, show them directly
+	if shown := showDigestCatchup(out, database, fromUnix); shown {
+		if err := database.UpdateCheckpoint(now); err != nil {
+			return fmt.Errorf("updating checkpoint: %w", err)
+		}
+		fmt.Fprintln(out)
+		return nil
+	}
+
+	// Slow path: no digests available, use AI query on raw messages
+	// Build time range for hints
 	pq := ai.ParsedQuery{
-		RawText: "What happened since I was last here? Summarize activity by channel, highlight decisions, action items, and anything unusual.",
 		TimeRange: &ai.TimeRange{
 			From: sinceTime,
 			To:   now,
 		},
-		Intent: ai.IntentCatchup,
 	}
 
-	if catchupFlagChannel != "" {
-		pq.Channels = append(pq.Channels, catchupFlagChannel)
-	}
-
-	// Build context from DB
-	ctxBuilder := ai.NewContextBuilder(database, cfg.AI.ContextBudget, ws.Domain)
-	msgContext, err := ctxBuilder.Build(pq)
-	if err != nil {
-		return fmt.Errorf("building context: %w", err)
-	}
-
-	// Assemble prompt
-	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain)
+	// Assemble prompt with DB access
+	dbPath := cfg.DBPath()
+	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, dbPath, db.Schema)
+	timeHints := ai.FormatTimeHints(pq)
 
 	question := "What happened since I was last here? Give me a structured catchup summary."
 	if catchupFlagWatchedOnly {
@@ -123,35 +120,26 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 		question += fmt.Sprintf(" Focus on #%s.", catchupFlagChannel)
 	}
 
-	userMessage := ai.AssembleUserMessage(msgContext, question)
+	userMessage := ai.AssembleUserMessage(question, timeHints)
 
 	// Create AI client and query
-	aiClient := ai.NewClient(cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.MaxTokens)
+	aiClient := ai.NewClient(cfg.AI.Model, dbPath)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	renderer := ai.NewResponseRenderer(database, ws.Domain)
 
-	textCh, errCh := aiClient.Query(ctx, systemPrompt, userMessage)
-
-	var fullResponse strings.Builder
-	for chunk := range textCh {
-		fullResponse.WriteString(chunk)
-		fmt.Fprint(out, chunk)
-	}
-
-	if err := <-errCh; err != nil {
+	resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+	if err != nil {
 		return fmt.Errorf("ai query failed: %w", err)
 	}
 
-	// Render for sources
-	rendered, err := renderer.Render(fullResponse.String())
-	if err == nil {
-		sources := ai.ExtractSourcesSection(rendered)
-		if sources != "" {
-			fmt.Fprintf(out, "\n\n%s", sources)
-		}
+	rendered, err := renderer.Render(resp)
+	if err != nil {
+		fmt.Fprint(out, resp)
+	} else {
+		fmt.Fprint(out, rendered)
 	}
 
 	// Update checkpoint to now
@@ -163,3 +151,76 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// showDigestCatchup displays pre-built digests for the catchup period.
+// Returns true if digests were shown, false if none were available.
+func showDigestCatchup(out interface{ Write([]byte) (int, error) }, database *db.DB, fromUnix float64) bool {
+	// Check for daily digest first
+	dailyDigests, err := database.GetDigests(db.DigestFilter{
+		Type:     "daily",
+		FromUnix: fromUnix,
+		Limit:    1,
+	})
+	if err == nil && len(dailyDigests) > 0 {
+		d := dailyDigests[0]
+		var buf strings.Builder
+		fmt.Fprintln(&buf, d.Summary)
+		printDigestDetails(&buf, d)
+		fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
+		return true
+	}
+
+	// Fall back to channel digests
+	channelDigests, err := database.GetDigests(db.DigestFilter{
+		Type:     "channel",
+		FromUnix: fromUnix,
+	})
+	if err != nil || len(channelDigests) == 0 {
+		return false
+	}
+
+	var buf strings.Builder
+	for _, d := range channelDigests {
+		name := d.ChannelID
+		if ch, err := database.GetChannelByID(d.ChannelID); err == nil && ch != nil {
+			name = "#" + ch.Name
+		}
+		fmt.Fprintf(&buf, "**%s** (%d messages)\n%s\n\n", name, d.MessageCount, d.Summary)
+		printDigestDetails(&buf, d)
+	}
+	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
+	return true
+}
+
+func printDigestDetails(out interface{ Write([]byte) (int, error) }, d db.Digest) {
+	var decisions []struct {
+		Text string `json:"text"`
+		By   string `json:"by"`
+	}
+	if err := json.Unmarshal([]byte(d.Decisions), &decisions); err == nil && len(decisions) > 0 {
+		fmt.Fprintln(out, "\n**Decisions:**")
+		fmt.Fprintln(out)
+		for _, dec := range decisions {
+			if dec.By != "" {
+				fmt.Fprintf(out, "- %s (by %s)\n", dec.Text, dec.By)
+			} else {
+				fmt.Fprintf(out, "- %s\n", dec.Text)
+			}
+		}
+	}
+
+	var actions []struct {
+		Text     string `json:"text"`
+		Assignee string `json:"assignee"`
+	}
+	if err := json.Unmarshal([]byte(d.ActionItems), &actions); err == nil && len(actions) > 0 {
+		fmt.Fprintln(out, "\n**Action Items:**")
+		fmt.Fprintln(out)
+		for _, a := range actions {
+			assignee := ""
+			if a.Assignee != "" {
+				assignee = " -> " + a.Assignee
+			}
+			fmt.Fprintf(out, "- %s%s\n", a.Text, assignee)
+		}
+	}
+}

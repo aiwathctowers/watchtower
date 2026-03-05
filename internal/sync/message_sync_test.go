@@ -67,9 +67,9 @@ func messageMux(channelMessages map[string][]map[string]any) *http.ServeMux {
 	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []any{},
-			"has_more": false,
+			"ok":                true,
+			"messages":          []any{},
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -89,7 +89,7 @@ func TestSyncMessagesBasic(t *testing.T) {
 	ts := newTestSetup(t, messageMux(channelMsgs))
 
 	// Run full sync (metadata + messages)
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// Verify messages were stored
@@ -115,7 +115,7 @@ func TestSyncMessagesPagination(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -134,7 +134,7 @@ func TestSyncMessagesMultipleChannels(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs1, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -158,7 +158,7 @@ func TestSyncMessagesChannelFilter(t *testing.T) {
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
 	// Sync metadata first
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Sync only "general" channel
@@ -191,15 +191,15 @@ func TestSyncMessagesIncrementalSync(t *testing.T) {
 		msgs := channelMsgs[channelID]
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": msgs,
-			"has_more": false,
+			"ok":                true,
+			"messages":          msgs,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// First sync
@@ -229,14 +229,14 @@ func TestSyncMessagesFullMode(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Set up existing sync state
 	err = ts.db.UpdateSyncState("C001", db.SyncState{
-		LastSyncedTS:         "1700000001.000000",
+		LastSyncedTS:          "1700000001.000000",
 		IsInitialSyncComplete: true,
-		MessagesSynced:       1,
+		MessagesSynced:        1,
 	})
 	require.NoError(t, err)
 
@@ -259,7 +259,7 @@ func TestSyncMessagesSyncStateTracking(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	err = ts.orch.syncMessages(context.Background(), SyncOptions{})
@@ -288,7 +288,7 @@ func TestSyncMessagesWithThreadTS(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -334,15 +334,15 @@ func TestSyncMessagesNonFatalErrorSkipsChannel(t *testing.T) {
 		}
 
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []map[string]any{{"ts": "1700000001.000000", "user": "U001", "text": "OK", "type": "message"}},
-			"has_more": false,
+			"ok":                true,
+			"messages":          []map[string]any{{"ts": "1700000001.000000", "user": "U001", "text": "OK", "type": "message"}},
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Should not fail even though C001 returns channel_not_found
@@ -363,7 +363,7 @@ func TestSyncMessagesContextCancellation(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -378,7 +378,7 @@ func TestSyncMessagesContextCancellation(t *testing.T) {
 
 func TestBuildChannelQueuePriority(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Add C001 (general) to watch list with high priority
@@ -404,7 +404,7 @@ func TestBuildChannelQueuePriority(t *testing.T) {
 
 func TestBuildChannelQueueSkipsArchived(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	tasks, err := ts.orch.buildChannelQueue(SyncOptions{})
@@ -418,7 +418,7 @@ func TestBuildChannelQueueSkipsArchived(t *testing.T) {
 
 func TestBuildChannelQueueWithFilter(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	tasks, err := ts.orch.buildChannelQueue(SyncOptions{Channels: []string{"engineering"}})
@@ -430,7 +430,7 @@ func TestBuildChannelQueueWithFilter(t *testing.T) {
 
 func TestBuildChannelQueueFilterByID(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	tasks, err := ts.orch.buildChannelQueue(SyncOptions{Channels: []string{"C001"}})
@@ -442,7 +442,7 @@ func TestBuildChannelQueueFilterByID(t *testing.T) {
 
 func TestBuildChannelQueueFilterIncludesArchived(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// When explicitly filtering by name, archived channels should be included
@@ -502,7 +502,7 @@ func TestComputeOldest(t *testing.T) {
 
 	// With state and initial sync complete = incremental
 	state := &db.SyncState{
-		LastSyncedTS:         "1700000001.000000",
+		LastSyncedTS:          "1700000001.000000",
 		IsInitialSyncComplete: true,
 	}
 	oldest = ts.orch.computeOldest(state, false)
@@ -524,7 +524,7 @@ func TestSyncMessagesErrorSavesState(t *testing.T) {
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// This should fail because all channels return errors
@@ -554,7 +554,7 @@ func TestSyncMessagesWithSubtype(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -571,7 +571,7 @@ func TestSyncMessagesRawJSONStored(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -591,7 +591,7 @@ func TestSyncMessagesEmptyChannel(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -607,7 +607,7 @@ func TestSyncMessagesUpsertDeduplication(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Sync first time
@@ -637,7 +637,7 @@ func TestSyncMessagesEditedFlag(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
@@ -655,7 +655,7 @@ func TestSyncMessagesWorkerCount(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Workers=0 should use config default (2 in test config)
@@ -688,29 +688,29 @@ func TestSyncMessagesCursorResume(t *testing.T) {
 				"messages": []map[string]any{
 					{"ts": "1700000002.000000", "user": "U001", "text": "Resumed msg", "type": "message"},
 				},
-				"has_more": false,
+				"has_more":          false,
 				"response_metadata": map[string]any{"next_cursor": ""},
 			})
 		} else {
 			json.NewEncoder(w).Encode(map[string]any{
-				"ok":       true,
-				"messages": []any{},
-				"has_more": false,
+				"ok":                true,
+				"messages":          []any{},
+				"has_more":          false,
 				"response_metadata": map[string]any{"next_cursor": ""},
 			})
 		}
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	// Set up a sync state with a cursor (simulating interrupted previous sync)
 	err = ts.db.UpdateSyncState("C001", db.SyncState{
-		LastSyncedTS:         "",
+		LastSyncedTS:          "",
 		IsInitialSyncComplete: false,
-		Cursor:               "resume_cursor",
-		MessagesSynced:       5,
+		Cursor:                "resume_cursor",
+		MessagesSynced:        5,
 	})
 	require.NoError(t, err)
 
@@ -747,15 +747,15 @@ func TestSyncMessagesEmptyResponse(t *testing.T) {
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []any{},
-			"has_more": false,
+			"ok":                true,
+			"messages":          []any{},
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 }
 
@@ -776,7 +776,7 @@ func TestSyncMessagesLargeVolume(t *testing.T) {
 	}
 
 	ts := newTestSetup(t, messageMux(channelMsgs))
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	stored, err := ts.db.GetMessagesByChannel("C001", 100)

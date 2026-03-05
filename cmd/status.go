@@ -3,10 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"watchtower/internal/config"
+	"watchtower/internal/daemon"
 	"watchtower/internal/db"
+	"watchtower/internal/sync"
 
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
@@ -71,7 +74,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Last sync line
 	if lastSync != "" {
-		t, err := time.Parse("2006-01-02T15:04:05Z", lastSync)
+		t, err := time.Parse(time.RFC3339, lastSync)
 		if err == nil {
 			fmt.Fprintf(out, "Last sync: %s (%s)\n", lastSync, humanize.Time(t))
 		} else {
@@ -79,6 +82,30 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		fmt.Fprintln(out, "Last sync: never")
+	}
+
+	// Daemon liveness line
+	pidPath := filepath.Join(cfg.WorkspaceDir(), "daemon.pid")
+	if pid, err := daemon.FindProcess(pidPath); err == nil && pid > 0 {
+		fmt.Fprintf(out, "Daemon:    running (PID %d)\n", pid)
+	} else {
+		fmt.Fprintln(out, "Daemon:    not running")
+	}
+
+	// Last sync cycle result
+	resultPath := filepath.Join(cfg.WorkspaceDir(), "last_sync.json")
+	if result, err := sync.ReadSyncResult(resultPath); err == nil {
+		dur := time.Duration(result.DurationSecs * float64(time.Second)).Round(time.Second)
+		status := fmt.Sprintf("%s, took %s — %s messages, %s threads",
+			humanize.Time(result.FinishedAt),
+			dur,
+			humanize.Comma(int64(result.MessagesFetched)),
+			humanize.Comma(int64(result.ThreadsFetched)),
+		)
+		if result.Error != "" {
+			status += fmt.Sprintf(" (error: %s)", result.Error)
+		}
+		fmt.Fprintf(out, "Last run:  %s\n", status)
 	}
 
 	// Summary line

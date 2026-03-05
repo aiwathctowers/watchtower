@@ -10,73 +10,38 @@ import (
 	"time"
 
 	"watchtower/internal/ai"
+	"watchtower/internal/db"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dustin/go-humanize"
 )
 
-// handleSlashCommand dispatches slash commands.
-func (m *Model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
+func (r *REPL) handleSlashCommand(input string) {
 	parts := strings.Fields(input)
 	cmd := strings.ToLower(parts[0])
 
 	switch cmd {
 	case "/quit", "/exit":
-		m.quitting = true
-		return m, tea.Quit
+		fmt.Println()
+		r.cancel() // cancel REPL context for clean shutdown
+		return
 
 	case "/help":
-		m.output.WriteString(helpText())
-		m.lines = splitLines(m.output.String())
-		return m, nil
+		fmt.Print(helpText())
 
 	case "/status":
-		m.streaming = true
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cancel = cancel
-		p := m.program
-		deps := m.deps
-		go func() {
-			output := runStatus(deps)
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			p.Send(commandResultMsg{output: output})
-		}()
-		return m, nil
+		fmt.Println(runStatus(r.deps))
 
 	case "/sync":
-		m.streaming = true
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cancel = cancel
-		p := m.program
-		deps := m.deps
-		go func() {
-			output := runSyncCommand(ctx, deps)
-			p.Send(commandResultMsg{output: output})
-		}()
-		return m, nil
+		fmt.Println(runSyncCommand(r.ctx, r.deps))
 
 	case "/catchup":
-		m.streaming = true
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cancel = cancel
-		p := m.program
-		deps := m.deps
-		go func() {
-			runCatchupStreaming(ctx, p, deps)
-		}()
-		return m, nil
+		r.runCatchup()
 
 	default:
-		m.output.WriteString(errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)) + "\n")
-		m.output.WriteString(dimStyle.Render("Type /help for available commands.") + "\n")
-		m.lines = splitLines(m.output.String())
-		return m, nil
+		fmt.Println(errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)))
+		fmt.Println(dimStyle.Render("Type /help for available commands."))
 	}
 }
 
@@ -129,7 +94,7 @@ func runStatus(deps Deps) string {
 	b.WriteString(fmt.Sprintf("Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize))))
 
 	if lastSync != "" {
-		t, err := time.Parse("2006-01-02T15:04:05Z", lastSync)
+		t, err := time.Parse(time.RFC3339, lastSync)
 		if err == nil {
 			b.WriteString(fmt.Sprintf("Last sync: %s (%s)\n", lastSync, humanize.Time(t)))
 		} else {
@@ -180,22 +145,19 @@ func runSyncCommand(ctx context.Context, deps Deps) string {
 	}
 
 	snap := orch.Progress().Snapshot()
-	return fmt.Sprintf("Sync complete: %d messages, %d threads synced.",
-		snap.MessagesFetched, snap.ThreadsFetched)
+	elapsed := time.Since(snap.StartTime).Round(time.Second)
+	return fmt.Sprintf("Sync complete in %s: %d messages, %d threads synced.",
+		elapsed, snap.MessagesFetched, snap.ThreadsFetched)
 }
 
-func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
-	cfg := deps.Config
-	database := deps.DB
-
-	if cfg.AI.ApiKey == "" {
-		p.Send(commandResultMsg{output: errorStyle.Render("Anthropic API key not configured — set ANTHROPIC_API_KEY or config ai.api_key")})
-		return
-	}
+// runCatchup streams a catchup summary to stdout.
+func (r *REPL) runCatchup() {
+	cfg := r.deps.Config
+	database := r.deps.DB
 
 	sinceTime, err := database.DetermineSinceTime(0)
 	if err != nil {
-		p.Send(streamErrMsg{err: fmt.Errorf("determining catchup window: %w", err)})
+		fmt.Println(errorStyle.Render("Error determining catchup window: " + err.Error()))
 		return
 	}
 
@@ -203,63 +165,70 @@ func runCatchupStreaming(ctx context.Context, p *tea.Program, deps Deps) {
 	fromUnix := float64(sinceTime.Unix())
 	toUnix := float64(now.Unix())
 
-	// Quick check: are there any messages in the catchup window?
 	msgCount, err := database.CountMessagesByTimeRange(fromUnix, toUnix)
 	if err != nil {
-		p.Send(streamErrMsg{err: fmt.Errorf("counting messages: %w", err)})
+		fmt.Println(errorStyle.Render("Error counting messages: " + err.Error()))
 		return
 	}
 	if msgCount == 0 {
-		_ = database.UpdateCheckpoint(now)
-		p.Send(commandResultMsg{output: "No new activity found since your last catchup."})
+		if err := database.UpdateCheckpoint(now); err != nil {
+			fmt.Printf("Warning: failed to update checkpoint: %v\n", err)
+		}
+		fmt.Println("No new activity found since your last catchup.")
 		return
 	}
 
-	p.Send(streamChunkMsg{text: dimStyle.Render(fmt.Sprintf("Catching up since %s...", sinceTime.Format("2006-01-02 15:04 MST"))) + "\n\n"})
+	fmt.Println(dimStyle.Render(fmt.Sprintf("Catching up since %s...", sinceTime.Format("2006-01-02 15:04 MST"))))
+	fmt.Println()
 
 	pq := ai.ParsedQuery{
-		RawText: "What happened since I was last here? Summarize activity by channel, highlight decisions, action items, and anything unusual.",
 		TimeRange: &ai.TimeRange{
 			From: sinceTime,
 			To:   now,
 		},
-		Intent: ai.IntentCatchup,
 	}
 
-	ctxBuilder := ai.NewContextBuilder(database, cfg.AI.ContextBudget, deps.Domain)
-	msgContext, err := ctxBuilder.Build(pq)
-	if err != nil {
-		p.Send(streamErrMsg{err: fmt.Errorf("building context: %w", err)})
-		return
-	}
-
-	systemPrompt := ai.BuildSystemPrompt(deps.Workspace, deps.Domain)
+	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.DBPath, db.Schema)
+	timeHints := ai.FormatTimeHints(pq)
 	question := "What happened since I was last here? Give me a structured catchup summary."
-	userMessage := ai.AssembleUserMessage(msgContext, question)
+	userMessage := ai.AssembleUserMessage(question, timeHints)
 
-	aiClient := ai.NewClient(cfg.AI.ApiKey, cfg.AI.Model, cfg.AI.MaxTokens)
-	textCh, errCh := aiClient.Query(ctx, systemPrompt, userMessage)
+	streamCtx, streamCancel := context.WithCancel(r.ctx)
+	defer streamCancel()
+	r.setStreamCancel(streamCancel)
+	r.streaming.Store(true)
+	defer func() {
+		r.streaming.Store(false)
+		r.setStreamCancel(nil)
+	}()
+
+	fmt.Print(dimStyle.Render("Thinking..."))
+
+	aiClient := ai.NewClient(cfg.AI.Model, r.deps.DBPath)
+	textCh, errCh, _ := aiClient.Query(streamCtx, systemPrompt, userMessage, "")
 
 	var fullResponse strings.Builder
 	for chunk := range textCh {
 		fullResponse.WriteString(chunk)
-		p.Send(streamChunkMsg{text: chunk})
 	}
 
+	// Clear "Thinking..." line.
+	fmt.Print("\r\033[K")
+
 	if err := <-errCh; err != nil {
-		p.Send(streamErrMsg{err: err})
+		fmt.Println(errorStyle.Render("Error: " + err.Error()))
 		return
 	}
 
-	renderer := ai.NewResponseRenderer(database, deps.Domain)
-	rendered, err := renderer.Render(fullResponse.String())
-	sources := ""
-	if err == nil {
-		sources = ai.ExtractSourcesSection(rendered)
+	// Render markdown + resolve sources, print formatted output.
+	renderer := ai.NewResponseRenderer(database, r.deps.Domain)
+	rendered, renderErr := renderer.Render(fullResponse.String())
+	if renderErr != nil {
+		rendered = fullResponse.String()
 	}
+	fmt.Print(rendered)
 
-	_ = database.UpdateCheckpoint(now)
-
-	p.Send(streamDoneMsg{sources: sources})
+	if err := database.UpdateCheckpoint(now); err != nil {
+		fmt.Printf("Warning: failed to update checkpoint: %v\n", err)
+	}
 }
-

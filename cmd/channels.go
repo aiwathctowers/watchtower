@@ -75,8 +75,14 @@ func runChannels(cmd *cobra.Command, args []string) error {
 
 		activity := "no messages"
 		if ch.LastActivity.Valid {
-			t := time.Unix(int64(ch.LastActivity.Float64), 0)
-			activity = humanize.Time(t)
+			ts := ch.LastActivity.Float64
+			// Upper bound: max integer exactly representable in float64
+			if ts >= 0 && ts <= 1e13 {
+				t := time.Unix(int64(ts), 0)
+				activity = humanize.Time(t)
+			} else {
+				activity = "invalid date"
+			}
 		}
 
 		fmt.Fprintf(out, "%-30s  %-10s  %5d members  %6s msgs  %s%s\n",

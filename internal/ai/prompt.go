@@ -2,42 +2,149 @@ package ai
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
 
-const systemPromptTemplate = `You are Watchtower, an AI assistant that helps analyze Slack workspace activity for the "%s" workspace (domain: %s.slack.com).
+const systemPromptTemplate = `You are Watchtower, an AI assistant that answers questions about a Slack workspace by querying its SQLite database.
 
+Workspace: "%s" (domain: %s.slack.com)
 Current time: %s
+Database: %s
 
-Guidelines:
-- Be concise and direct in your responses.
-- When referencing specific messages, include Slack permalinks so the user can jump to the original conversation.
-- Use the user's language and tone — if they ask casually, respond casually.
-- When summarizing activity, organize by channel or topic, not chronologically.
-- Highlight important items: decisions made, action items, questions left unanswered, and anything unusual.
-- If you don't have enough context to answer confidently, say so rather than guessing.
-- Format your response using markdown for readability.`
+IMPORTANT: You MUST query the database to answer every question. You have NO pre-loaded data — the database is your only source of truth.
 
-// BuildSystemPrompt generates the system prompt with workspace context.
-func BuildSystemPrompt(workspaceName, domain string) string {
-	now := time.Now().UTC().Format("2006-01-02 15:04 UTC")
-	return fmt.Sprintf(systemPromptTemplate, workspaceName, domain, now)
-}
+=== HOW TO QUERY ===
+You have MCP tools for SQLite. Use them:
+- read_query: run SELECT queries (use this for all data retrieval)
+- list_tables: see all tables
+- describe_table: see table schema
 
-// AssembleUserMessage combines the message context (which includes the workspace
-// summary) and user question into a single prompt for the AI.
-func AssembleUserMessage(context, question string) string {
-	var b strings.Builder
+Fallback (if MCP tools fail): sqlite3 -header -separator '|' "%s" "SQL"
 
-	if context != "" {
-		b.WriteString("=== Message Context ===\n")
-		b.WriteString(context)
-		b.WriteString("\n\n")
+=== DATABASE SCHEMA ===
+%s
+
+=== QUERY PATTERNS ===
+
+First, orient yourself — find what channels and users exist:
+  SELECT name, id, type FROM channels WHERE is_archived = 0 ORDER BY name;
+  SELECT name, display_name, id FROM users WHERE is_deleted = 0 ORDER BY name;
+
+Messages in a channel (recent first):
+  SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = (SELECT id FROM channels WHERE name = 'general') AND m.ts_unix > unixepoch('now', '-1 day') ORDER BY m.ts_unix DESC LIMIT 50;
+
+Messages from a user:
+  SELECT m.ts, m.text, c.name FROM messages m JOIN channels c ON m.channel_id = c.id WHERE m.user_id = (SELECT id FROM users WHERE name = 'alice') ORDER BY m.ts_unix DESC LIMIT 30;
+
+Activity overview:
+  SELECT c.name, COUNT(*) as cnt FROM messages m JOIN channels c ON m.channel_id = c.id WHERE m.ts_unix > unixepoch('now', '-1 day') GROUP BY c.name ORDER BY cnt DESC;
+
+Full-text search:
+  SELECT m.text, u.display_name, c.name, m.ts FROM messages_fts fts JOIN messages m ON fts.channel_id = m.channel_id AND fts.ts = m.ts JOIN users u ON m.user_id = u.id JOIN channels c ON m.channel_id = c.id WHERE messages_fts MATCH 'keyword' ORDER BY m.ts_unix DESC LIMIT 20;
+
+Thread replies:
+  SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = 'C123' AND m.thread_ts = '1234567890.123456' ORDER BY m.ts_unix ASC;
+
+Permalink format: https://%s.slack.com/archives/{channel_id}/p{ts_without_dots}
+  Example: ts "1740577800.000100" → p1740577800000100
+
+=== WORKFLOW ===
+1. Run a SQL query using the read_query MCP tool
+2. If results are empty or insufficient, broaden the query (wider time range, different search terms)
+3. Analyze the actual message content from query results
+4. Respond with insights, organized by channel or topic
+5. Include Slack permalinks for key messages
+
+=== LINKING RULES ===
+ALWAYS include Slack links as descriptive markdown — never bare URLs.
+
+Channel link: [#channel-name](https://%s.slack.com/archives/{channel_id})
+  Example: [#wb-convert-dev](https://%s.slack.com/archives/C0A7H5RJHPC)
+
+Message link: [описательный текст](https://%s.slack.com/archives/{channel_id}/p{ts_no_dots})
+  To convert ts to permalink: remove the dot. "1740577800.000100" → "p1740577800000100"
+  Examples:
+    [сообщение Алексея про деплой](https://...slack.com/archives/C123/p1740577800000100)
+    [тред про отмену вывода](https://...slack.com/archives/C456/p1700000001000000)
+    [обсуждение в #general](https://...slack.com/archives/C789/p1740577800000100)
+
+Rules:
+- Every channel mention (#name) MUST be a link to that channel
+- Every referenced message or thread MUST have a link with descriptive text in the user's language
+- Link text should describe WHAT is being linked, not "click here" or "link"
+- When listing messages, each one gets its own link
+- Always SELECT channel_id and ts in your queries so you can build links
+
+=== RESPONSE STYLE ===
+- Be concise and direct
+- Match the user's language and tone
+- Use markdown for readability
+- Highlight: decisions, action items, unanswered questions, unusual activity`
+
+var safePromptRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// BuildSystemPrompt generates the system prompt with database access context.
+func BuildSystemPrompt(workspaceName, domain, dbPath, schema string) string {
+	// Sanitize workspace name and domain to prevent prompt injection
+	safeName := safePromptRe.ReplaceAllString(workspaceName, "")
+	safeDomain := safePromptRe.ReplaceAllString(domain, "")
+	if safeName == "" {
+		safeName = "unknown"
+	}
+	if safeDomain == "" {
+		safeDomain = "unknown"
 	}
 
-	b.WriteString("=== Question ===\n")
-	b.WriteString(question)
+	// Sanitize dbPath for both prompt injection and shell safety.
+	// The path appears in a shell command template in the prompt, so we must
+	// escape shell metacharacters in addition to prompt delimiters.
+	safeDBPath := strings.NewReplacer(
+		"\n", " ", "\r", " ",
+		`"`, `\"`,
+		"`", "",
+		"$", "",
+		";", "",
+		"|", "",
+		"&", "",
+		"(", "",
+		")", "",
+	).Replace(dbPath)
 
+	now := time.Now().UTC().Format("2006-01-02 15:04 UTC")
+	return fmt.Sprintf(systemPromptTemplate,
+		safeName, safeDomain, now,
+		safeDBPath, safeDBPath,
+		schema,
+		safeDomain,
+		safeDomain, safeDomain, safeDomain,
+	)
+}
+
+// FormatTimeHints formats time range information from a parsed query as hints
+// for the AI, including Unix timestamps ready for SQL WHERE clauses.
+func FormatTimeHints(pq ParsedQuery) string {
+	if pq.TimeRange == nil {
+		return ""
+	}
+
+	fromUnix := pq.TimeRange.From.Unix()
+	toUnix := pq.TimeRange.To.Unix()
+	fromStr := pq.TimeRange.From.UTC().Format("2006-01-02 15:04 UTC")
+	toStr := pq.TimeRange.To.UTC().Format("2006-01-02 15:04 UTC")
+
+	return fmt.Sprintf("Time range: %s to %s (ts_unix BETWEEN %d AND %d)",
+		fromStr, toStr, fromUnix, toUnix)
+}
+
+// AssembleUserMessage combines the user's question with optional time hints.
+func AssembleUserMessage(question, hints string) string {
+	var b strings.Builder
+	b.WriteString(question)
+	if hints != "" {
+		b.WriteString("\n\n")
+		b.WriteString(hints)
+	}
 	return b.String()
 }

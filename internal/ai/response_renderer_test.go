@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,12 @@ import (
 
 	"watchtower/internal/db"
 )
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
 
 func setupRendererDB(t *testing.T) (*db.DB, time.Time) {
 	t.Helper()
@@ -269,8 +276,9 @@ func TestRenderMarkdown(t *testing.T) {
 	assert.NotEmpty(t, out)
 	// Glamour renders bold/italic with ANSI codes; just verify it doesn't error
 	// and the text content is preserved
-	assert.Contains(t, out, "bold text")
-	assert.Contains(t, out, "italic")
+	plain := stripANSI(out)
+	assert.Contains(t, plain, "bold text")
+	assert.Contains(t, plain, "italic")
 }
 
 func TestRender_FullPipeline(t *testing.T) {
@@ -281,14 +289,15 @@ func TestRender_FullPipeline(t *testing.T) {
 	out, err := rr.Render(response)
 	require.NoError(t, err)
 
+	plain := stripANSI(out)
 	// Should contain the text
-	assert.Contains(t, out, "Alice deployed")
-	assert.Contains(t, out, "new version is live")
+	assert.Contains(t, plain, "Alice deployed")
+	assert.Contains(t, plain, "new version is live")
 
 	// Should have a Sources section with the resolved reference
-	assert.Contains(t, out, "Sources:")
-	assert.Contains(t, out, "#engineering 2025-02-26 14:30")
-	assert.Contains(t, out, "test-corp.slack.com")
+	assert.Contains(t, plain, "Sources:")
+	assert.Contains(t, plain, "#engineering 2025-02-26 14:30")
+	assert.Contains(t, plain, "test-corp.slack.com")
 }
 
 func TestRender_NoRefs(t *testing.T) {
@@ -299,8 +308,9 @@ func TestRender_NoRefs(t *testing.T) {
 	out, err := rr.Render(response)
 	require.NoError(t, err)
 
-	assert.Contains(t, out, "Everything looks good")
-	assert.NotContains(t, out, "Sources:")
+	plain := stripANSI(out)
+	assert.Contains(t, plain, "Everything looks good")
+	assert.NotContains(t, plain, "Sources:")
 }
 
 func TestRender_UnresolvableRef(t *testing.T) {
@@ -311,9 +321,10 @@ func TestRender_UnresolvableRef(t *testing.T) {
 	out, err := rr.Render(response)
 	require.NoError(t, err)
 
+	plain := stripANSI(out)
 	// Should still render without error; just no sources
-	assert.Contains(t, out, "Check")
-	assert.NotContains(t, out, "Sources:")
+	assert.Contains(t, plain, "Check")
+	assert.NotContains(t, plain, "Sources:")
 }
 
 func TestRender_MultipleRefsPartialResolve(t *testing.T) {
@@ -324,9 +335,10 @@ func TestRender_MultipleRefsPartialResolve(t *testing.T) {
 	out, err := rr.Render(response)
 	require.NoError(t, err)
 
+	plain := stripANSI(out)
 	// Should have sources for the resolvable reference only
-	assert.Contains(t, out, "Sources:")
-	assert.Contains(t, out, "#engineering")
+	assert.Contains(t, plain, "Sources:")
+	assert.Contains(t, plain, "#engineering")
 }
 
 func TestGetMessageNear(t *testing.T) {
@@ -365,12 +377,12 @@ func TestRefPattern(t *testing.T) {
 		{"#my_channel 2025-06-15 23:59", 1},
 		{"#a1 2025-02-26 14:30", 1},
 		{"no ref here", 0},
-		{"# 2025-02-26 14:30", 0},                   // no channel name
-		{"#general 2025-02-26", 0},                    // no time
-		{"#general 14:30", 0},                         // no date
-		{"#general2025-02-26 14:30", 0},               // no space between channel and date
-		{"#a 2025-02-26 14:30", 1},                    // single char channel name is valid
-		{"text #chan 2025-02-26 14:30 more text", 1},  // embedded in text
+		{"# 2025-02-26 14:30", 0},                    // no channel name
+		{"#general 2025-02-26", 0},                   // no time
+		{"#general 14:30", 0},                        // no date
+		{"#general2025-02-26 14:30", 0},              // no space between channel and date
+		{"#a 2025-02-26 14:30", 1},                   // single char channel name is valid
+		{"text #chan 2025-02-26 14:30 more text", 1}, // embedded in text
 	}
 
 	for _, tt := range tests {
@@ -385,7 +397,7 @@ func TestRender_EmptyResponse(t *testing.T) {
 
 	out, err := rr.Render("")
 	require.NoError(t, err)
-	assert.NotContains(t, out, "Sources:")
+	assert.NotContains(t, stripANSI(out), "Sources:")
 }
 
 func TestRender_MarkdownPreserved(t *testing.T) {
@@ -396,12 +408,13 @@ func TestRender_MarkdownPreserved(t *testing.T) {
 	out, err := rr.Render(response)
 	require.NoError(t, err)
 
+	plain := stripANSI(out)
 	// Glamour renders headings, lists; content should be present
-	assert.Contains(t, out, "Summary")
-	assert.Contains(t, out, "Item 1")
-	assert.Contains(t, out, "Item 2")
-	assert.Contains(t, out, "Important")
-	assert.Contains(t, out, "Sources:")
+	assert.Contains(t, plain, "Summary")
+	assert.Contains(t, plain, "Item 1")
+	assert.Contains(t, plain, "Item 2")
+	assert.Contains(t, plain, "Important")
+	assert.Contains(t, plain, "Sources:")
 }
 
 func TestExtractRefs_MultilineText(t *testing.T) {
