@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
@@ -32,9 +33,11 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 	rootCmd.PersistentFlags().StringVar(&flagWorkspace, "workspace", "", "workspace name to use")
 	rootCmd.PersistentFlags().StringVar(&flagConfig, "config", defaultConfigPath(), "path to config file")
-	rootCmd.PersistentFlags().BoolVar(&flagVerbose, "verbose", false, "enable verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable verbose output")
 }
 
 func defaultConfigPath() string {
@@ -42,7 +45,7 @@ func defaultConfigPath() string {
 	if err != nil {
 		return ""
 	}
-	return home + "/.config/watchtower/config.yaml"
+	return filepath.Join(home, ".config", "watchtower", "config.yaml")
 }
 
 func runREPL(cmd *cobra.Command, args []string) error {
@@ -78,6 +81,7 @@ func runREPL(cmd *cobra.Command, args []string) error {
 	deps := repl.Deps{
 		Config:    cfg,
 		DB:        database,
+		DBPath:    cfg.DBPath(),
 		Domain:    domain,
 		Workspace: workspace,
 	}

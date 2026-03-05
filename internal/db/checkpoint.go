@@ -49,15 +49,14 @@ func (db *DB) DetermineSinceTime(sinceDuration time.Duration) (time.Time, error)
 }
 
 // UpdateCheckpoint sets the user's catchup checkpoint to the given time.
-// Uses INSERT OR REPLACE to handle both initial set and updates.
+// Uses INSERT ON CONFLICT to atomically insert-or-update in a single statement.
 func (db *DB) UpdateCheckpoint(t time.Time) error {
-	_, err := db.Exec(`
-		INSERT INTO user_checkpoints (id, last_checked_at) VALUES (1, ?)
-		ON CONFLICT(id) DO UPDATE SET last_checked_at = excluded.last_checked_at`,
-		t.UTC().Format("2006-01-02T15:04:05Z"),
-	)
+	ts := t.UTC().Format("2006-01-02T15:04:05Z")
+	_, err := db.Exec(
+		`INSERT INTO user_checkpoints(id, last_checked_at) VALUES(1, ?)
+		 ON CONFLICT(id) DO UPDATE SET last_checked_at = excluded.last_checked_at`, ts)
 	if err != nil {
-		return fmt.Errorf("updating checkpoint: %w", err)
+		return fmt.Errorf("upserting checkpoint: %w", err)
 	}
 	return nil
 }

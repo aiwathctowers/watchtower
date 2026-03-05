@@ -7,6 +7,16 @@ import (
 // AddWatch adds an entity to the watch list. If the entity already exists,
 // it updates the name and priority.
 func (db *DB) AddWatch(entityType, entityID, entityName, priority string) error {
+	switch entityType {
+	case "channel", "user":
+	default:
+		return fmt.Errorf("invalid entity type: %q (must be \"channel\" or \"user\")", entityType)
+	}
+	switch priority {
+	case "high", "normal", "low":
+	default:
+		return fmt.Errorf("invalid priority: %q (must be \"high\", \"normal\", or \"low\")", priority)
+	}
 	_, err := db.Exec(`
 		INSERT INTO watch_list (entity_type, entity_id, entity_name, priority)
 		VALUES (?, ?, ?, ?)
@@ -23,6 +33,11 @@ func (db *DB) AddWatch(entityType, entityID, entityName, priority string) error 
 
 // RemoveWatch removes an entity from the watch list.
 func (db *DB) RemoveWatch(entityType, entityID string) error {
+	switch entityType {
+	case "channel", "user":
+	default:
+		return fmt.Errorf("invalid entity type: %q (must be \"channel\" or \"user\")", entityType)
+	}
 	result, err := db.Exec(
 		`DELETE FROM watch_list WHERE entity_type = ? AND entity_id = ?`,
 		entityType, entityID,
@@ -64,4 +79,3 @@ func (db *DB) GetWatchList() ([]WatchItem, error) {
 	}
 	return items, rows.Err()
 }
-

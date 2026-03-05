@@ -133,7 +133,7 @@ func TestGetChannels(t *testing.T) {
 	})
 
 	c := newTestClient(t, mux)
-	channels, err := c.GetChannels(context.Background())
+	channels, err := c.GetChannels(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Len(t, channels, 3)
 	assert.Equal(t, "C001", channels[0].ID)

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +13,9 @@ import (
 	"watchtower/internal/db"
 	watchtowerslack "watchtower/internal/slack"
 )
+
+// slackPageSize is the number of messages to request per Slack API call.
+const slackPageSize = 200
 
 // syncMessages builds a priority-ordered channel queue and uses the worker pool
 // to sync message history for each channel in parallel.
@@ -28,13 +30,8 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 		return nil
 	}
 
-	workers := opts.Workers
-	if workers <= 0 {
-		workers = o.config.Sync.Workers
-	}
-	if workers <= 0 {
-		workers = 1
-	}
+	workers := o.resolveWorkerCount(opts.Workers)
+	o.logger.Printf("starting message sync: %d channels, %d workers", len(channels), workers)
 
 	o.progress.SetMessageChannels(len(channels))
 
@@ -43,7 +40,6 @@ func (o *Orchestrator) syncMessages(ctx context.Context, opts SyncOptions) error
 
 	pool := NewWorkerPool(workers, poolCancel)
 	pool.Start(poolCtx, func(ctx context.Context, task SyncTask) error {
-		o.progress.SetCurrentChannel(task.ChannelID)
 		if err := o.syncChannel(ctx, task.ChannelID, opts.Full); err != nil {
 			if isNonFatalError(err) {
 				o.logger.Printf("skipping channel %s: %v", task.ChannelID, err)
@@ -100,6 +96,36 @@ func (o *Orchestrator) buildChannelQueue(opts SyncOptions) ([]SyncTask, error) {
 		}
 	}
 
+	// Get sync states to skip channels with no messages in the history window
+	syncStates, err := o.db.GetAllSyncStates()
+	if err != nil {
+		return nil, fmt.Errorf("fetching sync states: %w", err)
+	}
+
+	// Log channel breakdown for debugging
+	var cntTotal, cntArchived, cntNonMember, cntDM, cntGroupDM, cntPublic, cntPrivate int
+	for _, ch := range allChannels {
+		cntTotal++
+		if ch.IsArchived {
+			cntArchived++
+		}
+		if !ch.IsMember {
+			cntNonMember++
+		}
+		switch ch.Type {
+		case "dm":
+			cntDM++
+		case "group_dm":
+			cntGroupDM++
+		case "public":
+			cntPublic++
+		case "private":
+			cntPrivate++
+		}
+	}
+	o.logger.Printf("channels in workspace: %d total (%d public, %d private, %d dm, %d group_dm, %d archived, %d non-member)",
+		cntTotal, cntPublic, cntPrivate, cntDM, cntGroupDM, cntArchived, cntNonMember)
+
 	var tasks []SyncTask
 	for _, ch := range allChannels {
 		// Apply --channels filter (match by name or ID, case-insensitive)
@@ -114,6 +140,37 @@ func (o *Orchestrator) buildChannelQueue(opts SyncOptions) ([]SyncTask, error) {
 			continue
 		}
 
+		// Skip channels where we're not a member (can't read history)
+		// unless explicitly requested via --channels
+		if !ch.IsMember && filterSet == nil {
+			continue
+		}
+
+		// Skip DMs and group DMs if --skip-dms is set
+		if (ch.Type == "dm" || ch.Type == "group_dm") && opts.SkipDMs && filterSet == nil {
+			continue
+		}
+
+		// Skip channels that already completed initial sync with 0 messages
+		// (no activity in the history window, no point re-checking unless --full)
+		if !opts.Full && filterSet == nil {
+			if st := syncStates[ch.ID]; st != nil && st.IsInitialSyncComplete && st.MessagesSynced == 0 {
+				continue
+			}
+		}
+
+		// For incremental sync: only sync channels found active by discovery
+		// or on the watch list. Skips ~80% of API calls for inactive channels.
+		if !opts.Full && filterSet == nil && len(o.discoveredChannelIDs) > 0 {
+			if st := syncStates[ch.ID]; st != nil && st.IsInitialSyncComplete {
+				_, isDiscovered := o.discoveredChannelIDs[ch.ID]
+				_, isWatched := watchMap[ch.ID]
+				if !isDiscovered && !isWatched {
+					continue
+				}
+			}
+		}
+
 		priority := assignChannelPriority(ch, watchMap)
 		tasks = append(tasks, SyncTask{
 			ChannelID: ch.ID,
@@ -121,7 +178,33 @@ func (o *Orchestrator) buildChannelQueue(opts SyncOptions) ([]SyncTask, error) {
 		})
 	}
 
+	// Build channel name map for logging
+	o.channelNames = make(map[string]string, len(allChannels))
+	for _, ch := range allChannels {
+		o.channelNames[ch.ID] = ch.Name
+	}
+
 	SortTasksByPriority(tasks)
+	o.logger.Printf("channels to sync: %d (after filters)", len(tasks))
+
+	// Show skipped channel breakdown in progress display
+	skipped := cntTotal - len(tasks)
+	if skipped > 0 {
+		parts := []string{}
+		if cntDM+cntGroupDM > 0 && opts.SkipDMs {
+			parts = append(parts, fmt.Sprintf("%d DMs", cntDM+cntGroupDM))
+		}
+		if cntArchived > 0 {
+			parts = append(parts, fmt.Sprintf("%d archived", cntArchived))
+		}
+		if cntNonMember > 0 {
+			parts = append(parts, fmt.Sprintf("%d non-member", cntNonMember))
+		}
+		if len(parts) > 0 {
+			o.progress.SetChannelsSkippedInfo(fmt.Sprintf("skipped: %s", strings.Join(parts, ", ")))
+		}
+	}
+
 	return tasks, nil
 }
 
@@ -161,9 +244,15 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 	cursor := ""
 	if !full && state != nil && state.Cursor != "" {
 		cursor = state.Cursor
+		o.logger.Printf("channel %s: resuming from cursor", o.channelName(channelID))
 	}
 
 	isInitial := state == nil || !state.IsInitialSyncComplete || full
+	if isInitial {
+		o.logger.Printf("channel %s: initial sync (oldest=%s)", o.channelName(channelID), oldest)
+	} else {
+		o.logger.Printf("channel %s: incremental sync (since=%s)", o.channelName(channelID), oldest)
+	}
 	messagesSynced := 0
 	if state != nil {
 		messagesSynced = state.MessagesSynced
@@ -187,15 +276,17 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 			ChannelID: channelID,
 			Cursor:    cursor,
 			Oldest:    oldest,
-			Limit:     200,
+			Limit:     slackPageSize,
 		})
 		if err != nil {
-			// Save error in sync state so we can report it
-			o.saveSyncError(channelID, state, err)
+			// Save error in sync state so we can report it.
+			// Pass oldest so interrupted initial syncs can resume with the same window.
+			o.saveSyncError(channelID, state, oldest, err)
 			return err
 		}
 
 		if len(resp.Messages) == 0 {
+			o.logger.Printf("channel %s: no messages in window", o.channelName(channelID))
 			break
 		}
 
@@ -211,6 +302,29 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		}
 		messagesSynced += count
 		o.progress.AddMessages(count)
+		o.logger.Printf("channel %s: fetched %d messages (total: %d)", o.channelName(channelID), count, messagesSynced)
+
+		// Inline thread sync: immediately fetch replies for any thread parents
+		// in this page so threads are available right after message sync.
+		if o.config.Sync.SyncThreads {
+			for _, msg := range resp.Messages {
+				if msg.ReplyCount > 0 {
+					replyCount, err := o.syncThread(ctx, channelID, msg.Timestamp)
+					if err != nil {
+						if isNonFatalError(err) {
+							o.logger.Printf("skipping thread %s/%s: %v", channelID, msg.Timestamp, err)
+							continue
+						}
+						return fmt.Errorf("syncing inline thread %s/%s: %w", channelID, msg.Timestamp, err)
+					}
+					if replyCount > 0 {
+						messagesSynced += replyCount
+						o.progress.AddMessages(replyCount)
+						o.logger.Printf("channel %s: thread %s: %d replies", o.channelName(channelID), msg.Timestamp, replyCount)
+					}
+				}
+			}
+		}
 
 		done := !resp.HasMore
 
@@ -233,6 +347,7 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 		}
 
 		if done {
+			o.logger.Printf("channel %s: done (%d messages)", o.channelName(channelID), messagesSynced)
 			break
 		}
 		cursor = resp.NextCursor
@@ -243,10 +358,19 @@ func (o *Orchestrator) syncChannel(ctx context.Context, channelID string, full b
 
 // computeOldest determines the oldest timestamp to fetch from.
 // For incremental sync: use last_synced_ts from sync_state.
-// For initial sync or --full: compute cutoff from initial_history_days.
+// For resumed initial sync (interrupted by rate limit/error): use the original
+// oldest_synced_ts so the cursor remains valid.
+// For fresh initial sync or --full: compute cutoff from initial_history_days.
 func (o *Orchestrator) computeOldest(state *db.SyncState, full bool) string {
-	if !full && state != nil && state.IsInitialSyncComplete && state.LastSyncedTS != "" {
-		return state.LastSyncedTS
+	if !full && state != nil {
+		// Completed initial sync → incremental from last_synced_ts
+		if state.IsInitialSyncComplete && state.LastSyncedTS != "" {
+			return state.LastSyncedTS
+		}
+		// Interrupted initial sync → resume with original oldest to keep cursor valid
+		if !state.IsInitialSyncComplete && state.OldestSyncedTS != "" {
+			return state.OldestSyncedTS
+		}
 	}
 
 	days := o.config.Sync.InitialHistoryDays
@@ -254,7 +378,7 @@ func (o *Orchestrator) computeOldest(state *db.SyncState, full bool) string {
 		days = 30
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
-	return strconv.FormatFloat(float64(cutoff.Unix()), 'f', 6, 64)
+	return fmt.Sprintf("%d.000000", cutoff.Unix())
 }
 
 // upsertMessagePage inserts/updates a page of messages in a single transaction.
@@ -265,50 +389,35 @@ func (o *Orchestrator) upsertMessagePage(channelID string, messages []goslack.Me
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO messages (channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(channel_id, ts) DO UPDATE SET
-			user_id = excluded.user_id,
-			text = excluded.text,
-			thread_ts = excluded.thread_ts,
-			reply_count = excluded.reply_count,
-			is_edited = excluded.is_edited,
-			is_deleted = excluded.is_deleted,
-			subtype = excluded.subtype,
-			permalink = excluded.permalink,
-			raw_json = excluded.raw_json`)
-	if err != nil {
-		return 0, fmt.Errorf("preparing statement: %w", err)
-	}
-	defer stmt.Close()
-
-	count := 0
+	dbMsgs := make([]db.Message, 0, len(messages))
 	for _, msg := range messages {
-		rawJSON, _ := json.Marshal(msg)
+		rawJSON, err := json.Marshal(msg)
+		if err != nil {
+			o.logger.Printf("warning: failed to marshal message %s: %v", msg.Timestamp, err)
+			rawJSON = []byte("{}")
+		}
 		threadTS := sql.NullString{}
 		if msg.ThreadTimestamp != "" && msg.ThreadTimestamp != msg.Timestamp {
 			threadTS = sql.NullString{String: msg.ThreadTimestamp, Valid: true}
 		}
-		isEdited := msg.Edited != nil
+		dbMsgs = append(dbMsgs, db.Message{
+			ChannelID:  channelID,
+			TS:         msg.Timestamp,
+			UserID:     msg.User,
+			Text:       msg.Text,
+			ThreadTS:   threadTS,
+			ReplyCount: msg.ReplyCount,
+			IsEdited:   msg.Edited != nil,
+			IsDeleted:  false,
+			Subtype:    msg.SubType,
+			Permalink:  "", // permalink generated at query time by context builder
+			RawJSON:    string(rawJSON),
+		})
+	}
 
-		_, err := stmt.Exec(
-			channelID,
-			msg.Timestamp,
-			msg.User,
-			msg.Text,
-			threadTS,
-			msg.ReplyCount,
-			isEdited,
-			false, // is_deleted
-			msg.SubType,
-			"", // permalink generated at query time by context builder
-			string(rawJSON),
-		)
-		if err != nil {
-			return count, fmt.Errorf("upserting message %s: %w", msg.Timestamp, err)
-		}
-		count++
+	count, err := o.db.UpsertMessageBatch(tx, dbMsgs)
+	if err != nil {
+		return 0, fmt.Errorf("upserting messages: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -318,13 +427,29 @@ func (o *Orchestrator) upsertMessagePage(channelID string, messages []goslack.Me
 }
 
 // saveSyncError persists a sync error in the sync_state table.
-func (o *Orchestrator) saveSyncError(channelID string, state *db.SyncState, syncErr error) {
+// oldest is the timestamp window used by this sync attempt, preserved so
+// a resumed sync uses the same window and keeps pagination cursors valid.
+func (o *Orchestrator) saveSyncError(channelID string, state *db.SyncState, oldest string, syncErr error) {
+	// Re-read current state to get the latest cursor (may have been updated during pagination).
+	// If the re-read fails, skip the update to avoid overwriting newer state with stale data.
+	current, err := o.db.GetSyncState(channelID)
+	if err != nil {
+		o.logger.Printf("failed to re-read sync state for %s, skipping error save: %v", channelID, err)
+		return
+	}
+	if current != nil {
+		state = current
+	}
+
 	s := db.SyncState{
-		Error: syncErr.Error(),
+		OldestSyncedTS: oldest,
+		Error:          syncErr.Error(),
 	}
 	if state != nil {
 		s.LastSyncedTS = state.LastSyncedTS
-		s.OldestSyncedTS = state.OldestSyncedTS
+		if state.OldestSyncedTS != "" {
+			s.OldestSyncedTS = state.OldestSyncedTS
+		}
 		s.IsInitialSyncComplete = state.IsInitialSyncComplete
 		s.Cursor = state.Cursor
 		s.MessagesSynced = state.MessagesSynced

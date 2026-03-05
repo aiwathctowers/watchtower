@@ -16,10 +16,9 @@ import (
 )
 
 var (
-	askFlagModel    string
-	askFlagNoStream bool
-	askFlagChannel  string
-	askFlagSince    time.Duration
+	askFlagModel   string
+	askFlagChannel string
+	askFlagSince   time.Duration
 )
 
 var askCmd = &cobra.Command{
@@ -33,7 +32,6 @@ var askCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(askCmd)
 	askCmd.Flags().StringVar(&askFlagModel, "model", "", "override AI model (e.g., claude-sonnet-4-20250514)")
-	askCmd.Flags().BoolVar(&askFlagNoStream, "no-stream", false, "wait for full response instead of streaming")
 	askCmd.Flags().StringVar(&askFlagChannel, "channel", "", "limit context to a specific channel")
 	askCmd.Flags().DurationVar(&askFlagSince, "since", 0, "limit context to messages since this duration ago (e.g., 2h, 24h)")
 }
@@ -52,10 +50,6 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if cfg.AI.ApiKey == "" {
-		return fmt.Errorf("Anthropic API key not configured — set ANTHROPIC_API_KEY or config ai.api_key")
-	}
-
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
@@ -70,7 +64,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no workspace data found — run 'watchtower sync' first")
 	}
 
-	// Parse the query
+	// Parse the query for time hints
 	pq := ai.Parse(question)
 
 	// Apply CLI flag overrides
@@ -85,16 +79,19 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build context from DB
-	ctxBuilder := ai.NewContextBuilder(database, cfg.AI.ContextBudget, ws.Domain)
-	msgContext, err := ctxBuilder.Build(pq)
-	if err != nil {
-		return fmt.Errorf("building context: %w", err)
+	// Assemble prompt with DB access
+	dbPath := cfg.DBPath()
+	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, dbPath, db.Schema)
+
+	// Inject digest context if available
+	if digestCtx := buildDigestContext(database); digestCtx != "" {
+		systemPrompt += "\n\n=== RECENT DIGEST SUMMARIES ===\n" +
+			"Below are pre-analyzed summaries of recent activity. Use these as background knowledge. " +
+			"For detailed questions, query the database for raw messages.\n\n" + digestCtx
 	}
 
-	// Assemble prompt
-	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain)
-	userMessage := ai.AssembleUserMessage(msgContext, question)
+	timeHints := ai.FormatTimeHints(pq)
+	userMessage := ai.AssembleUserMessage(question, timeHints)
 
 	// Determine model
 	model := cfg.AI.Model
@@ -103,7 +100,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create AI client
-	aiClient := ai.NewClient(cfg.AI.ApiKey, model, cfg.AI.MaxTokens)
+	aiClient := ai.NewClient(model, dbPath)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -111,42 +108,16 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	renderer := ai.NewResponseRenderer(database, ws.Domain)
 
-	if askFlagNoStream {
-		resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage)
-		if err != nil {
-			return fmt.Errorf("ai query failed: %w", err)
-		}
-		rendered, err := renderer.Render(resp)
-		if err != nil {
-			return fmt.Errorf("rendering response: %w", err)
-		}
-		fmt.Fprint(out, rendered)
-		return nil
-	}
-
-	// Streaming mode
-	textCh, errCh := aiClient.Query(ctx, systemPrompt, userMessage)
-
-	var fullResponse strings.Builder
-	for chunk := range textCh {
-		fullResponse.WriteString(chunk)
-		fmt.Fprint(out, chunk)
-	}
-
-	if err := <-errCh; err != nil {
+	resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+	if err != nil {
 		return fmt.Errorf("ai query failed: %w", err)
 	}
-
-	// Render final response for sources section
-	rendered, err := renderer.Render(fullResponse.String())
-	if err == nil {
-		// Extract just the sources section (after the main content)
-		sources := ai.ExtractSourcesSection(rendered)
-		if sources != "" {
-			fmt.Fprintf(out, "\n\n%s", sources)
-		}
+	rendered, err := renderer.Render(resp)
+	if err != nil {
+		fmt.Fprint(out, resp)
+	} else {
+		fmt.Fprint(out, rendered)
 	}
 
 	return nil
 }
-

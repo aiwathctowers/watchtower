@@ -3,10 +3,11 @@
 
 -- Workspace metadata
 CREATE TABLE IF NOT EXISTS workspace (
-    id          TEXT PRIMARY KEY,  -- Slack team_id
-    name        TEXT NOT NULL,
-    domain      TEXT NOT NULL DEFAULT '',
-    synced_at   TEXT              -- ISO8601 timestamp of last sync
+    id                TEXT PRIMARY KEY,  -- Slack team_id
+    name              TEXT NOT NULL,
+    domain            TEXT NOT NULL DEFAULT '',
+    synced_at         TEXT,              -- ISO8601 timestamp of last sync
+    search_last_date  TEXT NOT NULL DEFAULT ''  -- YYYY-MM-DD of last search sync
 );
 
 -- Users
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS channels (
 CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name);
 CREATE INDEX IF NOT EXISTS idx_channels_type ON channels(type);
 CREATE INDEX IF NOT EXISTS idx_channels_is_archived ON channels(is_archived);
+CREATE INDEX IF NOT EXISTS idx_channels_is_member ON channels(is_member);
 
 -- Messages
 CREATE TABLE IF NOT EXISTS messages (
@@ -75,6 +77,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages
 WHEN NEW.text != '' AND NEW.is_deleted = 0
 BEGIN
+    DELETE FROM messages_fts WHERE channel_id = NEW.channel_id AND ts = NEW.ts;
     INSERT INTO messages_fts(text, channel_id, ts, user_id)
     VALUES (NEW.text, NEW.channel_id, NEW.ts, NEW.user_id);
 END;
@@ -85,6 +88,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF text, is_deleted ON messages
+WHEN OLD.text != NEW.text OR OLD.is_deleted != NEW.is_deleted
 BEGIN
     DELETE FROM messages_fts WHERE channel_id = OLD.channel_id AND ts = OLD.ts;
     INSERT INTO messages_fts(text, channel_id, ts, user_id)
@@ -141,3 +145,26 @@ CREATE TABLE IF NOT EXISTS user_checkpoints (
     id              INTEGER PRIMARY KEY CHECK(id = 1),
     last_checked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+-- AI-generated digests (summaries of channel activity)
+CREATE TABLE IF NOT EXISTS digests (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id    TEXT NOT NULL DEFAULT '',  -- '' for cross-channel digests
+    period_from   REAL NOT NULL,             -- Unix timestamp
+    period_to     REAL NOT NULL,             -- Unix timestamp
+    type          TEXT NOT NULL CHECK(type IN ('channel', 'daily', 'weekly')),
+    summary       TEXT NOT NULL,
+    topics        TEXT NOT NULL DEFAULT '[]',
+    decisions     TEXT NOT NULL DEFAULT '[]',
+    action_items  TEXT NOT NULL DEFAULT '[]',
+    message_count INTEGER NOT NULL DEFAULT 0,
+    model         TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(channel_id, type, period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_digests_channel ON digests(channel_id);
+CREATE INDEX IF NOT EXISTS idx_digests_type ON digests(type);
+CREATE INDEX IF NOT EXISTS idx_digests_period ON digests(period_from, period_to);

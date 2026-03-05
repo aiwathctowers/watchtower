@@ -11,9 +11,9 @@ import (
 
 func TestNewRateLimiter(t *testing.T) {
 	rl := NewRateLimiter()
-	assert.NotNil(t, rl.limiters[Tier2])
-	assert.NotNil(t, rl.limiters[Tier3])
-	assert.Len(t, rl.backoffs, 0)
+	assert.NotNil(t, rl.limiter)
+	assert.NotNil(t, rl.gate)
+	assert.True(t, rl.backoff.IsZero())
 }
 
 func TestWaitRespectsContext(t *testing.T) {
@@ -29,6 +29,7 @@ func TestWaitUnknownTierPassesThrough(t *testing.T) {
 	rl := NewRateLimiter()
 	err := rl.Wait(context.Background(), 99)
 	assert.NoError(t, err)
+	rl.Done(99)
 }
 
 func TestWaitRespectsBackoff(t *testing.T) {
@@ -43,6 +44,7 @@ func TestWaitRespectsBackoff(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
+	rl.Done(Tier2)
 	// Should have waited at least the backoff duration (which includes jitter up to 25%).
 	assert.GreaterOrEqual(t, elapsed.Milliseconds(), backoffDuration.Milliseconds())
 }
@@ -53,10 +55,10 @@ func TestHandleRateLimitSetsBackoff(t *testing.T) {
 	rl.HandleRateLimit(Tier3, 2*time.Second)
 
 	rl.mu.Lock()
-	until, ok := rl.backoffs[Tier3]
+	until := rl.backoff
 	rl.mu.Unlock()
 
-	assert.True(t, ok)
+	assert.False(t, until.IsZero())
 	// Should be at least 2 seconds from now (before jitter check, it's at least 2s).
 	assert.True(t, until.After(time.Now().Add(1*time.Second)),
 		"backoff should be at least 1 second in the future")
@@ -115,5 +117,6 @@ func TestBackoffExpires(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
+	rl.Done(Tier2)
 	assert.Less(t, elapsed, 500*time.Millisecond, "expired backoff should not cause delay")
 }

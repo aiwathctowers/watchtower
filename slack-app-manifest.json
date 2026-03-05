@@ -1,0 +1,45 @@
+{
+  "display_information": {
+    "name": "Watchtower",
+    "description": "Local Slack workspace intelligence tool",
+    "long_description": "Watchtower syncs your Slack workspace into a local SQLite database and provides an AI-powered interface for analysis. It fetches channels, users, messages, and threads, stores them locally with full-text search, and lets you ask natural-language questions about your workspace via Claude. All data stays on your machine.",
+    "background_color": "#1a1a2e"
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://127.0.0.1:18491/callback",
+      "https://127.0.0.1:18492/callback",
+      "https://127.0.0.1:18493/callback",
+      "https://127.0.0.1:18494/callback",
+      "https://127.0.0.1:18495/callback",
+      "https://127.0.0.1:18496/callback",
+      "https://127.0.0.1:18497/callback",
+      "https://127.0.0.1:18498/callback",
+      "https://127.0.0.1:18499/callback",
+      "https://127.0.0.1:18500/callback"
+    ],
+    "scopes": {
+      "user": [
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "search:read",
+        "users:read",
+        "users:read.email",
+        "files:read",
+        "reactions:read",
+        "team:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

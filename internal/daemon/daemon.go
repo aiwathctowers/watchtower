@@ -2,13 +2,16 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"watchtower/internal/config"
+	"watchtower/internal/digest"
 	"watchtower/internal/sync"
 )
 
@@ -23,6 +26,8 @@ type Daemon struct {
 	config       *config.Config
 	logger       *log.Logger
 	wakeCh       <-chan struct{}
+	pidPath      string
+	digestPipe   *digest.Pipeline
 }
 
 // New creates a Daemon that runs incremental syncs via the given orchestrator.
@@ -39,11 +44,28 @@ func (d *Daemon) SetLogger(l *log.Logger) {
 	d.logger = l
 }
 
+// SetDigestPipeline sets the digest pipeline for post-sync digest generation.
+func (d *Daemon) SetDigestPipeline(p *digest.Pipeline) {
+	d.digestPipe = p
+}
+
+// SetPIDPath sets the path where the daemon will write its PID file.
+func (d *Daemon) SetPIDPath(path string) {
+	d.pidPath = path
+}
+
 // Run starts the daemon poll loop. It blocks until ctx is cancelled or
 // SIGINT/SIGTERM is received. Each tick or wake event triggers an incremental sync.
 func (d *Daemon) Run(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if d.pidPath != "" {
+		if err := WritePID(d.pidPath); err != nil {
+			return fmt.Errorf("writing pid file: %w", err)
+		}
+		defer RemovePID(d.pidPath)
+	}
 
 	pollInterval := d.config.Sync.PollInterval
 	if pollInterval < minPollInterval {
@@ -54,13 +76,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.wakeCh = WatchWake(ctx, pollInterval)
 	}
 
+	d.logger.Printf("daemon started, polling every %s", pollInterval)
+
 	// Run an initial sync immediately on startup.
 	d.runSync(ctx)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-
-	d.logger.Printf("daemon started, polling every %s", pollInterval)
 
 	for {
 		select {
@@ -89,7 +111,25 @@ func (d *Daemon) wakeChannel() <-chan struct{} {
 
 func (d *Daemon) runSync(ctx context.Context) {
 	opts := sync.SyncOptions{}
-	if err := d.orchestrator.Run(ctx, opts); err != nil {
-		d.logger.Printf("sync error: %v", err)
+	syncErr := d.orchestrator.Run(ctx, opts)
+	if syncErr != nil {
+		d.logger.Printf("sync error: %v", syncErr)
+	}
+
+	// Persist last sync result for `watchtower status`.
+	snap := d.orchestrator.Progress().Snapshot()
+	resultPath := filepath.Join(d.config.WorkspaceDir(), "last_sync.json")
+	if err := sync.WriteSyncResult(resultPath, sync.ResultFromSnapshot(snap, syncErr)); err != nil {
+		d.logger.Printf("failed to write sync result: %v", err)
+	}
+
+	// Post-sync: generate digests if enabled and sync succeeded.
+	if syncErr == nil && d.digestPipe != nil {
+		n, err := d.digestPipe.Run(ctx)
+		if err != nil {
+			d.logger.Printf("digest error: %v", err)
+		} else if n > 0 {
+			d.logger.Printf("generated %d digest(s)", n)
+		}
 	}
 }

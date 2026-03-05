@@ -2,11 +2,13 @@ package ai
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 
 	"watchtower/internal/db"
 	slackutil "watchtower/internal/slack"
@@ -28,15 +30,37 @@ type messageRef struct {
 // references to Slack permalinks, renders markdown for terminal display, and
 // appends a Sources section with referenced message links.
 type ResponseRenderer struct {
-	db     *db.DB
-	domain string
+	db       *db.DB
+	domain   string
+	renderer *glamour.TermRenderer
 }
 
 // NewResponseRenderer creates a ResponseRenderer.
 func NewResponseRenderer(database *db.DB, domain string) *ResponseRenderer {
+	style := styles.DarkStyleConfig
+	// Remove raw markdown prefixes from headings — they look like unrendered
+	// markdown in the terminal. The headings are already distinguished by
+	// bold + color from the parent Heading style.
+	style.H2.StylePrimitive.Prefix = ""
+	style.H3.StylePrimitive.Prefix = ""
+	style.H4.StylePrimitive.Prefix = ""
+	style.H5.StylePrimitive.Prefix = ""
+	style.H6.StylePrimitive.Prefix = ""
+	// Trim document margin — REPL already handles its own padding.
+	margin := uint(0)
+	style.Document.Margin = &margin
+
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(0),
+	)
+	if err != nil {
+		log.Printf("warning: failed to create markdown renderer: %v", err)
+	}
 	return &ResponseRenderer{
-		db:     database,
-		domain: domain,
+		db:       database,
+		domain:   domain,
+		renderer: r,
 	}
 }
 
@@ -57,10 +81,13 @@ func (r *ResponseRenderer) Render(response string) (string, error) {
 	processed := r.replaceRefs(response, resolved)
 
 	// Render markdown for terminal
-	rendered, err := r.renderMarkdown(processed)
+	var rendered string
+	result, err := r.renderMarkdown(processed)
 	if err != nil {
-		// Fall back to unrendered text if glamour fails
+		log.Printf("warning: markdown rendering failed: %v", err)
 		rendered = processed
+	} else {
+		rendered = result
 	}
 
 	// Append sources section if there are resolved references
@@ -127,27 +154,44 @@ func (r *ResponseRenderer) resolveRefs(refs []messageRef) []messageRef {
 }
 
 // replaceRefs replaces raw message references with markdown links in the response text.
+// Skips references that are already inside a markdown link to avoid double-nesting.
 func (r *ResponseRenderer) replaceRefs(response string, refs []messageRef) string {
 	for _, ref := range refs {
 		if ref.permalink == "" {
 			continue
 		}
 		linked := fmt.Sprintf("[%s](%s)", ref.fullMatch, ref.permalink)
-		response = strings.Replace(response, ref.fullMatch, linked, 1)
+		// Replace only occurrences not already inside a markdown link.
+		// A simple check: if the match is preceded by '[' it's already linked.
+		result := strings.Builder{}
+		remaining := response
+		for {
+			idx := strings.Index(remaining, ref.fullMatch)
+			if idx < 0 {
+				result.WriteString(remaining)
+				break
+			}
+			// Check if already inside a markdown link (preceded by '[')
+			if idx > 0 && remaining[idx-1] == '[' {
+				result.WriteString(remaining[:idx+len(ref.fullMatch)])
+				remaining = remaining[idx+len(ref.fullMatch):]
+				continue
+			}
+			result.WriteString(remaining[:idx])
+			result.WriteString(linked)
+			remaining = remaining[idx+len(ref.fullMatch):]
+		}
+		response = result.String()
 	}
 	return response
 }
 
 // renderMarkdown renders the response using glamour with a dark terminal theme.
 func (r *ResponseRenderer) renderMarkdown(text string) (string, error) {
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(100),
-	)
-	if err != nil {
-		return "", fmt.Errorf("creating markdown renderer: %w", err)
+	if r.renderer == nil {
+		return text, nil
 	}
-	out, err := renderer.Render(text)
+	out, err := r.renderer.Render(text)
 	if err != nil {
 		return "", fmt.Errorf("rendering markdown: %w", err)
 	}
@@ -177,6 +221,15 @@ func (r *ResponseRenderer) buildSourcesSection(refs []messageRef) string {
 		))
 	}
 	return b.String()
+}
+
+// ResolveSources extracts message references from response text, resolves them
+// to Slack permalinks, and returns a formatted Sources section. Returns empty
+// string if no references could be resolved.
+func (r *ResponseRenderer) ResolveSources(response string) string {
+	refs := r.extractRefs(response)
+	resolved := r.resolveRefs(refs)
+	return r.buildSourcesSection(resolved)
 }
 
 // ExtractSourcesSection returns the "Sources:" section from rendered output, if present.

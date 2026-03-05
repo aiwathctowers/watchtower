@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -249,7 +249,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 // TestIntegrationAIPromptAssembly verifies the system prompt and user message
 // assembly produce well-formed prompts with data from the context builder.
 func TestIntegrationAIPromptAssembly(t *testing.T) {
-	database, refTime := setupIntegrationDB(t)
+	_, refTime := setupIntegrationDB(t)
 
 	query := Parse("summarize #general")
 	query.TimeRange = &TimeRange{
@@ -257,18 +257,16 @@ func TestIntegrationAIPromptAssembly(t *testing.T) {
 		To:   refTime,
 	}
 
-	cb := NewContextBuilder(database, 150000, "my-company")
-	messageContext, err := cb.Build(query)
-	require.NoError(t, err)
-
-	systemPrompt := BuildSystemPrompt("my-company", "my-company")
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
 	assert.Contains(t, systemPrompt, "Watchtower")
 	assert.Contains(t, systemPrompt, "my-company")
+	assert.Contains(t, systemPrompt, "sqlite3")
+	assert.Contains(t, systemPrompt, "CREATE TABLE")
 
-	userMessage := AssembleUserMessage(messageContext, "summarize #general")
-	assert.Contains(t, userMessage, "Message Context")
+	timeHints := FormatTimeHints(query)
+	userMessage := AssembleUserMessage("summarize #general", timeHints)
 	assert.Contains(t, userMessage, "summarize #general")
-	assert.Contains(t, userMessage, "deploying v2.3")
+	assert.Contains(t, userMessage, "ts_unix BETWEEN")
 }
 
 // TestIntegrationResponseRenderer verifies the response renderer can detect
@@ -311,7 +309,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, channels, 3)
 
-	// Step 2: Parse a question and build context (the "ask" pipeline)
+	// Step 2: Parse a question and build workspace summary
 	question := "what happened in #general today"
 	query := Parse(question)
 	query.TimeRange = &TimeRange{
@@ -321,46 +319,26 @@ func TestIntegrationEndToEnd(t *testing.T) {
 
 	assert.Contains(t, query.Channels, "general")
 
-	cb := NewContextBuilder(database, 150000, "my-company")
-	messageContext, err := cb.Build(query)
-	require.NoError(t, err)
-
-	// Verify context has the right messages
-	assert.Contains(t, messageContext, "deploying v2.3")
-	assert.Contains(t, messageContext, "alice")
-	assert.Contains(t, messageContext, "#general")
-
-	// Step 3: Build prompts
-	systemPrompt := BuildSystemPrompt("my-company", "my-company")
-	userMessage := AssembleUserMessage(messageContext, question)
+	// Step 3: Build prompts (DB path + schema in system prompt, no pre-loaded context)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
+	timeHints := FormatTimeHints(query)
+	userMessage := AssembleUserMessage(question, timeHints)
 
 	assert.Contains(t, systemPrompt, "Watchtower")
-	assert.Contains(t, userMessage, "deploying v2.3")
+	assert.Contains(t, systemPrompt, "sqlite3")
 	assert.Contains(t, userMessage, question)
 
-	// Step 4: Mock Claude API and send the query
+	// Step 4: Mock Claude CLI and send the query
 	mockResponseText := "Here's what happened in #general:\n\nAlice deployed v2.3 to production. Bob monitored the dashboards and confirmed everything was stable. Carol praised the team."
 
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		// Verify the request is well-formed
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/v1/messages", r.URL.Path)
+	mockPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\n", strings.ReplaceAll(mockResponseText, "'", "'\\''"))
+	require.NoError(t, os.WriteFile(mockPath, []byte(script), 0o755))
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, nonStreamingResponse(mockResponseText))
-	})
-	defer server.Close()
+	client := NewClient("claude-sonnet-4-20250514", "")
+	client.claudeCmd = mockPath
 
-	client := NewClientWithOptions(
-		"claude-sonnet-4-5-20250514",
-		4096,
-		option.WithBaseURL(server.URL),
-		option.WithAPIKey("test-api-key"),
-		option.WithMaxRetries(0),
-	)
-
-	response, err := client.QuerySync(context.Background(), systemPrompt, userMessage)
+	response, err := client.QuerySync(context.Background(), systemPrompt, userMessage, "")
 	require.NoError(t, err)
 	assert.Contains(t, response, "v2.3")
 	assert.Contains(t, response, "Alice")
@@ -378,7 +356,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 // TestIntegrationEndToEndStreaming verifies the streaming variant of the
 // end-to-end pipeline works correctly.
 func TestIntegrationEndToEndStreaming(t *testing.T) {
-	database, refTime := setupIntegrationDB(t)
+	_, refTime := setupIntegrationDB(t)
 
 	question := "summarize #engineering"
 	query := Parse(question)
@@ -387,39 +365,29 @@ func TestIntegrationEndToEndStreaming(t *testing.T) {
 		To:   refTime,
 	}
 
-	cb := NewContextBuilder(database, 150000, "my-company")
-	messageContext, err := cb.Build(query)
-	require.NoError(t, err)
-	assert.Contains(t, messageContext, "CI pipeline optimization")
-
-	systemPrompt := BuildSystemPrompt("my-company", "my-company")
-	userMessage := AssembleUserMessage(messageContext, question)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
+	timeHints := FormatTimeHints(query)
+	userMessage := AssembleUserMessage(question, timeHints)
 
 	mockResponseText := "Bob optimized the CI pipeline, reducing build time by 40% through parallel test execution and better caching."
 
-	server := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, sseResponse(mockResponseText))
-	})
-	defer server.Close()
+	mockPath := filepath.Join(t.TempDir(), "claude")
+	escapedText := strings.ReplaceAll(mockResponseText, `"`, `\"`)
+	script := fmt.Sprintf("#!/bin/sh\necho '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"%s\"}]}}'\necho '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"%s\"}'\n",
+		escapedText, escapedText)
+	require.NoError(t, os.WriteFile(mockPath, []byte(script), 0o755))
 
-	client := NewClientWithOptions(
-		"claude-sonnet-4-5-20250514",
-		4096,
-		option.WithBaseURL(server.URL),
-		option.WithAPIKey("test-api-key"),
-		option.WithMaxRetries(0),
-	)
+	client := NewClient("claude-sonnet-4-20250514", "")
+	client.claudeCmd = mockPath
 
-	textCh, errCh := client.Query(context.Background(), systemPrompt, userMessage)
+	textCh, errCh, _ := client.Query(context.Background(), systemPrompt, userMessage, "")
 
 	var result strings.Builder
 	for chunk := range textCh {
 		result.WriteString(chunk)
 	}
 
-	err = <-errCh
+	err := <-errCh
 	require.NoError(t, err)
 	assert.Equal(t, mockResponseText, result.String())
 }

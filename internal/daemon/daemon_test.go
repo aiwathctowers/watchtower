@@ -58,6 +58,18 @@ func testMux() *http.ServeMux {
 		})
 	})
 
+	mux.HandleFunc("/search.messages", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"messages": map[string]any{
+				"matches": []any{},
+				"paging":  map[string]any{"count": 100, "total": 0, "page": 1, "pages": 0},
+				"total":   0,
+			},
+		})
+	})
+
 	return mux
 }
 
@@ -66,10 +78,11 @@ func newTestOrchestrator(t *testing.T, syncCount *atomic.Int32) (*sync.Orchestra
 
 	mux := testMux()
 
-	// Wrap mux to count how many times team.info is called (proxy for sync runs).
+	// Wrap mux to count how many times search.messages is called (proxy for sync runs).
+	// We use search.messages because team.info is cached after the first call.
 	countingMux := http.NewServeMux()
 	countingMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/team.info" {
+		if r.URL.Path == "/search.messages" {
 			syncCount.Add(1)
 		}
 		mux.ServeHTTP(w, r)
@@ -78,6 +91,10 @@ func newTestOrchestrator(t *testing.T, syncCount *atomic.Int32) (*sync.Orchestra
 	database, err := db.Open(":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
+
+	// Pre-populate workspace so sync takes the incremental (search) path
+	err = database.UpsertWorkspace(db.Workspace{ID: "T024BE7LD", Name: "test-workspace", Domain: "test-workspace"})
+	require.NoError(t, err)
 
 	srv := httptest.NewServer(countingMux)
 	t.Cleanup(srv.Close)

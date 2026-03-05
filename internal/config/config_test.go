@@ -24,9 +24,7 @@ workspaces:
   my-company:
     slack_token: "xoxp-test-token"
 ai:
-  api_key: "sk-ant-test"
   model: "claude-sonnet-4-20250514"
-  max_tokens: 8192
   context_budget: 100000
 sync:
   workers: 10
@@ -48,9 +46,7 @@ watch:
 
 	assert.Equal(t, "my-company", cfg.ActiveWorkspace)
 	assert.Equal(t, "xoxp-test-token", cfg.Workspaces["my-company"].SlackToken)
-	assert.Equal(t, "sk-ant-test", cfg.AI.ApiKey)
 	assert.Equal(t, "claude-sonnet-4-20250514", cfg.AI.Model)
-	assert.Equal(t, 8192, cfg.AI.MaxTokens)
 	assert.Equal(t, 100000, cfg.AI.ContextBudget)
 	assert.Equal(t, 10, cfg.Sync.Workers)
 	assert.Equal(t, 60, cfg.Sync.InitialHistoryDays)
@@ -64,7 +60,6 @@ func TestLoad_DefaultValues(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, DefaultAIModel, cfg.AI.Model)
-	assert.Equal(t, DefaultAIMaxTokens, cfg.AI.MaxTokens)
 	assert.Equal(t, DefaultAIContextBudget, cfg.AI.ContextBudget)
 	assert.Equal(t, DefaultSyncWorkers, cfg.Sync.Workers)
 	assert.Equal(t, DefaultInitialHistDays, cfg.Sync.InitialHistoryDays)
@@ -88,12 +83,10 @@ workspaces:
 	path := writeTestConfig(t, yaml)
 
 	t.Setenv("WATCHTOWER_SLACK_TOKEN", "xoxp-from-env")
-	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 
-	assert.Equal(t, "sk-from-env", cfg.AI.ApiKey)
 	assert.Equal(t, "xoxp-from-env", cfg.Workspaces["test-ws"].SlackToken)
 }
 

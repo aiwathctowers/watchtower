@@ -37,3 +37,29 @@ func (db *DB) GetWorkspace() (*Workspace, error) {
 	}
 	return &ws, nil
 }
+
+// GetSearchLastDate returns the search_last_date for the workspace, or "" if not set.
+func (db *DB) GetSearchLastDate() (string, error) {
+	var date string
+	err := db.QueryRow(`SELECT search_last_date FROM workspace LIMIT 1`).Scan(&date)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("getting search_last_date: %w", err)
+	}
+	return date, nil
+}
+
+// SetSearchLastDate updates the search_last_date for the workspace.
+func (db *DB) SetSearchLastDate(date string) error {
+	res, err := db.Exec(`UPDATE workspace SET search_last_date = ? WHERE id = (SELECT id FROM workspace LIMIT 1)`, date)
+	if err != nil {
+		return fmt.Errorf("setting search_last_date: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("setting search_last_date: no workspace row exists")
+	}
+	return nil
+}

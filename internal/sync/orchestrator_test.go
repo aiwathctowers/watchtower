@@ -108,24 +108,74 @@ func baseMux() *http.ServeMux {
 				{
 					"id": "C001", "name": "general", "is_channel": true, "is_member": true,
 					"num_members": 50, "is_archived": false,
-					"topic": map[string]any{"value": "General chat"},
+					"topic":   map[string]any{"value": "General chat"},
 					"purpose": map[string]any{"value": "Company-wide announcements"},
 				},
 				{
 					"id": "C002", "name": "engineering", "is_channel": true, "is_member": true,
 					"num_members": 20, "is_archived": false,
-					"topic": map[string]any{"value": "Engineering discussion"},
+					"topic":   map[string]any{"value": "Engineering discussion"},
 					"purpose": map[string]any{"value": ""},
 				},
 				{
 					"id": "C003", "name": "old-project", "is_channel": true, "is_member": false,
 					"num_members": 5, "is_archived": true,
-					"topic": map[string]any{"value": ""},
+					"topic":   map[string]any{"value": ""},
 					"purpose": map[string]any{"value": ""},
 				},
 			},
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
+	})
+
+	mux.HandleFunc("/search.messages", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"messages": map[string]any{
+				"matches": []map[string]any{
+					{
+						"user": "U001", "username": "alice", "ts": "1740567600.000100",
+						"text": "test message",
+						"channel": map[string]any{
+							"id": "C001", "name": "general",
+						},
+					},
+					{
+						"user": "U002", "username": "bob", "ts": "1740567600.000200",
+						"text": "another message",
+						"channel": map[string]any{
+							"id": "C002", "name": "engineering",
+						},
+					},
+				},
+				"paging": map[string]any{
+					"count": 100,
+					"total": 2,
+					"page":  1,
+					"pages": 1,
+				},
+				"total": 2,
+			},
+		})
+	})
+
+	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		userID := r.FormValue("user")
+		w.Header().Set("Content-Type", "application/json")
+
+		users := map[string]map[string]any{
+			"U001": {"id": "U001", "name": "alice", "real_name": "Alice Smith", "is_bot": false, "deleted": false, "profile": map[string]any{"display_name": "alice", "email": "alice@example.com"}},
+			"U002": {"id": "U002", "name": "bob", "real_name": "Bob Jones", "is_bot": false, "deleted": false, "profile": map[string]any{"display_name": "bob", "email": "bob@example.com"}},
+			"U003": {"id": "U003", "name": "slackbot", "real_name": "Slackbot", "is_bot": true, "deleted": false, "profile": map[string]any{"display_name": "Slackbot"}},
+		}
+
+		if user, ok := users[userID]; ok {
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "user": user})
+		} else {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "user_not_found"})
+		}
 	})
 
 	return mux
@@ -139,9 +189,9 @@ func defaultMux() *http.ServeMux {
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []any{},
-			"has_more": false,
+			"ok":                true,
+			"messages":          []any{},
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -149,9 +199,9 @@ func defaultMux() *http.ServeMux {
 	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": []any{},
-			"has_more": false,
+			"ok":                true,
+			"messages":          []any{},
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -170,7 +220,7 @@ func TestNewOrchestrator(t *testing.T) {
 
 func TestRunFullSync(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// Verify workspace was synced
@@ -217,9 +267,47 @@ func TestRunFullSync(t *testing.T) {
 	assert.False(t, archived.IsMember)
 }
 
+func TestRunSearchSync(t *testing.T) {
+	ts := newTestSetup(t, defaultMux())
+
+	// Pre-populate workspace so Run() takes the search path (not first-sync full)
+	err := ts.db.UpsertWorkspace(db.Workspace{ID: "T024BE7LD", Name: "my-company", Domain: "my-company"})
+	require.NoError(t, err)
+
+	err = ts.orch.Run(context.Background(), SyncOptions{})
+	require.NoError(t, err)
+
+	// Verify workspace was synced
+	ws, err := ts.db.GetWorkspace()
+	require.NoError(t, err)
+	require.NotNil(t, ws)
+	assert.Equal(t, "T024BE7LD", ws.ID)
+
+	// Verify channels discovered via search
+	channels, err := ts.db.GetChannels(db.ChannelFilter{})
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(channels), 2, "should discover at least 2 channels from search")
+
+	general, err := ts.db.GetChannelByName("general")
+	require.NoError(t, err)
+	require.NotNil(t, general)
+	assert.Equal(t, "C001", general.ID)
+	assert.True(t, general.IsMember)
+
+	// Verify messages were saved directly from search results
+	msgs, err := ts.db.GetMessagesByChannel("C001", 100)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(msgs), 1, "search sync should save messages")
+
+	// Verify search_last_date was saved
+	lastDate, err := ts.db.GetSearchLastDate()
+	require.NoError(t, err)
+	assert.NotEmpty(t, lastDate, "search_last_date should be set after search sync")
+}
+
 func TestSyncMetadataWorkspaceUpsert(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	ws, err := ts.db.GetWorkspace()
@@ -229,7 +317,7 @@ func TestSyncMetadataWorkspaceUpsert(t *testing.T) {
 	assert.True(t, ws.SyncedAt.Valid)
 
 	// Run again — should update, not fail
-	err = ts.orch.syncMetadata(context.Background())
+	err = ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	ws2, err := ts.db.GetWorkspace()
@@ -237,23 +325,61 @@ func TestSyncMetadataWorkspaceUpsert(t *testing.T) {
 	assert.Equal(t, ws.ID, ws2.ID)
 }
 
-func TestSyncDetectsDeletedUsers(t *testing.T) {
-	ts := newTestSetup(t, defaultMux())
+func TestSyncSkipsDeletedUsers(t *testing.T) {
+	// Create a mux where users.list includes a deleted user
+	mux := http.NewServeMux()
 
-	// Pre-populate a user that won't be in the API response
-	err := ts.db.UpsertUser(db.User{
-		ID:   "U999",
-		Name: "departed",
+	mux.HandleFunc("/team.info", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":   true,
+			"team": map[string]any{"id": "T001", "name": "test", "domain": "test"},
+		})
 	})
+
+	mux.HandleFunc("/users.list", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"members": []map[string]any{
+				{
+					"id": "U001", "name": "alice", "real_name": "Alice",
+					"deleted": false, "is_bot": false,
+					"profile": map[string]any{"display_name": "alice"},
+				},
+				{
+					"id": "U999", "name": "departed", "real_name": "Gone User",
+					"deleted": true, "is_bot": false,
+					"profile": map[string]any{"display_name": "departed"},
+				},
+			},
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	mux.HandleFunc("/conversations.list", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":                true,
+			"channels":          []map[string]any{},
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
+
+	ts := newTestSetup(t, mux)
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
-	err = ts.orch.syncMetadata(context.Background())
+	// Active user should be saved
+	alice, err := ts.db.GetUserByID("U001")
 	require.NoError(t, err)
+	require.NotNil(t, alice)
+	assert.Equal(t, "Alice", alice.RealName)
 
-	departed, err := ts.db.GetUserByID("U999")
+	// Deleted user should NOT be saved
+	users, err := ts.db.GetUsers(db.UserFilter{})
 	require.NoError(t, err)
-	require.NotNil(t, departed)
-	assert.True(t, departed.IsDeleted, "user not returned by API should be marked deleted")
+	assert.Len(t, users, 1, "deleted user should not be saved to DB")
 }
 
 func TestSyncChannelTypes(t *testing.T) {
@@ -270,8 +396,8 @@ func TestSyncChannelTypes(t *testing.T) {
 	mux.HandleFunc("/users.list", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":      true,
-			"members": []map[string]any{},
+			"ok":                true,
+			"members":           []map[string]any{},
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -303,7 +429,7 @@ func TestSyncChannelTypes(t *testing.T) {
 	})
 
 	ts := newTestSetup(t, mux)
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	ch, err := ts.db.GetChannelByID("C001")
@@ -337,8 +463,8 @@ func TestSyncContextCancellation(t *testing.T) {
 		// Don't respond — the context should already be canceled
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":      true,
-			"members": []map[string]any{},
+			"ok":                true,
+			"members":           []map[string]any{},
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -364,7 +490,7 @@ func TestSyncTeamInfoError(t *testing.T) {
 	ts := newTestSetup(t, mux)
 	err := ts.orch.Run(context.Background(), SyncOptions{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata sync")
+	assert.Contains(t, err.Error(), "workspace sync")
 }
 
 func TestSyncOptionsDefaults(t *testing.T) {
@@ -449,7 +575,7 @@ func TestSlackChannelType(t *testing.T) {
 
 func TestUserProfileJSONStored(t *testing.T) {
 	ts := newTestSetup(t, defaultMux())
-	err := ts.orch.syncMetadata(context.Background())
+	err := ts.orch.syncMetadata(context.Background(), SyncOptions{})
 	require.NoError(t, err)
 
 	alice, err := ts.db.GetUserByName("alice")
@@ -478,9 +604,9 @@ func integrationMux(channelMessages map[string][]map[string]any, threadReplies m
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": msgs,
-			"has_more": false,
+			"ok":                true,
+			"messages":          msgs,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -496,9 +622,9 @@ func integrationMux(channelMessages map[string][]map[string]any, threadReplies m
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":       true,
-			"messages": replies,
-			"has_more": false,
+			"ok":                true,
+			"messages":          replies,
+			"has_more":          false,
 			"response_metadata": map[string]any{"next_cursor": ""},
 		})
 	})
@@ -515,8 +641,8 @@ func TestIntegrationSyncFlow(t *testing.T) {
 		"C001": {
 			{
 				"type": "message", "user": "U001",
-				"text": "Deploying v2.3 to production",
-				"ts":   "1740567600.000100",
+				"text":        "Deploying v2.3 to production",
+				"ts":          "1740567600.000100",
 				"reply_count": 2, "thread_ts": "1740567600.000100",
 			},
 			{
@@ -540,21 +666,21 @@ func TestIntegrationSyncFlow(t *testing.T) {
 		"C001|1740567600.000100": {
 			{
 				"type": "message", "user": "U001",
-				"text": "Deploying v2.3 to production",
-				"ts":   "1740567600.000100",
-				"thread_ts": "1740567600.000100",
+				"text":        "Deploying v2.3 to production",
+				"ts":          "1740567600.000100",
+				"thread_ts":   "1740567600.000100",
 				"reply_count": 2,
 			},
 			{
 				"type": "message", "user": "U002",
-				"text": "Looks good, I'll keep an eye on metrics",
-				"ts":   "1740567600.000150",
+				"text":      "Looks good, I'll keep an eye on metrics",
+				"ts":        "1740567600.000150",
 				"thread_ts": "1740567600.000100",
 			},
 			{
 				"type": "message", "user": "U003",
-				"text": "No breaking changes in my service",
-				"ts":   "1740567600.000160",
+				"text":      "No breaking changes in my service",
+				"ts":        "1740567600.000160",
 				"thread_ts": "1740567600.000100",
 			},
 		},
@@ -563,7 +689,7 @@ func TestIntegrationSyncFlow(t *testing.T) {
 	mux := integrationMux(channelMessages, threadReplies)
 	ts := newTestSetup(t, mux)
 
-	err := ts.orch.Run(context.Background(), SyncOptions{})
+	err := ts.orch.Run(context.Background(), SyncOptions{Full: true})
 	require.NoError(t, err)
 
 	// --- Verify workspace ---

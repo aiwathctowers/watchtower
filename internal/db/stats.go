@@ -11,35 +11,19 @@ type Stats struct {
 	ThreadCount  int
 }
 
-// GetStats returns aggregate counts for the database.
+// GetStats returns aggregate counts for the database in a single query.
 func (db *DB) GetStats() (*Stats, error) {
 	var s Stats
-
-	err := db.QueryRow(`SELECT COUNT(*) FROM channels`).Scan(&s.ChannelCount)
+	err := db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM channels),
+		(SELECT COUNT(*) FROM watch_list),
+		(SELECT COUNT(*) FROM users),
+		(SELECT COUNT(*) FROM messages),
+		(SELECT COUNT(*) FROM messages WHERE reply_count > 0)`).
+		Scan(&s.ChannelCount, &s.WatchedCount, &s.UserCount, &s.MessageCount, &s.ThreadCount)
 	if err != nil {
-		return nil, fmt.Errorf("counting channels: %w", err)
+		return nil, fmt.Errorf("querying stats: %w", err)
 	}
-
-	err = db.QueryRow(`SELECT COUNT(*) FROM watch_list`).Scan(&s.WatchedCount)
-	if err != nil {
-		return nil, fmt.Errorf("counting watch list: %w", err)
-	}
-
-	err = db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&s.UserCount)
-	if err != nil {
-		return nil, fmt.Errorf("counting users: %w", err)
-	}
-
-	err = db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&s.MessageCount)
-	if err != nil {
-		return nil, fmt.Errorf("counting messages: %w", err)
-	}
-
-	err = db.QueryRow(`SELECT COUNT(*) FROM messages WHERE reply_count > 0`).Scan(&s.ThreadCount)
-	if err != nil {
-		return nil, fmt.Errorf("counting threads: %w", err)
-	}
-
 	return &s, nil
 }
 

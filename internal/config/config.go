@@ -1,9 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,18 +18,24 @@ type WorkspaceConfig struct {
 }
 
 type AIConfig struct {
-	ApiKey        string `mapstructure:"api_key"`
 	Model         string `mapstructure:"model"`
-	MaxTokens     int    `mapstructure:"max_tokens"`
 	ContextBudget int    `mapstructure:"context_budget"`
 }
 
 type SyncConfig struct {
-	Workers           int           `mapstructure:"workers"`
-	InitialHistoryDays int          `mapstructure:"initial_history_days"`
-	PollInterval      time.Duration `mapstructure:"poll_interval"`
-	SyncThreads       bool          `mapstructure:"sync_threads"`
-	SyncOnWake        bool          `mapstructure:"sync_on_wake"`
+	Workers            int           `mapstructure:"workers"`
+	InitialHistoryDays int           `mapstructure:"initial_history_days"`
+	PollInterval       time.Duration `mapstructure:"poll_interval"`
+	SyncThreads        bool          `mapstructure:"sync_threads"`
+	SyncOnWake         bool          `mapstructure:"sync_on_wake"`
+	ThreadSyncLimit    int           `mapstructure:"thread_sync_limit"`
+}
+
+type DigestConfig struct {
+	Enabled     bool   `mapstructure:"enabled"`
+	Model       string `mapstructure:"model"`
+	MinMessages int    `mapstructure:"min_messages"`
+	Language    string `mapstructure:"language"`
 }
 
 type Config struct {
@@ -34,6 +43,7 @@ type Config struct {
 	Workspaces      map[string]*WorkspaceConfig `mapstructure:"workspaces"`
 	AI              AIConfig                    `mapstructure:"ai"`
 	Sync            SyncConfig                  `mapstructure:"sync"`
+	Digest          DigestConfig                `mapstructure:"digest"`
 }
 
 // Load reads config from the given path, binds env vars, and returns the config.
@@ -43,22 +53,24 @@ func Load(configPath string) (*Config, error) {
 	// Defaults
 	v.SetDefault("active_workspace", DefaultActiveWorkspace)
 	v.SetDefault("ai.model", DefaultAIModel)
-	v.SetDefault("ai.max_tokens", DefaultAIMaxTokens)
 	v.SetDefault("ai.context_budget", DefaultAIContextBudget)
 	v.SetDefault("sync.workers", DefaultSyncWorkers)
 	v.SetDefault("sync.initial_history_days", DefaultInitialHistDays)
 	v.SetDefault("sync.poll_interval", DefaultPollInterval)
 	v.SetDefault("sync.sync_threads", DefaultSyncThreads)
 	v.SetDefault("sync.sync_on_wake", DefaultSyncOnWake)
+	v.SetDefault("digest.enabled", DefaultDigestEnabled)
+	v.SetDefault("digest.model", DefaultDigestModel)
+	v.SetDefault("digest.min_messages", DefaultDigestMinMsgs)
 
 	// Config file
 	v.SetConfigFile(configPath)
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("reading config: %w", err)
-			}
+		// Missing config file is OK — use defaults
+		var configNotFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &configNotFound) && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading config: %w", err)
 		}
 	}
 
@@ -68,9 +80,9 @@ func Load(configPath string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// Explicit bindings for key env vars
-	_ = v.BindEnv("ai.api_key", "ANTHROPIC_API_KEY")
 	_ = v.BindEnv("ai.model", "WATCHTOWER_AI_MODEL")
 	_ = v.BindEnv("sync.workers", "WATCHTOWER_SYNC_WORKERS")
+	_ = v.BindEnv("digest.model", "WATCHTOWER_DIGEST_MODEL")
 
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
@@ -95,6 +107,10 @@ func Load(configPath string) (*Config, error) {
 	return cfg, nil
 }
 
+// ValidWorkspaceRe matches valid workspace names: alphanumeric start, followed by
+// alphanumerics, hyphens, dots, or underscores.
+var ValidWorkspaceRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
 // ValidateWorkspace checks that a workspace name is set and safe for use in
 // file paths. It does NOT require a Slack token or workspace config entry,
 // making it suitable for commands that only need database access.
@@ -102,8 +118,8 @@ func (c *Config) ValidateWorkspace() error {
 	if c.ActiveWorkspace == "" {
 		return fmt.Errorf("active_workspace is required; run 'watchtower config init' first")
 	}
-	if strings.ContainsAny(c.ActiveWorkspace, "/\\") || strings.Contains(c.ActiveWorkspace, "..") {
-		return fmt.Errorf("active_workspace %q contains invalid characters", c.ActiveWorkspace)
+	if !ValidWorkspaceRe.MatchString(c.ActiveWorkspace) {
+		return fmt.Errorf("invalid workspace name %q: must contain only alphanumeric characters, hyphens, dots, and underscores", c.ActiveWorkspace)
 	}
 	return nil
 }
@@ -121,7 +137,21 @@ func (c *Config) Validate() error {
 	if ws.SlackToken == "" {
 		return fmt.Errorf("slack_token is required for workspace %q", c.ActiveWorkspace)
 	}
+	if !isValidSlackToken(ws.SlackToken) {
+		return fmt.Errorf("slack_token for workspace %q has invalid format (expected xoxp-*, xoxb-*, xoxa-*, or xoxe.*)", c.ActiveWorkspace)
+	}
 	return nil
+}
+
+// isValidSlackToken checks that the token has a recognized Slack token prefix.
+func isValidSlackToken(token string) bool {
+	validPrefixes := []string{"xoxp-", "xoxb-", "xoxa-", "xoxe.xoxp-", "xoxe."}
+	for _, p := range validPrefixes {
+		if strings.HasPrefix(token, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetActiveWorkspace returns the config for the active workspace.
@@ -136,11 +166,18 @@ func (c *Config) GetActiveWorkspace() (*WorkspaceConfig, error) {
 	return ws, nil
 }
 
-// DBPath returns the path to the SQLite database for the active workspace.
-func (c *Config) DBPath() string {
+// WorkspaceDir returns the data directory for the active workspace
+// (~/.local/share/watchtower/{workspace}/).
+func (c *Config) WorkspaceDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = "."
+		// Fatal: storing sensitive data in a temp dir is unsafe.
+		log.Fatalf("could not determine home directory: %v", err)
 	}
-	return filepath.Join(home, ".local", "share", "watchtower", c.ActiveWorkspace, "watchtower.db")
+	return filepath.Join(home, ".local", "share", "watchtower", c.ActiveWorkspace)
+}
+
+// DBPath returns the path to the SQLite database for the active workspace.
+func (c *Config) DBPath() string {
+	return filepath.Join(c.WorkspaceDir(), "watchtower.db")
 }

@@ -42,7 +42,6 @@ func TestAskCommandFlags(t *testing.T) {
 	f := askCmd.Flags()
 
 	assert.NotNil(t, f.Lookup("model"))
-	assert.NotNil(t, f.Lookup("no-stream"))
 	assert.NotNil(t, f.Lookup("channel"))
 	assert.NotNil(t, f.Lookup("since"))
 }

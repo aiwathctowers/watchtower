@@ -79,6 +79,43 @@ func (db *DB) GetUserByID(id string) (*User, error) {
 	return scanUser(row)
 }
 
+// EnsureUser inserts a minimal user record if not already present.
+// Does NOT update existing records (INSERT ON CONFLICT DO NOTHING).
+func (db *DB) EnsureUser(id, name string) error {
+	_, err := db.Exec(`
+		INSERT INTO users (id, name) VALUES (?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		id, name,
+	)
+	if err != nil {
+		return fmt.Errorf("ensuring user %s: %w", id, err)
+	}
+	return nil
+}
+
+// GetUnknownUserIDs returns user IDs that appear in messages but not in the users table.
+func (db *DB) GetUnknownUserIDs() ([]string, error) {
+	rows, err := db.Query(`
+		SELECT DISTINCT m.user_id
+		FROM messages m
+		LEFT JOIN users u ON u.id = m.user_id
+		WHERE m.user_id != '' AND u.id IS NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("querying unknown user IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning user ID: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(

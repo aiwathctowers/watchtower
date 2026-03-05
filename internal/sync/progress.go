@@ -14,8 +14,10 @@ import (
 type SyncPhase int
 
 const (
-	PhaseMetadata SyncPhase = iota
+	PhaseMetadata  SyncPhase = iota
+	PhaseDiscovery           // search-based channel/user discovery
 	PhaseMessages
+	PhaseUsers // lazy user profile fetching
 	PhaseThreads
 	PhaseDone
 )
@@ -24,8 +26,12 @@ func (p SyncPhase) String() string {
 	switch p {
 	case PhaseMetadata:
 		return "Metadata"
+	case PhaseDiscovery:
+		return "Discovery"
 	case PhaseMessages:
 		return "Messages"
+	case PhaseUsers:
+		return "Users"
 	case PhaseThreads:
 		return "Threads"
 	case PhaseDone:
@@ -40,7 +46,8 @@ func (p SyncPhase) String() string {
 type Progress struct {
 	mu sync.Mutex
 
-	phase SyncPhase
+	startTime time.Time // when the sync started (for total elapsed)
+	phase     SyncPhase
 
 	// Metadata phase
 	usersTotal    int
@@ -48,11 +55,21 @@ type Progress struct {
 	channelsTotal int
 	channelsDone  int
 
+	// Discovery phase
+	discoveryPages      int
+	discoveryTotalPages int
+	discoveryChannels   int
+	discoveryUsers      int
+
+	// Users phase (lazy profile fetch)
+	userProfilesTotal int
+	userProfilesDone  int
+
 	// Messages phase
-	msgChannelsTotal int
-	msgChannelsDone  int
-	messagesFetched  int
-	currentChannel   string
+	msgChannelsTotal    int
+	msgChannelsDone     int
+	messagesFetched     int
+	channelsSkippedInfo string // human-readable breakdown of skipped channels
 
 	// Threads phase
 	threadsTotal   int
@@ -65,8 +82,10 @@ type Progress struct {
 
 // NewProgress creates a new progress tracker.
 func NewProgress() *Progress {
+	now := time.Now()
 	return &Progress{
-		phaseStartTime: time.Now(),
+		startTime:      now,
+		phaseStartTime: now,
 	}
 }
 
@@ -101,11 +120,36 @@ func (p *Progress) SetMetadataChannels(total, done int) {
 	p.channelsDone = done
 }
 
+// SetDiscovery updates discovery phase progress.
+func (p *Progress) SetDiscovery(pages, totalPages, channels, users int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.discoveryPages = pages
+	p.discoveryTotalPages = totalPages
+	p.discoveryChannels = channels
+	p.discoveryUsers = users
+}
+
+// SetUserProfiles updates user profile fetch progress.
+func (p *Progress) SetUserProfiles(total, done int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.userProfilesTotal = total
+	p.userProfilesDone = done
+}
+
 // SetMessageChannels sets the total number of channels for message sync.
 func (p *Progress) SetMessageChannels(total int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.msgChannelsTotal = total
+}
+
+// SetChannelsSkippedInfo sets a human-readable breakdown of skipped channels.
+func (p *Progress) SetChannelsSkippedInfo(info string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.channelsSkippedInfo = info
 }
 
 // IncMessageChannel increments the completed channels count for message sync.
@@ -120,13 +164,6 @@ func (p *Progress) AddMessages(count int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messagesFetched += count
-}
-
-// SetCurrentChannel sets the name of the channel currently being synced.
-func (p *Progress) SetCurrentChannel(name string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.currentChannel = name
 }
 
 // SetThreadsTotal sets the total number of threads to sync.
@@ -146,19 +183,26 @@ func (p *Progress) IncThread(replies int) {
 
 // Snapshot captures the current state for rendering without holding the lock.
 type Snapshot struct {
-	Phase            SyncPhase
-	UsersTotal       int
-	UsersDone        int
-	ChannelsTotal    int
-	ChannelsDone     int
-	MsgChannelsTotal int
-	MsgChannelsDone  int
-	MessagesFetched  int
-	CurrentChannel   string
-	ThreadsTotal     int
-	ThreadsDone      int
-	ThreadsFetched   int
-	PhaseStartTime   time.Time
+	Phase               SyncPhase
+	StartTime           time.Time
+	UsersTotal          int
+	UsersDone           int
+	ChannelsTotal       int
+	ChannelsDone        int
+	DiscoveryPages      int
+	DiscoveryTotalPages int
+	DiscoveryChannels   int
+	DiscoveryUsers      int
+	UserProfilesTotal   int
+	UserProfilesDone    int
+	MsgChannelsTotal    int
+	MsgChannelsDone     int
+	MessagesFetched     int
+	ThreadsTotal        int
+	ThreadsDone         int
+	ThreadsFetched      int
+	PhaseStartTime      time.Time
+	ChannelsSkippedInfo string
 }
 
 // Snapshot takes a consistent snapshot of the progress state.
@@ -166,29 +210,36 @@ func (p *Progress) Snapshot() Snapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return Snapshot{
-		Phase:            p.phase,
-		UsersTotal:       p.usersTotal,
-		UsersDone:        p.usersDone,
-		ChannelsTotal:    p.channelsTotal,
-		ChannelsDone:     p.channelsDone,
-		MsgChannelsTotal: p.msgChannelsTotal,
-		MsgChannelsDone:  p.msgChannelsDone,
-		MessagesFetched:  p.messagesFetched,
-		CurrentChannel:   p.currentChannel,
-		ThreadsTotal:     p.threadsTotal,
-		ThreadsDone:      p.threadsDone,
-		ThreadsFetched:   p.threadsFetched,
-		PhaseStartTime:   p.phaseStartTime,
+		Phase:               p.phase,
+		StartTime:           p.startTime,
+		UsersTotal:          p.usersTotal,
+		UsersDone:           p.usersDone,
+		ChannelsTotal:       p.channelsTotal,
+		ChannelsDone:        p.channelsDone,
+		DiscoveryPages:      p.discoveryPages,
+		DiscoveryTotalPages: p.discoveryTotalPages,
+		DiscoveryChannels:   p.discoveryChannels,
+		DiscoveryUsers:      p.discoveryUsers,
+		UserProfilesTotal:   p.userProfilesTotal,
+		UserProfilesDone:    p.userProfilesDone,
+		MsgChannelsTotal:    p.msgChannelsTotal,
+		MsgChannelsDone:     p.msgChannelsDone,
+		MessagesFetched:     p.messagesFetched,
+		ThreadsTotal:        p.threadsTotal,
+		ThreadsDone:         p.threadsDone,
+		ThreadsFetched:      p.threadsFetched,
+		PhaseStartTime:      p.phaseStartTime,
+		ChannelsSkippedInfo: p.channelsSkippedInfo,
 	}
 }
 
 // Styles for terminal rendering.
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	doneStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	labelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	doneStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	activeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	waitStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	waitStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
 // Render formats the current progress for terminal display.
@@ -200,30 +251,176 @@ func (p *Progress) Render(workspace string) string {
 // RenderSnapshot formats a snapshot for terminal display.
 // Separated from Render for testability.
 func RenderSnapshot(snap Snapshot, workspace string) string {
-	title := titleStyle.Render(fmt.Sprintf("Syncing %s workspace...", workspace))
-	meta := renderMetadata(snap)
-	msgs := renderMessages(snap)
-	threads := renderThreads(snap)
+	var title string
+	if snap.Phase == PhaseDone {
+		elapsed := formatDuration(time.Since(snap.StartTime))
+		title = doneStyle.Render(fmt.Sprintf("Synced %s workspace in %s", workspace, elapsed))
+	} else {
+		elapsed := formatDuration(time.Since(snap.StartTime))
+		title = titleStyle.Render(fmt.Sprintf("Syncing %s workspace... (%s)", workspace, elapsed))
+	}
+	var lines []string
+	lines = append(lines, title)
 
-	return fmt.Sprintf("%s\n%s\n%s\n%s", title, meta, msgs, threads)
+	// Metadata: show when active or done with data
+	if snap.Phase == PhaseMetadata || (snap.Phase > PhaseMetadata && (snap.UsersTotal > 0 || snap.ChannelsTotal > 0)) {
+		lines = append(lines, renderMetadata(snap))
+	}
+
+	// Discovery: show when active or done with results
+	if snap.Phase == PhaseDiscovery || (snap.Phase > PhaseDiscovery && snap.DiscoveryPages > 0) {
+		lines = append(lines, renderDiscovery(snap))
+	}
+
+	// Messages: show when active or done with results
+	if snap.Phase == PhaseMessages || (snap.Phase > PhaseMessages && snap.MsgChannelsTotal > 0) {
+		lines = append(lines, renderMessages(snap))
+	}
+
+	// Users: show when active or done with results
+	if snap.Phase == PhaseUsers || (snap.Phase > PhaseUsers && snap.UserProfilesTotal > 0) {
+		lines = append(lines, renderUsers(snap))
+	}
+
+	// Threads: show when active or done with results
+	if snap.Phase == PhaseThreads || (snap.Phase > PhaseThreads && snap.ThreadsTotal > 0) {
+		lines = append(lines, renderThreads(snap))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// formatDuration formats a duration as a human-friendly string like "1m23s" or "5s".
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Second {
+		return "<1s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 func renderMetadata(snap Snapshot) string {
 	prefix := "  Metadata: "
-	switch {
-	case snap.Phase == PhaseMetadata:
-		users := fmt.Sprintf("users %s/%s", humanize.Comma(int64(snap.UsersDone)), humanize.Comma(int64(snap.UsersTotal)))
-		channels := fmt.Sprintf("channels %s/%s", humanize.Comma(int64(snap.ChannelsDone)), humanize.Comma(int64(snap.ChannelsTotal)))
-		return labelStyle.Render(prefix) + activeStyle.Render(fmt.Sprintf("%s, %s", users, channels))
-	default:
-		users := fmt.Sprintf("users %s/%s", humanize.Comma(int64(snap.UsersDone)), humanize.Comma(int64(snap.UsersTotal)))
-		channels := fmt.Sprintf("channels %s/%s", humanize.Comma(int64(snap.ChannelsDone)), humanize.Comma(int64(snap.ChannelsTotal)))
+
+	if snap.Phase > PhaseMetadata {
+		users := fmt.Sprintf("users %s", humanize.Comma(int64(snap.UsersTotal)))
+		channels := fmt.Sprintf("channels %s", humanize.Comma(int64(snap.ChannelsTotal)))
 		return labelStyle.Render(prefix) + doneStyle.Render(fmt.Sprintf("%s, %s done", users, channels))
+	}
+
+	// Fetching users from Slack API (no saves started yet)
+	if snap.UsersDone == 0 && snap.ChannelsDone == 0 {
+		parts := []string{}
+		if snap.UsersTotal > 0 {
+			parts = append(parts, fmt.Sprintf("%s users", humanize.Comma(int64(snap.UsersTotal))))
+		}
+		if snap.ChannelsTotal > 0 {
+			parts = append(parts, fmt.Sprintf("%s channels", humanize.Comma(int64(snap.ChannelsTotal))))
+		}
+		if len(parts) == 0 {
+			return labelStyle.Render(prefix) + activeStyle.Render("fetching from Slack...")
+		}
+		return labelStyle.Render(prefix) + activeStyle.Render(fmt.Sprintf("fetched %s, saving...", strings.Join(parts, ", ")))
+	}
+
+	// Users saved, channels still fetching from API
+	if snap.UsersDone > 0 && snap.UsersDone == snap.UsersTotal && snap.ChannelsDone == 0 {
+		info := fmt.Sprintf("%s users saved", humanize.Comma(int64(snap.UsersTotal)))
+		if snap.ChannelsTotal > 0 {
+			info += fmt.Sprintf(", fetched %s channels, saving...", humanize.Comma(int64(snap.ChannelsTotal)))
+		} else {
+			info += ", fetching channels..."
+		}
+		return labelStyle.Render(prefix) + activeStyle.Render(info)
+	}
+
+	// Saving to DB (users saving, or channels saving)
+	total := snap.UsersTotal + snap.ChannelsTotal
+	done := snap.UsersDone + snap.ChannelsDone
+	bar := progressBar(done, total)
+	pct := percentage(done, total)
+	return labelStyle.Render(prefix) + activeStyle.Render(fmt.Sprintf("%s %s", bar, pct))
+}
+
+func renderDiscovery(snap Snapshot) string {
+	prefix := "  Search:   "
+	switch {
+	case snap.Phase < PhaseDiscovery:
+		return labelStyle.Render(prefix) + waitStyle.Render("waiting...")
+	case snap.Phase == PhaseDiscovery:
+		if snap.DiscoveryPages == 0 {
+			return labelStyle.Render(prefix) + activeStyle.Render("searching...")
+		}
+		bar := progressBar(snap.DiscoveryPages, snap.DiscoveryTotalPages)
+		pct := percentage(snap.DiscoveryPages, snap.DiscoveryTotalPages)
+		detail := fmt.Sprintf("%s (%s msgs, %s ch, page %s/%s)",
+			pct,
+			humanize.Comma(int64(snap.MessagesFetched)),
+			humanize.Comma(int64(snap.DiscoveryChannels)),
+			humanize.Comma(int64(snap.DiscoveryPages)),
+			humanize.Comma(int64(snap.DiscoveryTotalPages)),
+		)
+		eta := estimateETA(snap.DiscoveryPages, snap.DiscoveryTotalPages, snap.PhaseStartTime)
+		line := fmt.Sprintf("%s %s", bar, detail)
+		if eta != "" {
+			line += " " + eta
+		}
+		return labelStyle.Render(prefix) + activeStyle.Render(line)
+	default:
+		if snap.DiscoveryChannels == 0 && snap.DiscoveryPages == 0 {
+			return labelStyle.Render(prefix) + waitStyle.Render("skipped")
+		}
+		detail := fmt.Sprintf("%s msgs, %s channels, %s users",
+			humanize.Comma(int64(snap.MessagesFetched)),
+			humanize.Comma(int64(snap.DiscoveryChannels)),
+			humanize.Comma(int64(snap.DiscoveryUsers)),
+		)
+		return labelStyle.Render(prefix) + doneStyle.Render(detail)
+	}
+}
+
+func renderUsers(snap Snapshot) string {
+	prefix := "  Users:    "
+	switch {
+	case snap.Phase < PhaseUsers:
+		return labelStyle.Render(prefix) + waitStyle.Render("waiting...")
+	case snap.Phase == PhaseUsers:
+		if snap.UserProfilesTotal == 0 {
+			return labelStyle.Render(prefix) + activeStyle.Render("checking...")
+		}
+		bar := progressBar(snap.UserProfilesDone, snap.UserProfilesTotal)
+		pct := percentage(snap.UserProfilesDone, snap.UserProfilesTotal)
+		detail := fmt.Sprintf("%s (%s/%s profiles)",
+			pct,
+			humanize.Comma(int64(snap.UserProfilesDone)),
+			humanize.Comma(int64(snap.UserProfilesTotal)),
+		)
+		return labelStyle.Render(prefix) + activeStyle.Render(fmt.Sprintf("%s %s", bar, detail))
+	default:
+		if snap.UserProfilesTotal == 0 {
+			return labelStyle.Render(prefix) + doneStyle.Render("all known")
+		}
+		detail := fmt.Sprintf("%s profiles fetched",
+			humanize.Comma(int64(snap.UserProfilesDone)),
+		)
+		return labelStyle.Render(prefix) + doneStyle.Render(detail)
 	}
 }
 
 func renderMessages(snap Snapshot) string {
 	prefix := "  Messages: "
+	skipped := ""
+	if snap.ChannelsSkippedInfo != "" {
+		skipped = "\n" + labelStyle.Render("             ") + waitStyle.Render(snap.ChannelsSkippedInfo)
+	}
 	switch {
 	case snap.Phase < PhaseMessages:
 		return labelStyle.Render(prefix) + waitStyle.Render("waiting...")
@@ -241,7 +438,7 @@ func renderMessages(snap Snapshot) string {
 		if eta != "" {
 			line += " " + eta
 		}
-		return labelStyle.Render(prefix) + activeStyle.Render(line)
+		return labelStyle.Render(prefix) + activeStyle.Render(line) + skipped
 	default:
 		detail := fmt.Sprintf("%s/%s channels, %s msgs done",
 			humanize.Comma(int64(snap.MsgChannelsDone)),

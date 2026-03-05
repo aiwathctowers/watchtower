@@ -15,8 +15,9 @@ var (
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "watchtower %s (commit: %s, built: %s)\n", Version, Commit, BuildDate)
+		return nil
 	},
 }
 

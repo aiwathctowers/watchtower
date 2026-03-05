@@ -66,10 +66,10 @@ func (wp *WorkerPool) Start(ctx context.Context, handler func(ctx context.Contex
 					if err := handler(ctx, task); err != nil {
 						wp.mu.Lock()
 						wp.errs = append(wp.errs, err)
-						wp.mu.Unlock()
-						if wp.cancel != nil {
+						if len(wp.errs) == 1 && wp.cancel != nil {
 							wp.cancel()
 						}
+						wp.mu.Unlock()
 					}
 				}
 			}
