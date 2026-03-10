@@ -24,7 +24,7 @@ const (
 // API methods. Everything is global: one gate, one rate, one backoff.
 type RateLimiter struct {
 	limiter *rate.Limiter
-	gate    chan struct{} // semaphore (capacity 1), nil in unlimited mode
+	gate    chan struct{} // semaphore (capacity 3), nil in unlimited mode
 	logger  *log.Logger
 
 	mu      sync.Mutex
@@ -124,7 +124,11 @@ func (rl *RateLimiter) HandleRateLimit(tier int, retryAfter time.Duration) {
 	}
 
 	rl.mu.Lock()
-	rl.backoff = until
+	// Only extend backoff, never shorten — prevents concurrent 429s from
+	// racing to reduce the wait time.
+	if until.After(rl.backoff) {
+		rl.backoff = until
+	}
 	rl.retries++
 	rl.mu.Unlock()
 }

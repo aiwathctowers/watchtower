@@ -217,7 +217,7 @@ The app calls `claude` as a subprocess, same approach as the Go code in `interna
 claude \
   -p "user question here" \
   --output-format stream-json \
-  --model claude-sonnet-4-20250514 \
+  --model claude-sonnet-4-6 \
   --system-prompt "You are Watchtower..." \
   --allowedTools "mcp__sqlite__*,Bash(sqlite3*)" \
   --disallowedTools "Edit,Write,NotebookEdit" \
@@ -544,67 +544,73 @@ WatchtowerDesktop/
 ## Progress
 
 ### Task 1: Xcode project scaffolding and SPM dependencies
-- [ ] Create macOS App project `WatchtowerDesktop` with SwiftUI lifecycle, deployment target macOS 14.0
-- [ ] Add SPM dependencies: GRDB.swift 7.x, swift-markdown 0.5+, Yams 5.x
-- [ ] Create `Sources/` directory structure: App/, Models/, Database/, Services/, ViewModels/, Views/, Utilities/
+- [x] Create macOS App project `WatchtowerDesktop` with SwiftUI lifecycle, deployment target macOS 14.0
+- [x] Add SPM dependencies: GRDB.swift 7.x, ~~swift-markdown 0.5+~~, Yams 5.x *(swift-markdown dropped — using `AttributedString(markdown:)` instead)*
+- [x] Create `Sources/` directory structure: App/, Models/, Database/, Services/, ViewModels/, Views/, Utilities/
 - [ ] Configure build settings: App Sandbox OFF (needs filesystem + process access), Hardened Runtime ON
-- [ ] Verify project builds and launches empty window
+- [x] Verify project builds and launches empty window
 
-**Files:** `WatchtowerDesktop.xcodeproj`, `Package.swift`
+**Files:** `Package.swift` *(SPM-only, no .xcodeproj)*
 
 ### Task 2: Database connection and model layer
-- [ ] Create `DatabaseManager.swift`: open existing watchtower.db via `DatabasePool` in read-only mode, WAL journal
-- [ ] Auto-detect DB path: read `~/.config/watchtower/config.yaml` → extract `active_workspace` → resolve `~/.local/share/watchtower/{workspace}/watchtower.db`
-- [ ] Create `Workspace.swift`: `FetchableRecord, Decodable` with columns id, name, domain, synced_at, search_last_date
-- [ ] Create `Channel.swift`: `FetchableRecord, Decodable` with all columns including dm_user_id as optional
-- [ ] Create `Message.swift`: `FetchableRecord, Decodable` with all columns; ts_unix as REAL, thread_ts as optional
-- [ ] Create `User.swift`: `FetchableRecord, Decodable` with all columns; is_bot/is_deleted as Bool
-- [ ] Create `Digest.swift`: `FetchableRecord, Decodable` with all columns; period_from/period_to as Double
-- [ ] Create `WatchItem.swift`: `FetchableRecord, Decodable` with entity_type, entity_id, entity_name, priority, created_at
-- [ ] Create `Decision.swift`: `Codable` struct (text, by, messageTS) for JSON decoding from digest.decisions field
-- [ ] Create `ActionItem.swift`: `Codable` struct (text, assignee, status) for JSON decoding from digest.action_items field
+- [x] Create `DatabaseManager.swift`: open existing watchtower.db via `DatabasePool` in read-only mode, WAL journal
+- [x] Auto-detect DB path: read `~/.config/watchtower/config.yaml` → extract `active_workspace` → resolve `~/.local/share/watchtower/{workspace}/watchtower.db`
+- [x] Create `Workspace.swift`: `FetchableRecord, Decodable` with columns id, name, domain, synced_at, search_last_date
+- [x] Create `Channel.swift`: `FetchableRecord, Decodable` with all columns including dm_user_id as optional
+- [x] Create `Message.swift`: `FetchableRecord, Decodable` with all columns; ts_unix as REAL, thread_ts as optional
+- [x] Create `User.swift`: `FetchableRecord, Decodable` with all columns; is_bot/is_deleted as Bool
+- [x] Create `Digest.swift`: `FetchableRecord, Decodable` with all columns; period_from/period_to as Double
+- [x] Create `WatchItem.swift`: `FetchableRecord, Decodable` with entity_type, entity_id, entity_name, priority, created_at
+- [x] Create `Decision.swift`: `Codable` struct (text, by, messageTS) for JSON decoding from digest.decisions field
+- [x] Create `ActionItem.swift`: `Codable` struct (text, assignee, status) for JSON decoding from digest.action_items field
 - [ ] Smoke test: open real DB, read workspace name, count channels/messages/users
+
+**Also created:** `SyncState.swift` model (FetchableRecord, tracks per-channel sync progress)
 
 **Files:** `Database/DatabaseManager.swift`, `Models/*.swift`
 
 ### Task 3: Query layer
-- [ ] Create `WorkspaceQueries.swift`: `fetchWorkspace()`, `fetchStats()` (channel/user/message/digest counts + DB file size)
-- [ ] Create `ChannelQueries.swift`: `fetchAll(filter:sort:)` with type/archived/member filters and name/messages/recent sort; `fetchByID(_:)`, `fetchByName(_:)`, `fetchWithStats()` joining message counts and last activity
-- [ ] Create `MessageQueries.swift`: `fetchByChannel(_:limit:offset:)` paginated; `fetchByTimeRange(channelID:from:to:)`; `fetchThreadReplies(channelID:threadTS:)`; `fetchNear(channelID:tsUnix:)` for navigation
-- [ ] Create `UserQueries.swift`: `fetchAll(activeOnly:)`, `fetchByID(_:)`, `fetchByName(_:)`, `fetchDisplayName(forID:)` for mention resolution
-- [ ] Create `DigestQueries.swift`: `fetchAll(type:channelID:from:to:limit:)` filtered; `fetchByID(_:)`, `fetchLatest(type:)`, `fetchWithDecisions()` where decisions != '[]'
-- [ ] Create `WatchQueries.swift`: `fetchAll()`, `add(entityType:entityID:entityName:priority:)` INSERT OR REPLACE, `remove(entityType:entityID:)` DELETE — these are the only WRITE operations
-- [ ] Create `SearchQueries.swift`: `search(query:channelID:userID:limit:)` via FTS5 MATCH with `snippet()` for highlighting, JOIN messages + channels + users
+- [x] Create `WorkspaceQueries.swift`: `fetchWorkspace()`, `fetchStats()` (channel/user/message/digest counts + DB file size)
+- [x] Create `ChannelQueries.swift`: `fetchAll(filter:sort:)` with type/archived/member filters and name/messages/recent sort; `fetchByID(_:)`, `fetchByName(_:)`, `fetchWatched()` joining watch_list
+- [x] Create `MessageQueries.swift`: `fetchByChannel(_:limit:offset:)` paginated; `fetchByTimeRange(channelID:from:to:)`; `fetchThreadReplies(channelID:threadTS:)`; `fetchRecentWatched()` with MessageWithContext
+- [x] Create `UserQueries.swift`: `fetchAll(activeOnly:)`, `fetchByID(_:)`, `fetchDisplayName(forID:)`
+- [x] Create `DigestQueries.swift`: `fetchAll(type:channelID:from:to:limit:)` filtered; `fetchByID(_:)`, `fetchLatest(type:)`, `fetchWithDecisions()`, `fetchNewSince()`, `maxID()`
+- [x] Create `WatchQueries.swift`: `fetchAll()`, `isWatched()`, `add()` INSERT OR REPLACE, `remove()` DELETE
+- [x] Create `SearchQueries.swift`: `search(query:limit:)` via FTS5 MATCH with `snippet()`, FTS5 query sanitization (H5 fix)
 - [ ] Unit tests: create test fixture DB, verify each query returns correct types and handles empty results
 
-**Files:** `Database/Queries/*.swift`, `Tests/DatabaseTests/QueryTests.swift`
+**Also created:** `StatsQueries.swift` (fetchDashboardStats, fetchTopChannels, fetchMessageVolume, fetchSyncSummary)
+
+**Files:** `Database/Queries/*.swift`
 
 ### Task 4: App shell and sidebar navigation
-- [ ] Create `WatchtowerApp.swift`: @main, WindowGroup, initialize DatabaseManager on launch, handle DB-not-found error state
-- [ ] Create `AppState.swift`: @Observable class holding DatabaseManager, selected sidebar item enum, error state
-- [ ] Create `Navigation.swift`: enum `SidebarDestination` with cases: dashboard, chat, digests, channels, search
-- [ ] Create `SidebarView.swift`: NavigationSplitView with List of sidebar items (SF Symbols icons), selection binding to AppState
-- [ ] Create placeholder views for each destination (DashboardView, ChatView, etc.) with title text
-- [ ] Handle error state: if DB not found, show onboarding view "Run `watchtower auth login && watchtower sync` to get started"
+- [x] Create `WatchtowerApp.swift`: @main, WindowGroup, initialize DatabaseManager on launch, handle DB-not-found error state
+- [x] Create `AppState.swift`: @Observable class holding DatabaseManager, selected sidebar item enum, error state
+- [x] Create `Navigation.swift`: enum `SidebarDestination` with cases: dashboard, chat, digests, channels, search
+- [x] Create `SidebarView.swift`: NavigationSplitView with List of sidebar items (SF Symbols icons), selection binding to AppState
+- [x] Create placeholder views for each destination (DashboardView, ChatView, etc.) with title text
+- [x] Handle error state: if DB not found, show onboarding view "Run `watchtower auth login && watchtower sync` to get started"
 - [ ] Set default window size (1200x800), minimum size (800x600)
+
+**Also created:** `NavigationRoot` and `MainNavigationView` for top-level routing, `OnboardingView` for first-launch state
 
 **Files:** `App/WatchtowerApp.swift`, `App/AppState.swift`, `App/Navigation.swift`, `Views/Sidebar/SidebarView.swift`
 
 ### Task 5: Dashboard — stats and sync status
-- [ ] Create `DashboardViewModel.swift`: @Observable, loads stats (channel/user/message/digest counts, DB size), last sync time, daemon status
-- [ ] Create `StatsCard.swift`: reusable view component — SF Symbol icon, label, formatted value (humanized numbers)
-- [ ] Create `DashboardView.swift`: LazyVGrid of StatsCards (2 columns), sync status section below
-- [ ] Create `SyncStatusBanner.swift`: green/red circle indicator, "Last sync: X minutes ago" relative text, "Daemon running/stopped"
-- [ ] Wire DashboardViewModel to DatabaseManager queries
+- [x] Create `DashboardViewModel.swift`: @Observable, loads stats (channel/user/message/digest counts, DB size), last sync time, daemon status
+- [x] Create `StatsCard.swift`: reusable view component — SF Symbol icon, label, formatted value (humanized numbers)
+- [x] Create `DashboardView.swift`: LazyVGrid of StatsCards (2 columns), sync status section below
+- [x] Create `SyncStatusBanner.swift`: green/red circle indicator, "Last sync: X minutes ago" relative text, "Daemon running/stopped"
+- [x] Wire DashboardViewModel to DatabaseManager queries
 - [ ] Add pull-to-refresh or manual refresh button
 
 **Files:** `ViewModels/DashboardViewModel.swift`, `Views/Dashboard/*.swift`
 
 ### Task 6: Dashboard — activity feed
-- [ ] Create `ActivityFeed.swift`: list of recent messages from watched channels (last 24h)
-- [ ] Query: JOIN messages + channels + watch_list, filter ts_unix > now-24h, ORDER BY ts_unix DESC, LIMIT 50
-- [ ] Group messages by channel name with section headers
-- [ ] Each row: user display name, relative timestamp ("2h ago"), truncated text preview (2 lines max)
+- [x] Create `ActivityFeed.swift`: list of recent messages from watched channels (last 24h)
+- [x] Query: JOIN messages + channels + watch_list, filter ts_unix > now-24h, ORDER BY ts_unix DESC, LIMIT 50
+- [x] Group messages by channel name with section headers
+- [x] Each row: user display name, relative timestamp ("2h ago"), truncated text preview (2 lines max)
 - [ ] Tap message row → navigate to channel detail at that message
 - [ ] Empty state: "No watched channels. Add channels to your watch list to see activity here."
 - [ ] Add "Quick actions" row: buttons for "Ask Claude", "Catchup", "View Digests"
@@ -612,251 +618,271 @@ WatchtowerDesktop/
 **Files:** `Views/Dashboard/ActivityFeed.swift`
 
 ### Task 7: Channel list view
-- [ ] Create `ChannelViewModel.swift`: @Observable, fetches channels with stats (message count, last activity), manages filters/sort
-- [ ] Create `ChannelListView.swift`: List with search field (local filter by name), sort picker (name/messages/recent)
-- [ ] Add type filter: segmented control or menu (All / Public / Private / DMs)
-- [ ] Each channel row: # icon (colored by type), name, message count badge, last activity relative time, star icon if watched
-- [ ] Archived channels shown dimmed with "archived" label
-- [ ] Tap → navigate to ChannelDetailView
+- [x] Create `ChannelViewModel.swift`: @Observable, fetches channels with stats (message count, last activity), manages filters/sort
+- [x] Create `ChannelListView.swift`: List with search field (local filter by name)
+- [x] Add type filter: segmented control or menu (All / Public / Private / DMs)
+- [x] Each channel row: # icon (colored by type), name, star icon if watched
+- [x] Archived channels shown dimmed (opacity 0.6)
+- [x] Tap → navigate to ChannelDetailView
+- [ ] Sort picker (name/messages/recent)
 - [ ] Show total channel count in section header
+- [ ] Message count badge, last activity relative time per row
 
 **Files:** `ViewModels/ChannelViewModel.swift`, `Views/Channels/ChannelListView.swift`
 
 ### Task 8: Channel detail — message list and header
-- [ ] Create `ChannelDetailView.swift`: header + scrollable message list
-- [ ] Channel header: name, type badge, topic (if set), member count, purpose (collapsible)
-- [ ] Watch toggle: star button in header, calls WatchQueries.add/remove, updates UI immediately
-- [ ] Message list: LazyVStack, load 50 messages initially, "Load more" button at top for pagination
-- [ ] Create `MessageRow.swift`: user display name (resolved from users table), relative timestamp, message text, reply count badge ("3 replies")
-- [ ] Tap reply count → open ThreadView
+- [x] Create `ChannelDetailView.swift`: header + scrollable message list
+- [x] Watch toggle: star button in header, calls WatchQueries.add/remove, updates UI immediately
+- [x] Message list: load 50 messages initially, "Load more" button at top for pagination
+- [x] Create `MessageRow.swift`: user display name (resolved from users table), relative timestamp, message text, reply count badge ("N replies")
+- [x] Tap reply count → open ThreadView (sheet)
+- [ ] Channel header: type badge, topic (if set), member count, purpose (collapsible)
 - [ ] Messages sorted by ts_unix ascending (oldest first, natural chat order)
 - [ ] Auto-scroll to bottom on first load
 
 **Files:** `Views/Channels/ChannelDetailView.swift`, `Views/Channels/MessageRow.swift`
 
 ### Task 9: Slack mrkdwn parser
-- [ ] Create `SlackTextParser.swift`: converts Slack mrkdwn text → `AttributedString`
+- [x] Create `SlackTextParser.swift`: converts Slack mrkdwn text → plain text *(not AttributedString)*
+- [x] Parse links: `<https://url|display text>` → display text; `<https://url>` → url as text
+- [x] Parse user mentions: `<@U123ABC>` → "@U123ABC" *(no DB resolution, plain text only)*
+- [x] Parse channel mentions: `<#C123ABC|channel-name>` → "#channel-name"
 - [ ] Parse bold: `*text*` → bold weight
 - [ ] Parse italic: `_text_` → italic
 - [ ] Parse strikethrough: `~text~` → strikethrough
 - [ ] Parse inline code: `` `code` `` → monospace font, background tint
 - [ ] Parse code blocks: ` ```code``` ` → monospace block with background
-- [ ] Parse links: `<https://url|display text>` → clickable link; `<https://url>` → url as text
-- [ ] Parse user mentions: `<@U123ABC>` → resolve display name from DB via UserQueries, show as "@name" styled
-- [ ] Parse channel mentions: `<#C123ABC|channel-name>` → show as "#channel-name" styled
 - [ ] Handle emoji shortcodes: `:emoji_name:` → show as text (or map common ones to Unicode)
-- [ ] Unit tests: table-driven tests for each pattern, mixed content, edge cases (nested, empty, malformed)
+- [ ] Unit tests: table-driven tests for each pattern
 
-**Files:** `Utilities/SlackTextParser.swift`, `Tests/ServiceTests/SlackTextParserTests.swift`
+**Note:** Current implementation is plain text conversion only. Full AttributedString rendering not yet implemented.
+
+**Files:** `Utilities/SlackTextParser.swift`
 
 ### Task 10: Thread view
-- [ ] Create `ThreadView.swift`: sheet/inspector panel showing thread replies
-- [ ] Header: parent message text, reply count, channel name
-- [ ] Reply list: same MessageRow component, sorted ascending by ts
-- [ ] Query: fetchThreadReplies(channelID:threadTS:) from MessageQueries
-- [ ] Close button or swipe-to-dismiss
+- [x] Create `ThreadView.swift`: sheet panel showing thread replies
+- [x] Header: channel name, thread info
+- [x] Reply list: same MessageRow component, sorted ascending by ts
+- [x] Query: fetchThreadReplies(channelID:threadTS:) from MessageQueries
+- [x] Close button (sheet dismiss)
 - [ ] Show "No replies" empty state if reply_count > 0 but replies not synced yet
 
 **Files:** `Views/Channels/ThreadView.swift`
 
 ### Task 11: Claude CLI service — subprocess management
-- [ ] Create `ClaudeService.swift` with protocol `ClaudeServiceProtocol` for testability
-- [ ] Implement `stream(prompt:systemPrompt:sessionID:) -> AsyncThrowingStream<StreamEvent, Error>`
-- [ ] `StreamEvent` enum: `.text(String)`, `.sessionID(String)`, `.done`
-- [ ] Build CLI args: `-p`, `--output-format stream-json`, `--model`, `--system-prompt` or `--resume`, `--allowedTools`, `--disallowedTools`, `--mcp-config`
-- [ ] Launch `Process` with stdout Pipe, stderr Pipe (capped at 64KB)
-- [ ] Read stdout line-by-line via `FileHandle.bytes.lines` (async)
-- [ ] Parse each line as JSON: extract text from `assistant` events, session_id from `result` events
+- [x] Create `ClaudeService.swift` with protocol `ClaudeServiceProtocol` for testability
+- [x] Implement `stream(prompt:systemPrompt:sessionID:) -> AsyncThrowingStream<StreamEvent, Error>`
+- [x] `StreamEvent` enum: `.text(String)`, `.sessionID(String)`, `.done`
+- [x] Build CLI args: `-p`, `--output-format stream-json`, `--model`, `--system-prompt` or `--resume`, `--allowedTools`, `--disallowedTools`, `--mcp-config`
+- [x] Launch `Process` with stdout Pipe, stderr redirected to /dev/null (H4 fix)
+- [x] Read stdout line-by-line, parse JSONL
+- [x] Parse each line as JSON: extract text from `assistant` events, session_id from `result` events
+- [x] Implement graceful shutdown: ProcessHandle with NSLock for thread-safe termination (H3 fix)
+- [x] Error classification: `claude` not found → user-friendly message; exit code → parse stderr
+- [x] Build MCP config JSON via JSONSerialization to prevent injection (C1 fix)
+- [x] Find `claude` binary in PATH or known locations
 - [ ] Allow 1MB max line length for large responses
-- [ ] Implement graceful shutdown: on Task cancellation → send SIGINT, schedule SIGKILL after 5s
-- [ ] Error classification: `claude` not found → user-friendly message with install link; exit code → parse stderr
-- [ ] Build MCP config JSON: `{"mcpServers":{"sqlite":{"command":"npx","args":["-y","@anthropic-ai/mcp-server-sqlite","<dbPath>"]}}}`
 - [ ] Unit tests: mock Process via protocol, test JSONL parsing, test error classification
 
-**Files:** `Services/ClaudeService.swift`, `Tests/ServiceTests/ClaudeServiceTests.swift`
+**Files:** `Services/ClaudeService.swift`
 
 ### Task 12: AI Chat — view model and context building
-- [ ] Create `ChatViewModel.swift`: @Observable, manages conversation state
-- [ ] Define `ChatMessage` struct: id (UUID), role (user/assistant), text (String), timestamp (Date), isStreaming (Bool)
-- [ ] `send(text:)`: append user message, start async task calling ClaudeService.stream(), append assistant message with progressive text updates
-- [ ] Track sessionID: nil on first message, captured from first `result` event, passed to subsequent messages via `--resume`
-- [ ] Build system prompt from DB: workspace name, domain, channel/user/message counts, last sync time, latest digest summaries (last 3 daily digests as context)
-- [ ] Handle cancel: user can stop streaming mid-response
-- [ ] Handle errors: show error as system message in chat
-- [ ] `newChat()`: clear messages, reset sessionID
-- [ ] Persist chat sessions: store in UserDefaults or local JSON file (chat history is lightweight)
+- [x] Create `ChatViewModel.swift`: @Observable, manages conversation state
+- [x] Define `ChatMessage` struct: id (UUID), role (user/assistant), text (String), timestamp (Date), isStreaming (Bool)
+- [x] `send(text:)`: append user message, start async task calling ClaudeService.stream(), append assistant message with progressive text updates
+- [x] Track sessionID: nil on first message, captured from first `result` event, passed to subsequent messages via `--resume`
+- [x] Build system prompt from DB: workspace name, domain, channel/user/message counts, last sync time, latest digest summaries (nonisolated static method, H2 fix)
+- [x] Handle cancel: user can stop streaming mid-response
+- [x] Handle errors: show error as system message in chat
+- [x] `newChat()`: clear messages, reset sessionID
+- [ ] Persist chat sessions: store in UserDefaults or local JSON file
 
 **Files:** `ViewModels/ChatViewModel.swift`
 
 ### Task 13: AI Chat — UI
-- [ ] Create `ChatView.swift`: VStack with message list (ScrollViewReader) + input area at bottom
-- [ ] Auto-scroll to latest message on new message or streaming update
-- [ ] Create `MessageBubble.swift`: user messages right-aligned (accent color bg), assistant messages left-aligned (secondary bg), system messages centered (muted)
-- [ ] Assistant bubbles render content via `MarkdownText` component
-- [ ] Create `MarkdownText.swift`: swift-markdown Document → AttributedString, handle headings, bold, italic, code spans, code blocks, lists, links
-- [ ] Create `ChatInput.swift`: TextEditor with placeholder "Ask about your workspace...", Cmd+Enter sends, Shift+Enter for newline, disabled while streaming
-- [ ] Create `StreamingIndicator.swift`: animated three dots (...) shown while waiting for first token
-- [ ] Add quick prompt chips above input: "What happened today?", "Any decisions?", "Summarize #channel" — shown only when chat is empty
-- [ ] New chat button in toolbar (Cmd+N)
+- [x] Create `ChatView.swift`: VStack with message list (ScrollView) + input area at bottom
+- [x] Auto-scroll to latest message on new message or streaming update
+- [x] Create `MessageBubble.swift`: user messages right-aligned (blue bg), assistant messages left-aligned (gray bg)
+- [x] Assistant bubbles render content via `MarkdownText` component
+- [x] Create `MarkdownText.swift`: `AttributedString(markdown:)` for rendering *(uses Foundation, not swift-markdown)*
+- [x] Create `ChatInput.swift`: TextEditor with placeholder, Cmd+Return sends, disabled while streaming
+- [x] Create `StreamingIndicator.swift`: animated three dots shown while waiting for first token
+- [x] Add quick prompt chips above input: "What happened today?", "Any decisions?", "Summarize activity" — shown only when chat is empty
+- [x] New chat button in toolbar
 
 **Files:** `Views/Chat/*.swift`
 
 ### Task 14: Digest list view
-- [ ] Create `DigestViewModel.swift`: @Observable, fetches digests with filters, parses JSON fields (topics, decisions, action_items)
-- [ ] Create `DigestListView.swift`: filter bar at top + list of digest cards
-- [ ] Filter bar: Picker for type (all/channel/daily/weekly), DatePicker for date range, channel filter (optional)
-- [ ] Digest card: type icon (channel=#, daily=calendar, weekly=chart), date range text, channel name or "Cross-channel", summary preview (3 lines), decision count badge
-- [ ] Tap card → navigate to DigestDetailView
-- [ ] Sort by created_at DESC (newest first)
-- [ ] Empty state: "No digests yet. Run `watchtower digest generate` or wait for the daemon to create them."
+- [x] Create `DigestViewModel.swift`: @Observable, fetches digests with filters, parses JSON fields; caches channel names (M9 fix)
+- [x] Create `DigestListView.swift`: list of digest cards
+- [x] Digest card: type icon (number=channel, calendar=daily, chart=weekly), channel name or "Cross-channel", decision count badge (orange)
+- [x] Tap card → navigate to DigestDetailView
+- [x] Sort by created_at DESC (newest first)
+- [x] Type filter picker (all/channel/daily/weekly)
+- [ ] DatePicker for date range filter
+- [ ] Channel filter
+- [ ] Empty state message
 
 **Files:** `ViewModels/DigestViewModel.swift`, `Views/Digests/DigestListView.swift`
 
 ### Task 15: Digest detail view
-- [ ] Create `DigestDetailView.swift`: full digest content in scrollable view
-- [ ] Header: type badge, date range, channel name, created_at
-- [ ] Summary section: full summary text
-- [ ] Topics section: horizontal flow of tag chips (topic names)
-- [ ] Create `DecisionCard.swift`: highlighted card — decision text, "by" attribution, tap to navigate to original message (via permalink or channel+ts)
-- [ ] Action items section: list with text, assignee, status badge (pending/done/unknown)
-- [ ] Stats footer: model used, input/output tokens, cost in USD (formatted to 4 decimal places)
+- [x] Create `DigestDetailView.swift`: full digest content in scrollable view
+- [x] Header: type badge, date range, channel name, created_at
+- [x] Summary section: full summary text (GroupBox)
+- [x] Topics section: FlowLayout with capsule-styled tag chips
+- [x] Create `DecisionCard.swift`: highlighted card — decision text, orange left border, "by" attribution
+- [x] Action items section: list with text, assignee, status (checkmark if done)
+- [x] Stats footer: model used, input/output tokens, cost in USD
 - [ ] Navigate from decision/action item → ChannelDetailView at specific message
 
 **Files:** `Views/Digests/DigestDetailView.swift`, `Views/Digests/DecisionCard.swift`
 
 ### Task 16: Full-text search
-- [ ] Create `SearchViewModel.swift`: @Observable, debounced query input (300ms via Task.sleep), FTS5 search, result management
-- [ ] Create `SearchView.swift`: search field in toolbar area, results below
+- [x] Create `SearchViewModel.swift`: @Observable, debounced query input (300ms via Task.sleep), FTS5 search
+- [x] Create `SearchView.swift`: search field, results below
+- [x] Create `SearchResultRow.swift`: channel name, user name, snippet (HTML tags stripped), relative timestamp
+- [x] Show "No results for ..." / "Type to search" empty states
+- [x] Limit results to 100, show footer note if truncated
+- [x] FTS5 query sanitization to prevent injection (H5 fix)
 - [ ] Wire Cmd+K keyboard shortcut to focus search field
-- [ ] Create `SearchResultRow.swift`: channel name badge, user name, snippet with match highlighting (use `<mark>` from FTS5 snippet, convert to AttributedString), relative timestamp
-- [ ] Results grouped by channel with section headers, showing match count per channel
+- [ ] Snippet match highlighting (AttributedString from `<mark>` tags)
+- [ ] Results grouped by channel with section headers
 - [ ] Tap result → navigate to ChannelDetailView scrolled to that message
 - [ ] Filter chips: channel picker, user picker, date range
-- [ ] Show "No results for ..." / "Type to search" empty states
-- [ ] Limit results to 100, show "Showing first 100 results" if truncated
 
 **Files:** `ViewModels/SearchViewModel.swift`, `Views/Search/*.swift`
 
 ### Task 17: Daemon management service
-- [ ] Create `DaemonManager.swift`: @Observable, manages Go daemon lifecycle
-- [ ] `isDaemonRunning() -> Bool`: read PID file at `~/.local/share/watchtower/{workspace}/daemon.pid`, parse PID, check `kill(pid, 0)` for process existence
-- [ ] `startDaemon()`: run `Process` with `watchtower sync --detach`, check exit code
-- [ ] `stopDaemon()`: run `Process` with `watchtower sync stop`, check exit code
+- [x] Create `DaemonManager.swift`: @Observable, manages Go daemon lifecycle
+- [x] `isDaemonRunning() -> Bool`: read PID file, parse PID, check process existence
+- [x] `startDaemon()`: async, run Process off main thread (C4 fix)
+- [x] `stopDaemon()`: async, run Process off main thread (C4 fix)
+- [x] Background polling: check daemon status every 10 seconds
+- [x] Detect `watchtower` binary: resolvePathIfNeeded() deferred to avoid blocking init
+- [x] Error handling: binary not found, already running, not running
 - [ ] `lastSyncTime: Date?`: read from workspace.synced_at, updated via DB observation
-- [ ] Background polling: check daemon status every 10 seconds, update published property
-- [ ] Detect `watchtower` binary: check if in PATH, store resolved path
-- [ ] Error handling: binary not found, permission denied, already running, not running
 
 **Files:** `Services/DaemonManager.swift`
 
 ### Task 18: Sync status integration in UI
-- [ ] Update `SyncStatusBanner.swift`: bind to DaemonManager — green dot + "Syncing" when running, gray dot + "Stopped" when not
-- [ ] Add start/stop toggle button in banner
-- [ ] Show last sync time as relative ("5 minutes ago"), update every 30s
-- [ ] Create `DaemonSettings.swift`: full daemon control panel in Settings — start/stop, poll interval, PID, log path
-- [ ] Show "watchtower not found" error state with install instructions if binary missing
+- [x] Update `SyncStatusBanner.swift`: bind to DaemonManager — status indicator when running/stopped
+- [x] Add start/stop toggle button in banner
+- [x] Show last sync time as relative
+- [x] Create `DaemonSettings.swift`: daemon control panel in Settings — start/stop, binary path, error messages
+- [x] Show "watchtower not found" error state if binary missing
 - [ ] Add "Sync Now" button: runs `watchtower sync` (one-shot, not daemon) and shows progress
 
 **Files:** `Views/Dashboard/SyncStatusBanner.swift`, `Views/Settings/DaemonSettings.swift`
 
 ### Task 19: Live database observation
-- [ ] Create `DatabaseObserver.swift`: centralized GRDB ValueObservation manager
-- [ ] `observeWorkspace() -> AsyncStream<Workspace?>`: fires when synced_at changes (daemon writes after sync)
-- [ ] `observeMessages(channelID:limit:) -> AsyncStream<[Message]>`: fires when new messages appear in channel
-- [ ] `observeDigests(type:limit:) -> AsyncStream<[Digest]>`: fires when new digests are created
-- [ ] `observeStats() -> AsyncStream<WorkspaceStats>`: fires when counts change
-- [ ] `observeWatchList() -> AsyncStream<[WatchItem]>`: fires when watch list changes
-- [ ] Use GRDB `ValueObservation.tracking { db in ... }` with `.removeDuplicates()` to avoid redundant updates
-- [ ] Add debounce (0.5s) for high-frequency writes during sync (daemon can write 100s of messages/sec)
-- [ ] Wire into ViewModels: DashboardViewModel, ChannelViewModel (when viewing a channel), DigestViewModel
-- [ ] Verify: start daemon → new messages appear in channel view without manual refresh
+- [x] Create `DatabaseObserver.swift`: centralized GRDB ValueObservation manager
+- [x] `observeWorkspace()` → Publisher<Workspace?, Error>
+- [x] `observeMessages(channelID:limit:)` → Publisher<[Message], Error>
+- [x] `observeDigests(type:limit:)` → Publisher<[Digest], Error>
+- [x] `observeStats()` → Publisher<WorkspaceStats, Error>
+- [x] `observeWatchList()` → Publisher<[WatchItem], Error>
+- [x] Use GRDB `ValueObservation.tracking { db in ... }`
+- [ ] Add `.removeDuplicates()` to avoid redundant updates
+- [ ] Add debounce (0.5s) for high-frequency writes during sync
+- [ ] Wire into ViewModels for automatic refresh
+- [ ] Verify: start daemon → new messages appear without manual refresh
 
-**Files:** `Database/DatabaseObserver.swift`, updates to `ViewModels/*.swift`
+**Note:** Implemented as Combine Publishers, not AsyncStreams. Observation infrastructure is built but not yet wired into ViewModels.
+
+**Files:** `Database/DatabaseObserver.swift`
 
 ### Task 20: Notification service
-- [ ] Create `NotificationService.swift`: wraps `UNUserNotificationCenter`
-- [ ] `requestPermission()`: call on first launch, handle denied gracefully
-- [ ] `sendDecisionNotification(decision:channelName:digestID:)`: create UNMutableNotificationContent with title "New decision in #channel", body = decision text, userInfo with digestID
-- [ ] `sendDailySummaryNotification(digestSummary:)`: "Daily summary ready" with preview
-- [ ] Handle notification tap: implement `UNUserNotificationCenterDelegate`, parse userInfo, deep-link to DigestDetailView via AppState navigation
-- [ ] Badge: show unread decision count on app icon (optional)
+- [x] Create `NotificationService.swift`: wraps `UNUserNotificationCenter`
+- [x] `requestPermission()`: call on first launch, handle denied gracefully
+- [x] `sendDecisionNotification(decision:channelName:digestID:)`: stable identifier using digestID + text hash (M7 fix)
+- [x] `sendDailySummaryNotification(digestSummary:)`: "Daily summary ready" with preview
+- [ ] Handle notification tap: implement `UNUserNotificationCenterDelegate`, deep-link to DigestDetailView
+- [ ] Badge: show unread decision count on app icon
 
 **Files:** `Services/NotificationService.swift`
 
 ### Task 21: Digest watcher — notification trigger
-- [ ] Create `DigestWatcher.swift`: background service polling for new digests with decisions
-- [ ] Store `lastCheckedDigestID` in UserDefaults, initialized to max(digests.id) on first run
-- [ ] Poll every 60 seconds: `SELECT * FROM digests WHERE id > ? AND decisions != '[]' ORDER BY id ASC`
-- [ ] For each new digest: parse decisions JSON, call NotificationService for each decision
-- [ ] Update `lastCheckedDigestID` after processing
-- [ ] Start watcher on app launch in AppState, stop on app termination
-- [ ] Rate limit: max 5 notifications per poll cycle (batch remaining into "and N more decisions")
+- [x] Create `DigestWatcher.swift`: background service polling for new digests with decisions
+- [x] Store `lastCheckedDigestID` in UserDefaults, initialized to max(digests.id) on first run
+- [x] Poll every 60 seconds
+- [x] For each new digest: parse decisions JSON, call NotificationService for each decision
+- [x] Update `lastCheckedDigestID` after processing
+- [x] Start watcher on app launch
+- [x] Rate limit: max 5 notifications per poll cycle
+- [x] Log poll errors instead of silently swallowing (M18 fix)
 - [ ] Unit tests: mock DB returns new digests → verify notification calls
 
-**Files:** `Services/DigestWatcher.swift`, `Tests/ServiceTests/DigestWatcherTests.swift`
+**Files:** `Services/DigestWatcher.swift`
 
 ### Task 22: Settings view
-- [ ] Create `SettingsView.swift`: macOS Settings scene with TabView (General, Notifications, About)
-- [ ] Create `ConfigService.swift`: read `~/.config/watchtower/config.yaml` via Yams, expose workspace name, AI model, sync interval, digest config
-- [ ] Watch config file for changes via `DispatchSource.makeFileSystemObjectSource`, reload on modification
-- [ ] General tab: workspace name, domain, DB path (clickable → reveal in Finder), DB file size, schema version
-- [ ] Create `NotificationSettings.swift`: toggles for decision notifications, daily summary notifications, quiet hours (from/to time pickers)
-- [ ] Store notification preferences in UserDefaults
-- [ ] About tab: app version, Watchtower CLI version (run `watchtower version`), links to docs/GitHub
+- [x] Create `SettingsView.swift`: macOS Settings scene with TabView (General, Notifications, Daemon)
+- [x] Create `ConfigService.swift`: read `~/.config/watchtower/config.yaml` via Yams, expose workspace name, AI model, sync interval, digest config
+- [x] Surface YAML parse errors instead of silently swallowing (M13 fix)
+- [x] General tab: workspace name, digest model, enabled status
+- [x] Create `NotificationSettings.swift`: toggles for decision notifications, daily summary notifications, quiet hours
+- [x] Store notification preferences in @AppStorage (UserDefaults)
+- [ ] Watch config file for changes via DispatchSource
+- [ ] About tab: app version, CLI version, links to docs/GitHub
 
 **Files:** `Services/ConfigService.swift`, `Views/Settings/*.swift`
 
 ### Task 23: Time formatting and constants
-- [ ] Create `TimeFormatting.swift`: `relativeTime(from:)` → "just now", "5m ago", "2h ago", "yesterday", "3 days ago", "Mar 5"
-- [ ] `formatTimestamp(_ isoString: String) -> String` for ISO8601 → display format
-- [ ] `formatUnixTimestamp(_ ts: Double) -> String` for ts_unix → display format
-- [ ] Create `Constants.swift`: default config path, default DB base path, app bundle ID, notification category identifiers
+- [x] Create `TimeFormatting.swift`: `relativeTime(from:)` → "just now", "5m ago", "2h ago", etc.
+- [x] `formatTimestamp(_ isoString: String) -> String` for ISO8601 → display format
+- [x] `formatUnixTimestamp(_ ts: Double) -> String` for ts_unix → display format
+- [x] Static DateFormatter reuse (M4 optimization)
+- [x] Create `Constants.swift`: default config path, default DB base path, notification category identifiers
 
 **Files:** `Utilities/TimeFormatting.swift`, `Utilities/Constants.swift`
 
 ### Task 24: Keyboard shortcuts and window management
-- [ ] Register `Cmd+K` → focus search (via .keyboardShortcut on SearchView)
+- [ ] Register `Cmd+K` → focus search
 - [ ] Register `Cmd+N` → new chat session
-- [ ] Register `Cmd+1` through `Cmd+5` → switch sidebar sections (Dashboard, Chat, Digests, Channels, Search)
-- [ ] Register `Cmd+R` → refresh current view (re-fetch from DB)
-- [ ] Remember window frame: use `@SceneStorage` or `WindowGroup(id:)` with frame restoration
+- [ ] Register `Cmd+1` through `Cmd+5` → switch sidebar sections
+- [ ] Register `Cmd+R` → refresh current view
+- [ ] Remember window frame
 - [ ] Set minimum window size 800x600, default 1200x800
-- [ ] Support multiple windows: each window has independent navigation state but shares DB connection
+- [ ] Support multiple windows
+
+**Status:** Not started
 
 **Files:** updates to `App/WatchtowerApp.swift`, `Views/Sidebar/SidebarView.swift`
 
 ### Task 25: Empty states and error handling
-- [ ] First-launch state: DB not found → "Welcome to Watchtower" onboarding view with setup instructions (install CLI, auth login, sync)
+- [x] First-launch state: DB not found → OnboardingView with setup instructions
+- [x] Reusable `ErrorView(title:message:action:)` component
 - [ ] No messages state: channel has 0 messages → "No messages synced for this channel"
-- [ ] No digests state: "No digests generated yet" with button to run `watchtower digest generate`
-- [ ] Daemon not running: banner "Sync daemon is not running. Start it to keep data fresh." with Start button
-- [ ] Claude not found: chat shows "Claude CLI not installed" with link to install docs
-- [ ] DB locked error: "Database is busy. The sync daemon may be performing a large write. Retrying..."
-- [ ] Network of error views: reusable `ErrorView(title:message:action:)` component
+- [ ] No digests state: "No digests generated yet" with button
+- [x] Daemon not running: SyncStatusBanner shows status with Start button
+- [ ] Claude not found: chat shows "Claude CLI not installed" with link
+- [ ] DB locked error: "Database is busy..." with retry
 
-**Files:** updates to all Views/, new `Views/Common/ErrorView.swift`
+**Files:** `Views/Common/ErrorView.swift`, various views
 
 ### Task 26: Dark mode, app icon, and visual polish
-- [ ] Verify all views render correctly in both light and dark mode (SwiftUI handles most)
-- [ ] Custom accent color: watchtower blue/teal in Assets.xcassets
-- [ ] Design app icon: tower/lighthouse motif, export 1024x1024 for Assets.xcassets
-- [ ] Message bubbles: subtle shadows, rounded corners, proper spacing
+- [x] SwiftUI handles light/dark mode automatically
+- [x] App icon: Assets.xcassets bundle created
+- [x] Message bubbles: rounded corners, role-based styling (user blue, assistant gray)
+- [x] Decision cards: orange left border, background highlight
+- [x] Streaming indicator: animated three dots
+- [ ] Custom accent color: watchtower blue/teal
 - [ ] Stats cards: SF Symbol colors, subtle gradients or tints
-- [ ] Decision cards: left border accent (yellow/orange), background highlight
 - [ ] Code blocks in Markdown: monospace font, dark background, rounded corners
-- [ ] Loading states: ProgressView spinners where data is loading
-- [ ] Animations: sidebar selection, sheet presentation, streaming text appearance
+- [ ] Loading states: ProgressView spinners
+- [ ] Animations: sidebar selection, sheet presentation
 
 **Files:** `Resources/Assets.xcassets`, visual updates across `Views/`
 
 ### Task 27: Performance testing and optimization
-- [ ] Test with large DB: 100K+ messages, 500+ channels, 1000+ users — verify app launches in < 2s
-- [ ] Profile message list scrolling: ensure smooth 60fps with 1000+ messages in LazyVStack
-- [ ] Profile FTS5 search: verify sub-200ms response for common queries on large DB
-- [ ] Verify concurrent DB access: daemon writing while app reads — no crashes, no UI freezes
-- [ ] Memory profiling: ensure no leaks in ValueObservation subscriptions or Process pipes
-- [ ] Optimize: add `.fetchCount()` before fetching large result sets, use LIMIT/OFFSET properly
-- [ ] Add index hints in queries if GRDB performance is poor on specific queries
+- [ ] Test with large DB: 100K+ messages, 500+ channels, 1000+ users
+- [ ] Profile message list scrolling
+- [ ] Profile FTS5 search
+- [ ] Verify concurrent DB access
+- [ ] Memory profiling
+- [ ] Optimize query patterns
+- [ ] Add index hints if needed
+
+**Status:** Not started
 
 **Files:** `Tests/` performance tests
 

@@ -98,6 +98,17 @@ func (o *Orchestrator) Run(ctx context.Context, opts SyncOptions) error {
 		}
 	} else {
 		o.logger.Printf("workspace: %s (%s) [cached]", ws.Name, ws.ID)
+		// Retry syncCurrentUser if it failed on a previous run (e.g. auth.test error).
+		// Required for action items pipeline which needs current_user_id.
+		if ws.CurrentUserID == "" {
+			o.syncCurrentUser(ctx)
+		}
+	}
+
+	// Sync custom emojis (fast, single API call)
+	if err := o.syncEmoji(ctx); err != nil {
+		o.logger.Printf("warning: emoji sync failed: %v", err)
+		// Non-fatal: continue with message sync
 	}
 
 	if opts.Full || len(opts.Channels) > 0 {
@@ -211,7 +222,26 @@ func (o *Orchestrator) ensureWorkspace(ctx context.Context) error {
 		return fmt.Errorf("upserting workspace: %w", err)
 	}
 	o.logger.Printf("workspace: %s (%s)", teamInfo.Name, teamInfo.ID)
+
+	// Identify the current user via auth.test
+	o.syncCurrentUser(ctx)
+
 	return nil
+}
+
+// syncCurrentUser calls auth.test to identify the token owner and stores
+// the user_id in the workspace record. Errors are logged but non-fatal.
+func (o *Orchestrator) syncCurrentUser(ctx context.Context) {
+	authResp, err := o.slackClient.AuthTest(ctx)
+	if err != nil {
+		o.logger.Printf("warning: auth.test failed: %v", err)
+		return
+	}
+	if err := o.db.SetCurrentUserID(authResp.UserID); err != nil {
+		o.logger.Printf("warning: saving current user: %v", err)
+		return
+	}
+	o.logger.Printf("current user: @%s (%s)", authResp.User, authResp.UserID)
 }
 
 // syncMetadata fetches workspace info, users, and channels from Slack and upserts into DB.
@@ -229,6 +259,9 @@ func (o *Orchestrator) syncMetadata(ctx context.Context, opts SyncOptions) error
 		return fmt.Errorf("upserting workspace: %w", err)
 	}
 	o.logger.Printf("workspace: %s (%s)", teamInfo.Name, teamInfo.ID)
+
+	// Identify the current user
+	o.syncCurrentUser(ctx)
 
 	// Users
 	o.logger.Println("fetching users from Slack API...")
@@ -333,6 +366,31 @@ func (o *Orchestrator) syncMetadata(ctx context.Context, opts SyncOptions) error
 // syncMessages is implemented in message_sync.go.
 
 // syncThreads is implemented in thread_sync.go.
+
+// syncEmoji fetches custom workspace emojis and stores them in the database.
+func (o *Orchestrator) syncEmoji(ctx context.Context) error {
+	o.logger.Println("syncing custom emojis")
+	emojiMap, err := o.slackClient.GetEmoji(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching emojis: %w", err)
+	}
+
+	emojis := make([]db.CustomEmoji, 0, len(emojiMap))
+	for name, value := range emojiMap {
+		e := db.CustomEmoji{Name: name, URL: value}
+		if target, ok := strings.CutPrefix(value, "alias:"); ok {
+			e.AliasFor = target
+		}
+		emojis = append(emojis, e)
+	}
+
+	if err := o.db.BulkUpsertCustomEmojis(emojis); err != nil {
+		return fmt.Errorf("saving emojis: %w", err)
+	}
+
+	o.logger.Printf("emojis: %d custom emojis synced", len(emojis))
+	return nil
+}
 
 // nonFatalSlackErrors are Slack API error codes that should be logged but not stop the sync.
 var nonFatalSlackErrors = map[string]bool{

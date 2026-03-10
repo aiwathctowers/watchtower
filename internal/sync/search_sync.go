@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // maxDiscoveryPages limits pagination to avoid excessive API calls.
-const maxDiscoveryPages = 50
+const maxDiscoveryPages = 200
 
 // searchChannelType maps a search result CtxChannel to our type string.
 func searchChannelType(ch slack.CtxChannel) string {
@@ -47,13 +48,13 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 
 	var searchAfter string
 	if lastDate != "" {
-		// Parse and subtract 1 day for overlap
+		// Parse and subtract 2 days for overlap to account for Slack search indexing delays
 		t, err := time.Parse("2006-01-02", lastDate)
 		if err != nil {
 			o.logger.Printf("warning: invalid search_last_date %q, using default", lastDate)
 			searchAfter = time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 		} else {
-			searchAfter = t.AddDate(0, 0, -1).Format("2006-01-02")
+			searchAfter = t.AddDate(0, 0, -2).Format("2006-01-02")
 		}
 	} else {
 		searchAfter = time.Now().AddDate(0, 0, -days).Format("2006-01-02")
@@ -67,6 +68,8 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 	totalMessages := 0
 	page := 1
 	completedAllPages := false
+
+	var oldestFetchedTS string // track oldest message timestamp across all pages
 
 	for page <= maxDiscoveryPages {
 		select {
@@ -92,6 +95,11 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 		// Convert search messages to db.Message and collect channel/user info
 		dbMsgs := make([]db.Message, 0, len(result.Messages))
 		for _, msg := range result.Messages {
+			// Track the oldest message timestamp (results are sorted newest-first)
+			if oldestFetchedTS == "" || msg.Timestamp < oldestFetchedTS {
+				oldestFetchedTS = msg.Timestamp
+			}
+
 			// Ensure channel
 			if msg.Channel.ID != "" && !seenChannels[msg.Channel.ID] {
 				seenChannels[msg.Channel.ID] = true
@@ -160,12 +168,32 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 		page++
 	}
 
-	// Only advance the watermark if we fetched all pages successfully.
-	// Advancing on partial failure could permanently skip messages.
+	// Log a warning when we hit the page limit without fetching everything
+	if !completedAllPages && page > maxDiscoveryPages {
+		o.logger.Printf("WARNING: search sync hit page limit (%d pages, %d messages fetched). "+
+			"Some older messages in the search window may have been missed. "+
+			"Consider running 'watchtower sync --full' to catch up.", maxDiscoveryPages, totalMessages)
+	}
+
+	// Advance the watermark based on what we fetched.
 	if completedAllPages {
+		// All pages fetched — safe to set watermark to today.
 		today := time.Now().Format("2006-01-02")
 		if err := o.db.SetSearchLastDate(today); err != nil {
 			return fmt.Errorf("saving search_last_date: %w", err)
+		}
+	} else if oldestFetchedTS != "" && page > maxDiscoveryPages {
+		// Hit the page limit — advance watermark to the oldest message we DID fetch.
+		// This prevents the next sync from re-scanning the same pages endlessly
+		// while messages beyond the page limit remain unreachable.
+		// The 2-day overlap on next sync provides a safety buffer.
+		ts, parseErr := parseSlackTS(oldestFetchedTS)
+		if parseErr == nil {
+			oldestDate := ts.Format("2006-01-02")
+			if err := o.db.SetSearchLastDate(oldestDate); err != nil {
+				return fmt.Errorf("saving search_last_date: %w", err)
+			}
+			o.logger.Printf("search sync: advanced watermark to %s (oldest fetched message)", oldestDate)
 		}
 	}
 
@@ -179,6 +207,19 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 	o.logger.Printf("search sync complete: %d channels, %d users, %d messages from %d pages",
 		len(seenChannels), len(seenUsers), totalMessages, page)
 	return nil
+}
+
+// parseSlackTS parses a Slack message timestamp ("1234567890.123456") into a time.Time.
+func parseSlackTS(ts string) (time.Time, error) {
+	parts := strings.SplitN(ts, ".", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return time.Time{}, fmt.Errorf("invalid slack timestamp: %q", ts)
+	}
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid slack timestamp: %q", ts)
+	}
+	return time.Unix(sec, 0), nil
 }
 
 // upsertSearchPage wraps a batch upsert in its own function scope so that

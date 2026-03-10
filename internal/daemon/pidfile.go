@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -99,16 +100,30 @@ func FindProcess(path string) (int, error) {
 	// Signal 0 checks process existence without sending a real signal.
 	if err := syscall.Kill(pid, 0); err != nil {
 		// Process is gone — clean up stale PID file.
-		os.Remove(path)
+		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "warning: removing stale pid file: %v\n", rmErr)
+		}
 		return 0, nil
 	}
 
-	// If we have a start timestamp, verify the process hasn't been replaced
-	// by an unrelated process that reused the same PID. If the PID file is
-	// older than 30 days, the daemon is almost certainly not the same process.
-	if !startTime.IsZero() && time.Since(startTime) > 30*24*time.Hour {
-		os.Remove(path)
-		return 0, nil
+	// Detect PID reuse: if we have a timestamp, use process name check.
+	// Without a timestamp (legacy format), fall back to a 30-day heuristic.
+	if !startTime.IsZero() {
+		if isReusedPID(pid) {
+			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "warning: removing stale pid file: %v\n", rmErr)
+			}
+			return 0, nil
+		}
+	} else {
+		// Legacy PID file without timestamp: use 30-day heuristic as fallback.
+		info, err := os.Stat(path)
+		if err == nil && time.Since(info.ModTime()) > 30*24*time.Hour {
+			if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "warning: removing stale pid file: %v\n", rmErr)
+			}
+			return 0, nil
+		}
 	}
 
 	return pid, nil
@@ -116,5 +131,20 @@ func FindProcess(path string) (int, error) {
 
 // RemovePID removes the PID file. It is a no-op if the file does not exist.
 func RemovePID(path string) {
-	os.Remove(path)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "warning: removing pid file: %v\n", err)
+	}
+}
+
+// isReusedPID checks whether the given PID belongs to a process that is NOT
+// a watchtower instance. Uses `ps` to read the process command name.
+// Returns true if the PID is definitely reused by an unrelated process.
+// Returns false (conservative) if we can't determine or if it is watchtower.
+func isReusedPID(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return false // can't determine — assume it's ours
+	}
+	comm := strings.TrimSpace(string(out))
+	return comm != "" && !strings.Contains(comm, "watchtower")
 }

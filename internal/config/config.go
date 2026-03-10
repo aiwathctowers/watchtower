@@ -36,6 +36,7 @@ type DigestConfig struct {
 	Model       string `mapstructure:"model"`
 	MinMessages int    `mapstructure:"min_messages"`
 	Language    string `mapstructure:"language"`
+	Workers     int    `mapstructure:"workers"`
 }
 
 type Config struct {
@@ -62,6 +63,8 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("digest.enabled", DefaultDigestEnabled)
 	v.SetDefault("digest.model", DefaultDigestModel)
 	v.SetDefault("digest.min_messages", DefaultDigestMinMsgs)
+	v.SetDefault("digest.language", DefaultDigestLang)
+	v.SetDefault("digest.workers", DefaultDigestWorkers)
 
 	// Config file
 	v.SetConfigFile(configPath)

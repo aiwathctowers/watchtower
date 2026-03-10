@@ -1,7 +1,11 @@
 package main
 
-import "watchtower/cmd"
+import (
+	"os"
+
+	"watchtower/cmd"
+)
 
 func main() {
-	cmd.Execute()
+	os.Exit(cmd.Execute())
 }

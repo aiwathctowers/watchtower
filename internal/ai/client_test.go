@@ -30,7 +30,7 @@ func TestNewClient_DefaultClaudeCmd(t *testing.T) {
 }
 
 func TestBuildArgs(t *testing.T) {
-	c := NewClient("claude-sonnet-4-20250514", "")
+	c := NewClient("claude-sonnet-4-6", "")
 	args := c.buildArgs("system prompt", "user message", "text", "")
 
 	assert.Contains(t, args, "-p")
@@ -40,7 +40,7 @@ func TestBuildArgs(t *testing.T) {
 	assert.Contains(t, args, "--output-format")
 	assert.Contains(t, args, "text")
 	assert.Contains(t, args, "--model")
-	assert.Contains(t, args, "claude-sonnet-4-20250514")
+	assert.Contains(t, args, "claude-sonnet-4-6")
 	assert.Contains(t, args, "--allowedTools")
 	assert.Contains(t, args, "mcp__sqlite__*,Bash(sqlite3*)")
 	assert.Contains(t, args, "--disallowedTools")
@@ -49,7 +49,7 @@ func TestBuildArgs(t *testing.T) {
 }
 
 func TestBuildArgs_WithDBPath(t *testing.T) {
-	c := NewClient("claude-sonnet-4-20250514", "/tmp/test.db")
+	c := NewClient("claude-sonnet-4-6", "/tmp/test.db")
 	args := c.buildArgs("system prompt", "user message", "text", "")
 
 	assert.Contains(t, args, "--mcp-config")
@@ -64,14 +64,14 @@ func TestBuildArgs_WithDBPath(t *testing.T) {
 }
 
 func TestBuildArgs_WithoutDBPath(t *testing.T) {
-	c := NewClient("claude-sonnet-4-20250514", "")
+	c := NewClient("claude-sonnet-4-6", "")
 	args := c.buildArgs("system prompt", "user message", "text", "")
 
 	assert.NotContains(t, args, "--mcp-config")
 }
 
 func TestBuildArgs_WithSessionID(t *testing.T) {
-	c := NewClient("claude-sonnet-4-20250514", "")
+	c := NewClient("claude-sonnet-4-6", "")
 	args := c.buildArgs("system prompt", "user message", "stream-json", "session-123")
 
 	assert.Contains(t, args, "--resume")

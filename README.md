@@ -153,7 +153,7 @@ workspaces:
     slack_token: "xoxp-..."       # or env: WATCHTOWER_SLACK_TOKEN
 ai:
   api_key: ""                     # or env: ANTHROPIC_API_KEY
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
 sync:
   workers: 5
   initial_history_days: 30

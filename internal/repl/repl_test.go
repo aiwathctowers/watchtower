@@ -24,7 +24,7 @@ func testDeps(t *testing.T) Deps {
 			"test-workspace": {SlackToken: "xoxp-test"},
 		},
 		AI: config.AIConfig{
-			Model:         "claude-sonnet-4-20250514",
+			Model:         "claude-sonnet-4-6",
 			ContextBudget: 150000,
 		},
 		Sync: config.SyncConfig{

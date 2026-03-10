@@ -57,7 +57,7 @@ workspaces:
     slack_token: "xoxp-..."       # or env: WATCHTOWER_SLACK_TOKEN
 ai:
   api_key: ""                     # or env: ANTHROPIC_API_KEY
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
   max_tokens: 4096
   context_budget: 150000
 sync:

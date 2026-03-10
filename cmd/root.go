@@ -25,11 +25,13 @@ var rootCmd = &cobra.Command{
 	RunE:  runREPL,
 }
 
-func Execute() {
+// Execute runs the root command and returns the exit code.
+func Execute() int {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func init() {

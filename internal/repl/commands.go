@@ -15,6 +15,7 @@ import (
 	"watchtower/internal/sync"
 
 	"github.com/dustin/go-humanize"
+	"golang.org/x/term"
 )
 
 func (r *REPL) handleSlashCommand(input string) {
@@ -202,7 +203,10 @@ func (r *REPL) runCatchup() {
 		r.setStreamCancel(nil)
 	}()
 
-	fmt.Print(dimStyle.Render("Thinking..."))
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	if isTTY {
+		fmt.Print(dimStyle.Render("Thinking..."))
+	}
 
 	aiClient := ai.NewClient(cfg.AI.Model, r.deps.DBPath)
 	textCh, errCh, _ := aiClient.Query(streamCtx, systemPrompt, userMessage, "")
@@ -213,7 +217,9 @@ func (r *REPL) runCatchup() {
 	}
 
 	// Clear "Thinking..." line.
-	fmt.Print("\r\033[K")
+	if isTTY {
+		fmt.Print("\r\033[K")
+	}
 
 	if err := <-errCh; err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))

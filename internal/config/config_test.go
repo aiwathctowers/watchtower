@@ -24,7 +24,7 @@ workspaces:
   my-company:
     slack_token: "xoxp-test-token"
 ai:
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
   context_budget: 100000
 sync:
   workers: 10
@@ -46,7 +46,7 @@ watch:
 
 	assert.Equal(t, "my-company", cfg.ActiveWorkspace)
 	assert.Equal(t, "xoxp-test-token", cfg.Workspaces["my-company"].SlackToken)
-	assert.Equal(t, "claude-sonnet-4-20250514", cfg.AI.Model)
+	assert.Equal(t, "claude-sonnet-4-6", cfg.AI.Model)
 	assert.Equal(t, 100000, cfg.AI.ContextBudget)
 	assert.Equal(t, 10, cfg.Sync.Workers)
 	assert.Equal(t, 60, cfg.Sync.InitialHistoryDays)
@@ -177,11 +177,11 @@ workspaces:
 func TestLoad_EnvVarOverride_AIModel(t *testing.T) {
 	path := writeTestConfig(t, "")
 
-	t.Setenv("WATCHTOWER_AI_MODEL", "claude-opus-4-20250514")
+	t.Setenv("WATCHTOWER_AI_MODEL", "claude-opus-4-6")
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, "claude-opus-4-20250514", cfg.AI.Model)
+	assert.Equal(t, "claude-opus-4-6", cfg.AI.Model)
 }
 
 func TestLoad_EnvVarOverride_Workers(t *testing.T) {

@@ -72,7 +72,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 4, v)
+	assert.Equal(t, 16, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -107,7 +107,8 @@ func TestAllTablesExist(t *testing.T) {
 	expectedTables := []string{
 		"workspace", "users", "channels", "messages",
 		"reactions", "files", "sync_state", "watch_list", "user_checkpoints",
-		"digests",
+		"digests", "decision_reads", "user_analyses", "period_summaries",
+		"custom_emojis", "action_items", "action_item_history",
 	}
 
 	for _, table := range expectedTables {

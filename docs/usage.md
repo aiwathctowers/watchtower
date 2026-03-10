@@ -190,7 +190,7 @@ watchtower ask "what's new?" --channel general
 watchtower ask "any incidents?" --since 4h
 
 # Use a different model
-watchtower ask "summarize today" --model claude-sonnet-4-20250514
+watchtower ask "summarize today" --model claude-sonnet-4-6
 
 # Wait for full response (no streaming)
 watchtower ask "summarize today" --no-stream
@@ -345,7 +345,7 @@ workspaces:
 # AI settings
 ai:
   api_key: "sk-ant-..."              # Anthropic API key
-  model: "claude-sonnet-4-20250514"  # Claude model
+  model: "claude-sonnet-4-6"  # Claude model
   max_tokens: 4096                   # Max response tokens
   context_budget: 150000             # Context window budget (tokens)
 
@@ -374,7 +374,7 @@ watch:
 Use dot-notation for nested keys:
 
 ```bash
-watchtower config set ai.model claude-sonnet-4-20250514
+watchtower config set ai.model claude-sonnet-4-6
 watchtower config set sync.workers 10
 watchtower config set sync.initial_history_days 60
 watchtower config set sync.sync_threads false

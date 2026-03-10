@@ -80,6 +80,32 @@ func (c *Client) doRequest(ctx context.Context, tier int, fn func() error) error
 	return nil // unreachable
 }
 
+// AuthTestResponse holds the result of an auth.test API call.
+type AuthTestResponse struct {
+	UserID string
+	User   string // username
+	TeamID string
+}
+
+// AuthTest calls the auth.test API to identify the token owner. (Tier 2)
+func (c *Client) AuthTest(ctx context.Context) (*AuthTestResponse, error) {
+	var resp *slack.AuthTestResponse
+	err := c.doRequest(ctx, Tier2, func() error {
+		c.logf("slack API: auth.test")
+		var err error
+		resp, err = c.api.AuthTestContext(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &AuthTestResponse{
+		UserID: resp.UserID,
+		User:   resp.User,
+		TeamID: resp.TeamID,
+	}, nil
+}
+
 // GetTeamInfo returns workspace information. (Tier 2)
 func (c *Client) GetTeamInfo(ctx context.Context) (*slack.TeamInfo, error) {
 	var info *slack.TeamInfo
@@ -294,6 +320,19 @@ func (c *Client) GetUserInfo(ctx context.Context, userID string) (*slack.User, e
 		return err
 	})
 	return user, err
+}
+
+// GetEmoji fetches all custom emojis in the workspace. (Tier 2)
+// Returns a map of emoji name → URL (or "alias:other_name" for aliases).
+func (c *Client) GetEmoji(ctx context.Context) (map[string]string, error) {
+	var emojis map[string]string
+	err := c.doRequest(ctx, Tier2, func() error {
+		c.logf("slack API: emoji.list")
+		var err error
+		emojis, err = c.api.GetEmojiContext(ctx)
+		return err
+	})
+	return emojis, err
 }
 
 // APIStats returns per-tier request counts and total 429 retry count.

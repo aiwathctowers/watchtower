@@ -151,16 +151,9 @@ func (o *Orchestrator) buildChannelQueue(opts SyncOptions) ([]SyncTask, error) {
 			continue
 		}
 
-		// Skip channels that already completed initial sync with 0 messages
-		// (no activity in the history window, no point re-checking unless --full)
-		if !opts.Full && filterSet == nil {
-			if st := syncStates[ch.ID]; st != nil && st.IsInitialSyncComplete && st.MessagesSynced == 0 {
-				continue
-			}
-		}
-
 		// For incremental sync: only sync channels found active by discovery
-		// or on the watch list. Skips ~80% of API calls for inactive channels.
+		// or on the watch list. Skips API calls for inactive channels.
+		// Channels with no sync state (never synced) are always included.
 		if !opts.Full && filterSet == nil && len(o.discoveredChannelIDs) > 0 {
 			if st := syncStates[ch.ID]; st != nil && st.IsInitialSyncComplete {
 				_, isDiscovered := o.discoveredChannelIDs[ch.ID]

@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS workspace (
     name              TEXT NOT NULL,
     domain            TEXT NOT NULL DEFAULT '',
     synced_at         TEXT,              -- ISO8601 timestamp of last sync
-    search_last_date  TEXT NOT NULL DEFAULT ''  -- YYYY-MM-DD of last search sync
+    search_last_date  TEXT NOT NULL DEFAULT '',  -- YYYY-MM-DD of last search sync
+    current_user_id   TEXT NOT NULL DEFAULT ''   -- Slack user_id of the token owner (from auth.test)
 );
 
 -- Users
@@ -163,8 +164,130 @@ CREATE TABLE IF NOT EXISTS digests (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd      REAL NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    read_at       TEXT,  -- NULL = unread, ISO8601 = when read (local-only)
     UNIQUE(channel_id, type, period_from, period_to)
 );
 CREATE INDEX IF NOT EXISTS idx_digests_channel ON digests(channel_id);
 CREATE INDEX IF NOT EXISTS idx_digests_type ON digests(type);
 CREATE INDEX IF NOT EXISTS idx_digests_period ON digests(period_from, period_to);
+
+-- Per-decision read tracking (local-only, Desktop app)
+CREATE TABLE IF NOT EXISTS decision_reads (
+    digest_id    INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+    decision_idx INTEGER NOT NULL,  -- index in the decisions JSON array
+    read_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (digest_id, decision_idx)
+);
+
+-- User communication analyses (people analytics with sliding window)
+CREATE TABLE IF NOT EXISTS user_analyses (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL,
+    period_from         REAL NOT NULL,             -- Unix timestamp (window start)
+    period_to           REAL NOT NULL,             -- Unix timestamp (window end)
+    -- Computed stats (pure SQL, no AI)
+    message_count       INTEGER NOT NULL DEFAULT 0,
+    channels_active     INTEGER NOT NULL DEFAULT 0,
+    threads_initiated   INTEGER NOT NULL DEFAULT 0,
+    threads_replied     INTEGER NOT NULL DEFAULT 0,
+    avg_message_length  REAL NOT NULL DEFAULT 0,
+    active_hours_json   TEXT NOT NULL DEFAULT '{}',  -- {"9":12,"10":8,...}
+    volume_change_pct   REAL NOT NULL DEFAULT 0,     -- vs previous window
+    -- AI-generated analysis
+    summary             TEXT NOT NULL DEFAULT '',
+    communication_style TEXT NOT NULL DEFAULT '',
+    decision_role       TEXT NOT NULL DEFAULT '',     -- "driver","approver","observer",...
+    red_flags           TEXT NOT NULL DEFAULT '[]',   -- JSON array
+    highlights          TEXT NOT NULL DEFAULT '[]',   -- JSON array (positive contributions)
+    style_details       TEXT NOT NULL DEFAULT '',     -- detailed communication style evaluation
+    recommendations     TEXT NOT NULL DEFAULT '[]',   -- JSON array of improvement suggestions
+    concerns            TEXT NOT NULL DEFAULT '[]',   -- JSON array of specific issues with examples
+    accomplishments     TEXT NOT NULL DEFAULT '[]',   -- JSON array of what was delivered/completed
+    -- Metadata
+    model               TEXT NOT NULL DEFAULT '',
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(user_id, period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_user_analyses_user ON user_analyses(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_analyses_period ON user_analyses(period_from, period_to);
+
+-- Period summaries (cross-user team summary for a time window)
+CREATE TABLE IF NOT EXISTS period_summaries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_from   REAL NOT NULL,
+    period_to     REAL NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',
+    attention     TEXT NOT NULL DEFAULT '[]',  -- JSON array of things to pay attention to
+    model         TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_period_summaries_period ON period_summaries(period_from, period_to);
+
+-- Custom workspace emojis (synced via emoji.list API)
+CREATE TABLE IF NOT EXISTS custom_emojis (
+    name       TEXT PRIMARY KEY,       -- Emoji shortcode (without colons)
+    url        TEXT NOT NULL,           -- URL to emoji image (or "alias:other_name")
+    alias_for  TEXT NOT NULL DEFAULT '', -- If this is an alias, the target emoji name
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- Action items extracted by AI for the current user (cross-channel)
+CREATE TABLE IF NOT EXISTS action_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id          TEXT NOT NULL,
+    assignee_user_id    TEXT NOT NULL,           -- users.id of the assigned user
+    assignee_raw        TEXT NOT NULL DEFAULT '', -- how AI wrote it ("@ivan", "Иван")
+    text                TEXT NOT NULL,
+    context             TEXT NOT NULL DEFAULT '', -- brief context from the conversation
+    source_message_ts   TEXT NOT NULL DEFAULT '', -- Slack timestamp of source message
+    source_channel_name TEXT NOT NULL DEFAULT '', -- channel name for display
+    status              TEXT NOT NULL DEFAULT 'inbox' CHECK(status IN ('inbox','active','done','dismissed','snoozed')),
+    priority            TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
+    due_date            REAL,                    -- Unix timestamp if AI extracted a deadline
+    period_from         REAL NOT NULL,           -- analysis window start
+    period_to           REAL NOT NULL,           -- analysis window end
+    model               TEXT NOT NULL DEFAULT '',
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    completed_at        TEXT,
+    has_updates         INTEGER NOT NULL DEFAULT 0,  -- 1 if source thread has new activity
+    last_checked_ts     TEXT NOT NULL DEFAULT '',     -- Slack ts of last checked reply
+    snooze_until        REAL,                        -- Unix timestamp when snooze expires
+    pre_snooze_status   TEXT NOT NULL DEFAULT '',     -- status to restore after snooze
+    participants        TEXT NOT NULL DEFAULT '',     -- JSON: participants with stances
+    source_refs         TEXT NOT NULL DEFAULT '',     -- JSON: key source message references
+    requester_name      TEXT NOT NULL DEFAULT '',     -- who made the request (@username)
+    requester_user_id   TEXT NOT NULL DEFAULT '',     -- Slack user_id of the requester
+    category            TEXT NOT NULL DEFAULT '',     -- code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
+    blocking            TEXT NOT NULL DEFAULT '',     -- who/what is blocked if not done
+    tags                TEXT NOT NULL DEFAULT '',     -- JSON array of project/topic tags
+    decision_summary    TEXT NOT NULL DEFAULT '',     -- how the group arrived at the decision
+    decision_options    TEXT NOT NULL DEFAULT '',     -- JSON array of options if decision pending
+    related_digest_ids  TEXT NOT NULL DEFAULT '',     -- JSON array of related digest IDs
+    sub_items           TEXT NOT NULL DEFAULT ''      -- JSON array of sub-tasks with statuses
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_items_dedup ON action_items(channel_id, assignee_user_id, source_message_ts, text);
+CREATE INDEX IF NOT EXISTS idx_action_items_assignee ON action_items(assignee_user_id);
+CREATE INDEX IF NOT EXISTS idx_action_items_status ON action_items(status);
+CREATE INDEX IF NOT EXISTS idx_action_items_period ON action_items(period_from, period_to);
+
+-- Action item change history
+CREATE TABLE IF NOT EXISTS action_item_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_item_id  INTEGER NOT NULL REFERENCES action_items(id) ON DELETE CASCADE,
+    event           TEXT NOT NULL,       -- 'created', 'priority_changed', 'context_updated', 'status_changed', 'due_date_changed', 'reopened'
+    field           TEXT NOT NULL DEFAULT '',
+    old_value       TEXT NOT NULL DEFAULT '',
+    new_value       TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_action_item_history_item ON action_item_history(action_item_id);
