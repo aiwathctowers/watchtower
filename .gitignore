@@ -1,5 +1,10 @@
 # Build output
 watchtower
+build/
+WatchtowerDesktop/.build/
+
+# macOS
+.DS_Store
 
 # IDE
 .idea/

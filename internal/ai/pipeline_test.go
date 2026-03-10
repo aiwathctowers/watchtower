@@ -335,7 +335,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\n", strings.ReplaceAll(mockResponseText, "'", "'\\''"))
 	require.NoError(t, os.WriteFile(mockPath, []byte(script), 0o755))
 
-	client := NewClient("claude-sonnet-4-20250514", "")
+	client := NewClient("claude-sonnet-4-6", "")
 	client.claudeCmd = mockPath
 
 	response, err := client.QuerySync(context.Background(), systemPrompt, userMessage, "")
@@ -377,7 +377,7 @@ func TestIntegrationEndToEndStreaming(t *testing.T) {
 		escapedText, escapedText)
 	require.NoError(t, os.WriteFile(mockPath, []byte(script), 0o755))
 
-	client := NewClient("claude-sonnet-4-20250514", "")
+	client := NewClient("claude-sonnet-4-6", "")
 	client.claudeCmd = mockPath
 
 	textCh, errCh, _ := client.Query(context.Background(), systemPrompt, userMessage, "")

@@ -147,7 +147,7 @@ func TestRunChannelDigests(t *testing.T) {
 	gen := &mockGenerator{response: mockResp}
 
 	p := New(database, cfg, gen, testLogger())
-	n, err := p.RunChannelDigests(context.Background())
+	n, _, err := p.RunChannelDigests(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
@@ -179,7 +179,7 @@ func TestRunChannelDigests_BelowMinMessages(t *testing.T) {
 
 	gen := &mockGenerator{response: `{}`}
 	p := New(database, cfg, gen, testLogger())
-	n, err := p.RunChannelDigests(context.Background())
+	n, _, err := p.RunChannelDigests(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
@@ -193,7 +193,7 @@ func TestRunChannelDigests_Disabled(t *testing.T) {
 
 	gen := &mockGenerator{response: `{}`}
 	p := New(database, cfg, gen, testLogger())
-	n, err := p.Run(context.Background())
+	n, _, err := p.Run(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
@@ -206,7 +206,7 @@ func TestRunChannelDigests_NoNewMessages(t *testing.T) {
 
 	gen := &mockGenerator{response: `{}`}
 	p := New(database, cfg, gen, testLogger())
-	n, err := p.RunChannelDigests(context.Background())
+	n, _, err := p.RunChannelDigests(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
@@ -228,9 +228,10 @@ func TestRunChannelDigests_AIError(t *testing.T) {
 
 	gen := &mockGenerator{err: fmt.Errorf("AI unavailable")}
 	p := New(database, cfg, gen, testLogger())
-	n, err := p.RunChannelDigests(context.Background())
+	n, _, err := p.RunChannelDigests(context.Background())
 
-	require.NoError(t, err) // pipeline continues past individual errors
+	require.Error(t, err) // all channels failed → returns error
+	assert.Contains(t, err.Error(), "AI unavailable")
 	assert.Equal(t, 0, n)
 	assert.Equal(t, 1, gen.calls)
 }
@@ -242,17 +243,23 @@ func TestRunDailyRollup(t *testing.T) {
 	seedChannel(t, database, "C1", "frontend")
 	seedChannel(t, database, "C2", "backend")
 
+	// Use dayStart so digests are always "today" regardless of UTC hour
+	now := time.Now().UTC()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	fromUnix := float64(dayStart.Unix())
+	toUnix := float64(now.Unix())
+
 	// Pre-populate channel digests for today
 	_, err := database.UpsertDigest(db.Digest{
 		ChannelID: "C1", Type: "channel",
-		PeriodFrom: float64(time.Now().Unix() - 3600), PeriodTo: float64(time.Now().Unix()),
+		PeriodFrom: fromUnix, PeriodTo: toUnix,
 		Summary: "Frontend team fixed CSS bugs", MessageCount: 15, Model: "haiku",
 	})
 	require.NoError(t, err)
 
 	_, err = database.UpsertDigest(db.Digest{
 		ChannelID: "C2", Type: "channel",
-		PeriodFrom: float64(time.Now().Unix() - 3600), PeriodTo: float64(time.Now().Unix()),
+		PeriodFrom: fromUnix, PeriodTo: toUnix,
 		Summary: "Backend team deployed API v2", MessageCount: 20, Model: "haiku",
 	})
 	require.NoError(t, err)

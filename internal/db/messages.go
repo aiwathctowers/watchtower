@@ -16,11 +16,12 @@ const (
 
 // MessageOpts provides options for querying messages.
 type MessageOpts struct {
-	ChannelID string
-	UserID    string
-	FromUnix  float64
-	ToUnix    float64
-	Limit     int
+	ChannelID  string
+	UserID     string
+	FromUnix   float64
+	ToUnix     float64
+	Limit      int
+	ExcludeDMs bool // exclude dm and group_dm channels
 }
 
 // UpsertMessage inserts or updates a message.
@@ -89,31 +90,45 @@ func (db *DB) UpsertMessageBatch(tx *sql.Tx, msgs []Message) (int, error) {
 
 // GetMessages returns messages matching the given options.
 func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
-	query := `SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json FROM messages`
+	fromTable := "messages"
+	if opts.ExcludeDMs {
+		fromTable = "messages m JOIN channels c ON c.id = m.channel_id"
+	}
+	query := `SELECT ` + msgColumns(opts.ExcludeDMs) + ` FROM ` + fromTable
 	var conditions []string
 	var args []any
 
+	col := func(name string) string {
+		if opts.ExcludeDMs {
+			return "m." + name
+		}
+		return name
+	}
+
+	if opts.ExcludeDMs {
+		conditions = append(conditions, "c.type NOT IN ('dm', 'group_dm')")
+	}
 	if opts.ChannelID != "" {
-		conditions = append(conditions, "channel_id = ?")
+		conditions = append(conditions, col("channel_id")+" = ?")
 		args = append(args, opts.ChannelID)
 	}
 	if opts.UserID != "" {
-		conditions = append(conditions, "user_id = ?")
+		conditions = append(conditions, col("user_id")+" = ?")
 		args = append(args, opts.UserID)
 	}
 	if opts.FromUnix > 0 {
-		conditions = append(conditions, "ts_unix >= ?")
+		conditions = append(conditions, col("ts_unix")+" >= ?")
 		args = append(args, opts.FromUnix)
 	}
 	if opts.ToUnix > 0 {
-		conditions = append(conditions, "ts_unix <= ?")
+		conditions = append(conditions, col("ts_unix")+" <= ?")
 		args = append(args, opts.ToUnix)
 	}
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += " ORDER BY ts_unix DESC"
+	query += " ORDER BY " + col("ts_unix") + " DESC"
 
 	limit := opts.Limit
 	if limit <= 0 {
@@ -129,6 +144,15 @@ func (db *DB) GetMessages(opts MessageOpts) ([]Message, error) {
 	defer rows.Close()
 
 	return scanMessages(rows)
+}
+
+const msgSelectCols = `channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json`
+
+func msgColumns(prefixed bool) string {
+	if !prefixed {
+		return msgSelectCols
+	}
+	return `m.channel_id, m.ts, m.user_id, m.text, m.thread_ts, m.reply_count, m.is_edited, m.is_deleted, m.subtype, m.permalink, m.ts_unix, m.raw_json`
 }
 
 // GetMessagesByTimeRange returns messages in a channel within a Unix timestamp range.
@@ -328,6 +352,26 @@ func (db *DB) GetMessageNear(channelID string, tsUnix float64) (*Message, error)
 		return nil, fmt.Errorf("getting message near ts %f in %s: %w", tsUnix, channelID, err)
 	}
 	return &msg, nil
+}
+
+// GetThreadRepliesAfterTS returns thread replies in a channel where
+// thread_ts matches the given parent TS and the message TS is strictly
+// greater than afterTS. Results are ordered oldest-first, capped at 200.
+func (db *DB) GetThreadRepliesAfterTS(channelID, threadTS, afterTS string) ([]Message, error) {
+	rows, err := db.Query(`
+		SELECT channel_id, ts, user_id, text, thread_ts, reply_count, is_edited, is_deleted, subtype, permalink, ts_unix, raw_json
+		FROM messages
+		WHERE channel_id = ? AND thread_ts = ? AND ts > ?
+		ORDER BY ts_unix ASC
+		LIMIT 200`,
+		channelID, threadTS, afterTS,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying thread replies after ts: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
 }
 
 func scanMessages(rows *sql.Rows) ([]Message, error) {

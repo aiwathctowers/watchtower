@@ -19,9 +19,10 @@ import (
 )
 
 var (
-	digestFlagChannel  string
-	digestFlagDays     int
-	digestGenFlagSince int
+	digestFlagChannel        string
+	digestFlagDays           int
+	digestGenFlagSince       int
+	digestGenFlagProgressJSON bool
 )
 
 var digestCmd = &cobra.Command{
@@ -67,6 +68,7 @@ func init() {
 	digestCmd.Flags().StringVar(&digestFlagChannel, "channel", "", "show digest for a specific channel")
 	digestCmd.Flags().IntVar(&digestFlagDays, "days", 1, "number of days to show")
 	digestGenerateCmd.Flags().IntVar(&digestGenFlagSince, "since", 1, "generate digests for the last N days")
+	digestGenerateCmd.Flags().BoolVar(&digestGenFlagProgressJSON, "progress-json", false, "output progress as JSON lines")
 	digestStatsCmd.Flags().IntVar(&digestStatsFlagDays, "days", 7, "number of days to look back")
 	digestSummaryCmd.Flags().StringVar(&digestSummaryFlagFrom, "from", "", "start date (YYYY-MM-DD)")
 	digestSummaryCmd.Flags().StringVar(&digestSummaryFlagTo, "to", "", "end date (YYYY-MM-DD), default: today")
@@ -97,6 +99,9 @@ func runDigest(cmd *cobra.Command, args []string) error {
 	days := digestFlagDays
 	if days <= 0 {
 		days = 1
+	}
+	if days > 3650 {
+		days = 3650 // clamp to prevent time.Duration overflow
 	}
 	sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
@@ -240,7 +245,7 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	}
 	sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
-	logger := log.New(os.Stderr, "", log.LstdFlags)
+	logger := log.New(io.Discard, "", 0)
 	if flagVerbose {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
@@ -249,17 +254,58 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	pipe := digest.New(database, cfg, gen, logger)
 	pipe.SinceOverride = sinceUnix
 
-	fmt.Fprintf(out, "Generating digests for the last %d day(s) using model %s...\n", days, cfg.Digest.Model)
+	if digestGenFlagProgressJSON {
+		type pj struct {
+			Pipeline     string  `json:"pipeline"`
+			Done         int     `json:"done"`
+			Total        int     `json:"total"`
+			Status       string  `json:"status,omitempty"`
+			InputTokens  int     `json:"input_tokens"`
+			OutputTokens int     `json:"output_tokens"`
+			CostUSD      float64 `json:"cost_usd"`
+			Error        string  `json:"error,omitempty"`
+			Finished     bool    `json:"finished"`
+			ItemsFound   int     `json:"items_found"`
+		}
+		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
 
-	n, err := pipe.Run(cmd.Context())
+		pipe.OnProgress = func(done, total int, status string) {
+			emit(pj{Pipeline: "digest", Done: done, Total: total, Status: status})
+		}
+		n, usage, err := pipe.Run(cmd.Context())
+		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n}
+		if usage != nil {
+			final.InputTokens = usage.InputTokens
+			final.OutputTokens = usage.OutputTokens
+			final.CostUSD = usage.CostUSD
+		}
+		if err != nil {
+			final.Error = err.Error()
+		}
+		emit(final)
+		return nil
+	}
+
+	spinner := ui.NewSpinner(out, fmt.Sprintf("Generating digests for the last %d day(s) using %s...", days, cfg.Digest.Model))
+
+	n, usage, err := pipe.Run(cmd.Context())
 	if err != nil {
+		spinner.Stop("failed")
 		return fmt.Errorf("digest pipeline: %w", err)
 	}
 
 	if n == 0 {
-		fmt.Fprintln(out, "No channels with enough messages to generate digests.")
+		spinner.Stop("No channels with enough messages to generate digests")
 	} else {
-		fmt.Fprintf(out, "Generated %d channel digest(s).\n", n)
+		msg := fmt.Sprintf("Generated %d channel digest(s).", n)
+		if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+			msg = fmt.Sprintf("Generated %d channel digest(s). Tokens: %s in + %s out | $%.4f",
+				n,
+				humanize.Comma(int64(usage.InputTokens)),
+				humanize.Comma(int64(usage.OutputTokens)),
+				usage.CostUSD)
+		}
+		spinner.Stop(msg)
 		fmt.Fprintln(out, "Run 'watchtower digest' to view them.")
 	}
 
@@ -379,8 +425,8 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return fmt.Errorf("invalid --to date: %w", err)
 			}
-			// Include the full end day
-			to = to.Add(24*time.Hour - time.Second)
+			// Include the full end day (exclusive upper bound via next midnight)
+			to = to.AddDate(0, 0, 1).Add(-time.Millisecond)
 		} else {
 			to = now
 		}

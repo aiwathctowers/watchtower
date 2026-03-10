@@ -83,13 +83,16 @@ Rules:
 - Use markdown for readability
 - Highlight: decisions, action items, unanswered questions, unusual activity`
 
-var safePromptRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+var (
+	safeNameRe   = regexp.MustCompile(`[^\p{L}\p{N} _.\-]`) // workspace name: allows spaces and unicode
+	safeDomainRe = regexp.MustCompile(`[^a-zA-Z0-9_\-]`)    // domain: strict ASCII for URL context
+)
 
 // BuildSystemPrompt generates the system prompt with database access context.
 func BuildSystemPrompt(workspaceName, domain, dbPath, schema string) string {
 	// Sanitize workspace name and domain to prevent prompt injection
-	safeName := safePromptRe.ReplaceAllString(workspaceName, "")
-	safeDomain := safePromptRe.ReplaceAllString(domain, "")
+	safeName := safeNameRe.ReplaceAllString(workspaceName, "")
+	safeDomain := safeDomainRe.ReplaceAllString(domain, "")
 	if safeName == "" {
 		safeName = "unknown"
 	}
@@ -97,19 +100,16 @@ func BuildSystemPrompt(workspaceName, domain, dbPath, schema string) string {
 		safeDomain = "unknown"
 	}
 
-	// Sanitize dbPath for both prompt injection and shell safety.
-	// The path appears in a shell command template in the prompt, so we must
-	// escape shell metacharacters in addition to prompt delimiters.
+	// Sanitize dbPath for prompt injection and shell safety.
+	// The path appears inside double quotes in a shell command template in the
+	// prompt, so we only need to escape the characters that are special inside
+	// double quotes: ", \, $, `, and strip newlines.
 	safeDBPath := strings.NewReplacer(
 		"\n", " ", "\r", " ",
 		`"`, `\"`,
-		"`", "",
-		"$", "",
-		";", "",
-		"|", "",
-		"&", "",
-		"(", "",
-		")", "",
+		`\`, `\\`,
+		"`", "\\`",
+		"$", "\\$",
 	).Replace(dbPath)
 
 	now := time.Now().UTC().Format("2006-01-02 15:04 UTC")

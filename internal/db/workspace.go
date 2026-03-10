@@ -27,8 +27,8 @@ func (db *DB) UpsertWorkspace(ws Workspace) error {
 func (db *DB) GetWorkspace() (*Workspace, error) {
 	var ws Workspace
 	err := db.QueryRow(`
-		SELECT id, name, domain, synced_at FROM workspace LIMIT 1`,
-	).Scan(&ws.ID, &ws.Name, &ws.Domain, &ws.SyncedAt)
+		SELECT id, name, domain, synced_at, current_user_id FROM workspace LIMIT 1`,
+	).Scan(&ws.ID, &ws.Name, &ws.Domain, &ws.SyncedAt, &ws.CurrentUserID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -49,6 +49,32 @@ func (db *DB) GetSearchLastDate() (string, error) {
 		return "", fmt.Errorf("getting search_last_date: %w", err)
 	}
 	return date, nil
+}
+
+// SetCurrentUserID updates the current_user_id for the workspace.
+func (db *DB) SetCurrentUserID(userID string) error {
+	res, err := db.Exec(`UPDATE workspace SET current_user_id = ? WHERE id = (SELECT id FROM workspace LIMIT 1)`, userID)
+	if err != nil {
+		return fmt.Errorf("setting current_user_id: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("setting current_user_id: no workspace row exists")
+	}
+	return nil
+}
+
+// GetCurrentUserID returns the current_user_id for the workspace.
+func (db *DB) GetCurrentUserID() (string, error) {
+	var userID string
+	err := db.QueryRow(`SELECT current_user_id FROM workspace LIMIT 1`).Scan(&userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("getting current_user_id: %w", err)
+	}
+	return userID, nil
 }
 
 // SetSearchLastDate updates the search_last_date for the workspace.

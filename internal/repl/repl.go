@@ -15,6 +15,7 @@ import (
 	"watchtower/internal/db"
 
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 )
 
 // Deps holds the shared dependencies for the REPL session.
@@ -58,8 +59,12 @@ var (
 	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
-// Run starts the REPL.
+// Run starts the REPL. Requires an interactive terminal.
 func Run(deps Deps) error {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("watchtower requires an interactive terminal; use a subcommand (e.g., watchtower sync)")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -72,7 +77,10 @@ func Run(deps Deps) error {
 	// Ctrl+C: cancel stream if streaming, cancel REPL context if idle.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh) // unblock the goroutine's for-range loop
+	}()
 	go func() {
 		for range sigCh {
 			if cancelFn := r.getStreamCancel(); cancelFn != nil && r.streaming.Load() {
@@ -142,7 +150,10 @@ func (r *REPL) runAIQuery(question string) {
 		r.setStreamCancel(nil)
 	}()
 
-	fmt.Print(dimStyle.Render("Thinking..."))
+	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
+	if isTTY {
+		fmt.Print(dimStyle.Render("Thinking..."))
+	}
 
 	aiClient := ai.NewClient(cfg.AI.Model, r.deps.DBPath)
 	textCh, errCh, sidCh := aiClient.Query(streamCtx, systemPrompt, userMessage, r.sessionID)
@@ -153,7 +164,9 @@ func (r *REPL) runAIQuery(question string) {
 	}
 
 	// Clear "Thinking..." line.
-	fmt.Print("\r\033[K")
+	if isTTY {
+		fmt.Print("\r\033[K")
+	}
 
 	// Capture session ID for multi-turn.
 	select {

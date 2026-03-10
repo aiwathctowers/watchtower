@@ -41,7 +41,7 @@ const (
 	// Override with WATCHTOWER_OAUTH_CLIENT_ID / WATCHTOWER_OAUTH_CLIENT_SECRET
 	// env vars if you run your own Slack app.
 	DefaultClientID     = "REDACTED_CLIENT_ID"
-	DefaultClientSecret = "REDACTED_OLD_SECRET"
+	DefaultClientSecret = "REDACTED_CLIENT_SECRET"
 )
 
 // UserScopes are the Slack user token scopes required by Watchtower.
@@ -143,7 +143,11 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer) (*OAuthResult, e
 
 	server := &http.Server{Handler: mux}
 	go server.Serve(listener) //nolint:errcheck
-	defer server.Close()
+	defer func() {
+		// Grace period to let the browser receive the HTML response before closing.
+		time.Sleep(500 * time.Millisecond)
+		server.Close()
+	}()
 
 	// Print URL and try to open browser
 	fmt.Fprintf(out, "Opening browser for Slack authorization...\n")

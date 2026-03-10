@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -231,6 +232,47 @@ func (p *Progress) Snapshot() Snapshot {
 		PhaseStartTime:      p.phaseStartTime,
 		ChannelsSkippedInfo: p.channelsSkippedInfo,
 	}
+}
+
+// JSONSnapshot is a JSON-serializable progress snapshot for external consumers (e.g. desktop app).
+type JSONSnapshot struct {
+	Phase               string  `json:"phase"`
+	ElapsedSec          float64 `json:"elapsed_sec"`
+	DiscoveryPages      int     `json:"discovery_pages"`
+	DiscoveryTotalPages int     `json:"discovery_total_pages"`
+	DiscoveryChannels   int     `json:"discovery_channels"`
+	DiscoveryUsers      int     `json:"discovery_users"`
+	MessagesFetched     int     `json:"messages_fetched"`
+	MsgChannelsDone     int     `json:"msg_channels_done"`
+	MsgChannelsTotal    int     `json:"msg_channels_total"`
+	UserProfilesDone    int     `json:"user_profiles_done"`
+	UserProfilesTotal   int     `json:"user_profiles_total"`
+	ThreadsDone         int     `json:"threads_done"`
+	ThreadsTotal        int     `json:"threads_total"`
+	ThreadsFetched      int     `json:"threads_fetched"`
+}
+
+// JSON returns a JSON-encoded progress line.
+func (p *Progress) JSON() []byte {
+	snap := p.Snapshot()
+	j := JSONSnapshot{
+		Phase:               snap.Phase.String(),
+		ElapsedSec:          time.Since(snap.StartTime).Seconds(),
+		DiscoveryPages:      snap.DiscoveryPages,
+		DiscoveryTotalPages: snap.DiscoveryTotalPages,
+		DiscoveryChannels:   snap.DiscoveryChannels,
+		DiscoveryUsers:      snap.DiscoveryUsers,
+		MessagesFetched:     snap.MessagesFetched,
+		MsgChannelsDone:     snap.MsgChannelsDone,
+		MsgChannelsTotal:    snap.MsgChannelsTotal,
+		UserProfilesDone:    snap.UserProfilesDone,
+		UserProfilesTotal:   snap.UserProfilesTotal,
+		ThreadsDone:         snap.ThreadsDone,
+		ThreadsTotal:        snap.ThreadsTotal,
+		ThreadsFetched:      snap.ThreadsFetched,
+	}
+	data, _ := json.Marshal(j)
+	return data
 }
 
 // Styles for terminal rendering.

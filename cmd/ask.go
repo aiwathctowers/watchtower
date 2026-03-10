@@ -31,7 +31,7 @@ var askCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(askCmd)
-	askCmd.Flags().StringVar(&askFlagModel, "model", "", "override AI model (e.g., claude-sonnet-4-20250514)")
+	askCmd.Flags().StringVar(&askFlagModel, "model", "", "override AI model (e.g., claude-sonnet-4-6)")
 	askCmd.Flags().StringVar(&askFlagChannel, "channel", "", "limit context to a specific channel")
 	askCmd.Flags().DurationVar(&askFlagSince, "since", 0, "limit context to messages since this duration ago (e.g., 2h, 24h)")
 }

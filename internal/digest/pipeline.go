@@ -7,6 +7,8 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"watchtower/internal/config"
@@ -37,9 +39,10 @@ type DigestResult struct {
 
 // Decision represents a decision extracted from messages.
 type Decision struct {
-	Text      string `json:"text"`
-	By        string `json:"by"`
-	MessageTS string `json:"message_ts"`
+	Text       string `json:"text"`
+	By         string `json:"by"`
+	MessageTS  string `json:"message_ts"`
+	Importance string `json:"importance"` // "high", "medium", "low"
 }
 
 // ActionItem represents an action item extracted from messages.
@@ -50,6 +53,9 @@ type ActionItem struct {
 }
 
 // Pipeline generates and stores AI digests for Slack channels.
+// ProgressFunc is called during digest generation to report progress.
+type ProgressFunc func(done, total int, status string)
+
 type Pipeline struct {
 	db        *db.DB
 	cfg       *config.Config
@@ -59,6 +65,9 @@ type Pipeline struct {
 	// SinceOverride, if non-zero, overrides the automatic "since last digest"
 	// window. Used by `digest generate --since` to force a custom time range.
 	SinceOverride float64
+
+	// OnProgress is called to report progress during digest generation.
+	OnProgress ProgressFunc
 
 	// caches populated during a run
 	channelNames map[string]string
@@ -76,29 +85,41 @@ func New(database *db.DB, cfg *config.Config, gen Generator, logger *log.Logger)
 }
 
 // Run executes the full digest pipeline: channel digests, then daily rollup.
-// Returns the number of channel digests generated.
-func (p *Pipeline) Run(ctx context.Context) (int, error) {
+// Returns the number of channel digests generated and total token usage.
+func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	if !p.cfg.Digest.Enabled {
-		return 0, nil
+		return 0, nil, nil
+	}
+
+	// Clean up duplicate daily/weekly rollups from before period_to normalization
+	if removed, err := p.db.DeduplicateDailyDigests(); err != nil {
+		p.logger.Printf("digest: warning: dedup cleanup failed: %v", err)
+	} else if removed > 0 {
+		p.logger.Printf("digest: cleaned up %d duplicate rollup digests", removed)
 	}
 
 	p.loadCaches()
 
-	n, err := p.RunChannelDigests(ctx)
+	n, totalUsage, err := p.RunChannelDigests(ctx)
 	if err != nil {
-		return n, err
+		return n, totalUsage, err
+	}
+
+	if ctx.Err() != nil {
+		return n, totalUsage, ctx.Err()
 	}
 
 	if err := p.RunDailyRollup(ctx); err != nil {
 		p.logger.Printf("digest: daily rollup error: %v", err)
 	}
 
-	return n, nil
+	return n, totalUsage, nil
 }
 
 // RunChannelDigests generates digests for all channels with new messages
-// since the last digest run.
-func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, error) {
+// since the last digest run. Returns the count and accumulated token usage.
+// Channels are processed in parallel using digest.workers (default 5).
+func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 	sinceUnix := p.SinceOverride
 	if sinceUnix == 0 {
 		sinceUnix = p.lastDigestTime()
@@ -107,48 +128,146 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, error) {
 
 	channels, err := p.db.ChannelsWithNewMessages(sinceUnix)
 	if err != nil {
-		return 0, fmt.Errorf("finding channels with new messages: %w", err)
+		return 0, nil, fmt.Errorf("finding channels with new messages: %w", err)
 	}
 
 	if len(channels) == 0 {
 		p.logger.Println("digest: no channels with new messages")
-		return 0, nil
+		return 0, nil, nil
 	}
 
-	generated := 0
+	// Filter channels by min_messages and pre-fetch messages
+	type channelTask struct {
+		channelID   string
+		channelName string
+		msgs        []db.Message
+	}
+	var tasks []channelTask
 	for _, channelID := range channels {
-		if ctx.Err() != nil {
-			return generated, ctx.Err()
-		}
-
 		msgs, err := p.db.GetMessagesByTimeRange(channelID, sinceUnix, nowUnix)
 		if err != nil {
 			p.logger.Printf("digest: error getting messages for %s: %v", channelID, err)
 			continue
 		}
-
+		if len(msgs) == db.DefaultTimeRangeLimit {
+			p.logger.Printf("digest: warning: #%s hit message limit (%d), digest may be based on partial data",
+				p.channelName(channelID), db.DefaultTimeRangeLimit)
+		}
 		if len(msgs) < p.cfg.Digest.MinMessages {
 			continue
 		}
-
-		channelName := p.channelName(channelID)
-
-		result, usage, err := p.generateChannelDigest(ctx, channelName, msgs, sinceUnix, nowUnix)
-		if err != nil {
-			p.logger.Printf("digest: error generating digest for #%s: %v", channelName, err)
-			continue
-		}
-
-		if err := p.storeDigest(channelID, "channel", sinceUnix, nowUnix, result, len(msgs), usage); err != nil {
-			p.logger.Printf("digest: error storing digest for #%s: %v", channelName, err)
-			continue
-		}
-
-		generated++
-		p.logger.Printf("digest: generated for #%s (%d messages)", channelName, len(msgs))
+		tasks = append(tasks, channelTask{
+			channelID:   channelID,
+			channelName: p.channelName(channelID),
+			msgs:        msgs,
+		})
 	}
 
-	return generated, nil
+	if len(tasks) == 0 {
+		p.logger.Println("digest: no channels above min_messages threshold")
+		return 0, nil, nil
+	}
+
+	total := len(tasks)
+	workers := p.cfg.Digest.Workers
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > total {
+		workers = total
+	}
+
+	p.logger.Printf("digest: processing %d channels with %d workers", total, workers)
+
+	taskCh := make(chan channelTask, total)
+	for _, t := range tasks {
+		taskCh <- t
+	}
+	close(taskCh)
+
+	var (
+		completed    atomic.Int32
+		generated    atomic.Int32
+		errCount     atomic.Int32
+		totalInput   atomic.Int64
+		totalOutput  atomic.Int64
+		totalCostU   atomic.Int64 // cost * 1e6
+		lastErrMu    sync.Mutex
+		lastErr      error
+		wg           sync.WaitGroup
+	)
+
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				if ctx.Err() != nil {
+					return
+				}
+
+				c := int(completed.Load())
+				if p.OnProgress != nil {
+					p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", t.channelName, len(t.msgs)))
+				}
+
+				result, usage, err := p.generateChannelDigest(ctx, t.channelName, t.msgs, sinceUnix, nowUnix)
+				if err != nil {
+					p.logger.Printf("digest: error generating digest for #%s: %v", t.channelName, err)
+					errCount.Add(1)
+					lastErrMu.Lock()
+					lastErr = err
+					lastErrMu.Unlock()
+					completed.Add(1)
+					continue
+				}
+
+				if err := p.storeDigest(t.channelID, "channel", sinceUnix, nowUnix, result, len(t.msgs), usage); err != nil {
+					p.logger.Printf("digest: error storing digest for #%s: %v", t.channelName, err)
+					errCount.Add(1)
+					lastErrMu.Lock()
+					lastErr = err
+					lastErrMu.Unlock()
+					completed.Add(1)
+					continue
+				}
+
+				generated.Add(1)
+				done := int(completed.Add(1))
+				if p.OnProgress != nil {
+					p.OnProgress(done, total, fmt.Sprintf("#%s done", t.channelName))
+				}
+				if usage != nil {
+					totalInput.Add(int64(usage.InputTokens))
+					totalOutput.Add(int64(usage.OutputTokens))
+					totalCostU.Add(int64(usage.CostUSD * 1e6))
+					p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens, $%.4f)",
+						t.channelName, len(t.msgs), usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+				} else {
+					p.logger.Printf("digest: generated for #%s (%d messages)", t.channelName, len(t.msgs))
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	totalUsage := &Usage{
+		InputTokens:  int(totalInput.Load()),
+		OutputTokens: int(totalOutput.Load()),
+		CostUSD:      float64(totalCostU.Load()) / 1e6,
+	}
+
+	gen := int(generated.Load())
+	errs := int(errCount.Load())
+
+	// If we found channels to process but ALL of them failed, report the error
+	// so the caller shows a meaningful message instead of "No new digests needed".
+	if gen == 0 && errs > 0 {
+		return 0, totalUsage, fmt.Errorf("all %d channel digest(s) failed, last error: %w", errs, lastErr)
+	}
+
+	return gen, totalUsage, nil
 }
 
 // RunDailyRollup generates a cross-channel daily digest from today's channel digests.
@@ -171,7 +290,14 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 	var sb strings.Builder
 	for _, d := range channelDigests {
 		name := p.channelName(d.ChannelID)
-		fmt.Fprintf(&sb, "### #%s (%d messages)\n%s\n\n", name, d.MessageCount, d.Summary)
+		// Sanitize AI-generated values to prevent prompt injection via prior AI output
+		summary := sanitizePromptValue(d.Summary)
+		fmt.Fprintf(&sb, "### #%s (%d messages)\nSummary: %s\n", name, d.MessageCount, summary)
+		// Include channel-level decisions so the rollup can consolidate them
+		if d.Decisions != "" && d.Decisions != "[]" {
+			fmt.Fprintf(&sb, "Decisions: %s\n", sanitizePromptValue(d.Decisions))
+		}
+		sb.WriteString("\n")
 	}
 
 	dateStr := dayStart.Format("2006-01-02")
@@ -188,7 +314,10 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 	}
 
 	fromUnix := float64(dayStart.Unix())
-	toUnix := float64(now.Unix())
+	// Use end-of-day as period_to so multiple runs on the same day
+	// upsert into the same row instead of creating duplicates.
+	dayEnd := dayStart.Add(24*time.Hour - time.Second)
+	toUnix := float64(dayEnd.Unix())
 	totalMsgs := 0
 	for _, d := range channelDigests {
 		totalMsgs += d.MessageCount
@@ -217,7 +346,12 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 	var sb strings.Builder
 	for _, d := range dailies {
 		date := time.Unix(int64(d.PeriodFrom), 0).UTC().Format("2006-01-02")
-		fmt.Fprintf(&sb, "### %s (%d messages)\n%s\n\n", date, d.MessageCount, d.Summary)
+		summary := sanitizePromptValue(d.Summary)
+		fmt.Fprintf(&sb, "### %s (%d messages)\nSummary: %s\n", date, d.MessageCount, summary)
+		if d.Decisions != "" && d.Decisions != "[]" {
+			fmt.Fprintf(&sb, "Decisions: %s\n", sanitizePromptValue(d.Decisions))
+		}
+		sb.WriteString("\n")
 	}
 
 	fromStr := weekStart.Format("2006-01-02")
@@ -234,8 +368,11 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 		return fmt.Errorf("parsing weekly trends: %w", err)
 	}
 
-	fromUnix := float64(weekStart.Unix())
-	toUnix := float64(now.Unix())
+	// Normalize weekStart to midnight for consistent upsert key
+	weekStartNorm := time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, time.UTC)
+	dayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, time.UTC)
+	fromUnix := float64(weekStartNorm.Unix())
+	toUnix := float64(dayEnd.Unix())
 	totalMsgs := 0
 	for _, d := range dailies {
 		totalMsgs += d.MessageCount
@@ -277,7 +414,7 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 			label = "Weekly trends"
 		}
 		date := time.Unix(int64(d.PeriodFrom), 0).UTC().Format("2006-01-02")
-		fmt.Fprintf(&sb, "### %s — %s (%d messages)\n%s\n\n", date, label, d.MessageCount, d.Summary)
+		fmt.Fprintf(&sb, "### %s — %s (%d messages)\n%s\n\n", date, label, d.MessageCount, sanitizePromptValue(d.Summary))
 	}
 
 	fromStr := from.Format("2006-01-02")
@@ -366,9 +503,11 @@ func (p *Pipeline) formatMessages(msgs []db.Message) string {
 		userName := p.userName(m.UserID)
 		ts := time.Unix(int64(m.TSUnix), 0).UTC().Format("15:04")
 		// Sanitize message text to prevent prompt injection via delimiter spoofing.
-		text := strings.ReplaceAll(m.Text, "=== MESSAGES ===", "")
-		text = strings.ReplaceAll(text, "=== CHANNEL DIGESTS ===", "")
-		text = strings.ReplaceAll(text, "=== DAILY DIGESTS ===", "")
+		text := m.Text
+		if strings.Contains(text, "===") || strings.Contains(text, "---") {
+			text = strings.ReplaceAll(text, "===", "= = =")
+			text = strings.ReplaceAll(text, "---", "- - -")
+		}
 		fmt.Fprintf(&sb, "[%s] @%s: %s\n", ts, userName, text)
 	}
 	return sb.String()
@@ -377,15 +516,6 @@ func (p *Pipeline) formatMessages(msgs []db.Message) string {
 func (p *Pipeline) loadCaches() {
 	p.channelNames = make(map[string]string)
 	p.userNames = make(map[string]string)
-
-	channels, err := p.db.GetChannels(db.ChannelFilter{})
-	if err != nil {
-		p.logger.Printf("warning: failed to load channel names: %v", err)
-	} else {
-		for _, ch := range channels {
-			p.channelNames[ch.ID] = ch.Name
-		}
-	}
 
 	users, err := p.db.GetUsers(db.UserFilter{})
 	if err != nil {
@@ -399,11 +529,36 @@ func (p *Pipeline) loadCaches() {
 			p.userNames[u.ID] = name
 		}
 	}
+
+	channels, err := p.db.GetChannels(db.ChannelFilter{})
+	if err != nil {
+		p.logger.Printf("warning: failed to load channel names: %v", err)
+	} else {
+		for _, ch := range channels {
+			name := ch.Name
+			// For DMs, show the other user's display name instead of raw ID
+			if ch.Type == "dm" || ch.Type == "im" {
+				uid := ""
+				if ch.DMUserID.Valid {
+					uid = ch.DMUserID.String
+				} else {
+					uid = ch.Name // name is often the user ID for DMs
+				}
+				if userName, ok := p.userNames[uid]; ok {
+					name = "DM: " + userName
+				}
+			}
+			p.channelNames[ch.ID] = name
+		}
+	}
 }
 
 func (p *Pipeline) languageInstruction() string {
+	if lang := p.cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {
+		return fmt.Sprintf("IMPORTANT: You MUST write ALL text values (summary, topics, decisions, action_items) in %s. Do NOT use English for any text content.", lang)
+	}
 	if lang := p.cfg.Digest.Language; lang != "" {
-		return fmt.Sprintf("Write ALL text values in %s", lang)
+		return "Write all text values in English"
 	}
 	return "Write in the language most commonly used in the messages"
 }
@@ -411,7 +566,7 @@ func (p *Pipeline) languageInstruction() string {
 func (p *Pipeline) channelName(id string) string {
 	if p.channelNames != nil {
 		if name, ok := p.channelNames[id]; ok {
-			return name
+			return sanitizePromptValue(name)
 		}
 	}
 	return id
@@ -420,10 +575,23 @@ func (p *Pipeline) channelName(id string) string {
 func (p *Pipeline) userName(id string) string {
 	if p.userNames != nil {
 		if name, ok := p.userNames[id]; ok {
-			return name
+			return sanitizePromptValue(name)
 		}
 	}
 	return id
+}
+
+// sanitizePromptValue prevents prompt injection via delimiter spoofing in names.
+func sanitizePromptValue(text string) string {
+	// Strip newlines to prevent prompt structure injection via display names.
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\r", " ")
+	if !strings.Contains(text, "===") && !strings.Contains(text, "---") {
+		return text
+	}
+	text = strings.ReplaceAll(text, "===", "= = =")
+	text = strings.ReplaceAll(text, "---", "- - -")
+	return text
 }
 
 // parseDigestResult extracts a DigestResult from Claude's response.

@@ -49,7 +49,7 @@ type DigestFilter struct {
 
 // GetDigests returns digests matching the filter, newest first.
 func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
-	query := `SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at FROM digests`
+	query := `SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at FROM digests`
 	var conditions []string
 	var args []any
 
@@ -78,6 +78,9 @@ func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
 	if f.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, f.Limit)
+	} else {
+		// Safety limit to prevent OOM on large datasets
+		query += ` LIMIT 1000`
 	}
 
 	rows, err := db.Query(query, args...)
@@ -91,7 +94,7 @@ func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
 		var d Digest
 		if err := rows.Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
 			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems,
-			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt); err != nil {
+			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt); err != nil {
 			return nil, fmt.Errorf("scanning digest: %w", err)
 		}
 		digests = append(digests, d)
@@ -103,12 +106,12 @@ func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
 // or nil if none exists.
 func (db *DB) GetLatestDigest(channelID, digestType string) (*Digest, error) {
 	var d Digest
-	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at
+	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
 		FROM digests WHERE channel_id = ? AND type = ?
 		ORDER BY period_to DESC LIMIT 1`, channelID, digestType).
 		Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
 			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems,
-			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt)
+			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -121,11 +124,11 @@ func (db *DB) GetLatestDigest(channelID, digestType string) (*Digest, error) {
 // GetDigestByID returns a single digest by its ID.
 func (db *DB) GetDigestByID(id int) (*Digest, error) {
 	var d Digest
-	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at
+	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
 		FROM digests WHERE id = ?`, id).
 		Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
 			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems,
-			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt)
+			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -140,6 +143,21 @@ func (db *DB) DeleteDigestsOlderThan(beforeUnix float64) (int64, error) {
 	res, err := db.Exec(`DELETE FROM digests WHERE period_to < ?`, beforeUnix)
 	if err != nil {
 		return 0, fmt.Errorf("deleting old digests: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// DeduplicateDailyDigests removes duplicate daily/weekly rollup digests,
+// keeping only the newest one per (channel_id, type, date(period_from)).
+// This cleans up duplicates created when period_to was not normalized.
+func (db *DB) DeduplicateDailyDigests() (int64, error) {
+	res, err := db.Exec(`DELETE FROM digests WHERE id NOT IN (
+		SELECT MAX(id) FROM digests
+		WHERE type IN ('daily', 'weekly')
+		GROUP BY channel_id, type, CAST(period_from AS INTEGER) / 86400
+	) AND type IN ('daily', 'weekly')`)
+	if err != nil {
+		return 0, fmt.Errorf("deduplicating daily digests: %w", err)
 	}
 	return res.RowsAffected()
 }

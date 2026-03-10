@@ -185,9 +185,11 @@ var knownConfigKeys = map[string]bool{
 	"sync.poll_interval":        true,
 	"sync.sync_threads":         true,
 	"sync.sync_on_wake":         true,
+	"sync.thread_sync_limit":    true,
 	"digest.enabled":            true,
 	"digest.model":              true,
 	"digest.min_messages":       true,
+	"digest.language":           true,
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {

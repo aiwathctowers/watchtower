@@ -67,15 +67,15 @@ func TestConfigSet(t *testing.T) {
 	buf := new(bytes.Buffer)
 	configSetCmd.SetOut(buf)
 
-	err := configSetCmd.RunE(configSetCmd, []string{"ai.model", "claude-opus-4-20250514"})
+	err := configSetCmd.RunE(configSetCmd, []string{"ai.model", "claude-opus-4-6"})
 	require.NoError(t, err)
 
-	assert.Contains(t, buf.String(), "Set ai.model = claude-opus-4-20250514")
+	assert.Contains(t, buf.String(), "Set ai.model = claude-opus-4-6")
 
 	// Verify the value was written
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "claude-opus-4-20250514")
+	assert.Contains(t, string(data), "claude-opus-4-6")
 }
 
 func TestConfigShow(t *testing.T) {
@@ -87,7 +87,7 @@ workspaces:
   demo:
     slack_token: "xoxp-secret-token-here"
 ai:
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o644))
 
@@ -106,7 +106,7 @@ ai:
 	assert.NotContains(t, output, "xoxp-secret-token-here")
 	assert.Contains(t, output, "****")
 	// Non-sensitive values should appear
-	assert.Contains(t, output, "claude-sonnet-4-20250514")
+	assert.Contains(t, output, "claude-sonnet-4-6")
 	assert.Contains(t, output, "demo")
 	// Defaults should be shown
 	assert.Contains(t, output, "sync.workers:")

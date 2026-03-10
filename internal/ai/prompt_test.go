@@ -53,10 +53,16 @@ func TestBuildSystemPrompt_MustQueryDB(t *testing.T) {
 func TestBuildSystemPrompt_SanitizesInputs(t *testing.T) {
 	prompt := BuildSystemPrompt("my company!", "my domain<>", "/tmp/db", "schema")
 
-	assert.Contains(t, prompt, "mycompany")
+	assert.Contains(t, prompt, "my company")
 	assert.Contains(t, prompt, "mydomain")
 	assert.NotContains(t, prompt, "!")
 	assert.NotContains(t, prompt, "<>")
+}
+
+func TestBuildSystemPrompt_PreservesUnicode(t *testing.T) {
+	prompt := BuildSystemPrompt("Société Générale", "societe", "/tmp/db", "schema")
+
+	assert.Contains(t, prompt, "Société Générale")
 }
 
 func TestBuildSystemPrompt_EmptyInputsGetDefaults(t *testing.T) {
