@@ -123,6 +123,7 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
         process.arguments = args
 
         // Use shared resolved environment (caches login shell PATH, removes CLAUDECODE)
@@ -150,12 +151,16 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
             }
         }
 
-        process.waitUntilExit()
+        // Wait on a detached thread to avoid blocking the cooperative thread pool
+        let exitStatus = await Task.detached { () -> Int32 in
+            process.waitUntilExit()
+            return process.terminationStatus
+        }.value
 
-        if !Task.isCancelled && process.terminationStatus != 0 {
+        if !Task.isCancelled && exitStatus != 0 {
             let stderrText = await stderrTask.value
             let detail = stderrText.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw ClaudeError.exitCode(Int(process.terminationStatus), detail.isEmpty ? "Claude CLI failed" : detail)
+            throw ClaudeError.exitCode(Int(exitStatus), detail.isEmpty ? "Claude CLI failed" : detail)
         }
 
         continuation.yield(.done)

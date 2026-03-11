@@ -35,45 +35,48 @@ enum Constants {
     }
 
     /// Check if Claude Code CLI is available.
+    /// Priority: config override → search resolved PATH.
     nonisolated static func findClaudePath() -> String? {
-        // Priority 0: explicit override from config.yaml
         if let override = claudePathFromConfig() {
             return override
         }
+        return findInPath("claude")
+    }
 
-        let home = NSHomeDirectory()
-
-        // Known installation paths
-        let paths = [
-            "/usr/local/bin/claude",
-            "/opt/homebrew/bin/claude",
-            "\(home)/.claude/bin/claude",
-            "\(home)/.volta/bin/claude",
-        ]
-
-        for path in paths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
+    /// Search for a binary in the resolved user PATH, with well-known fallback directories.
+    private nonisolated static func findInPath(_ binary: String) -> String? {
+        let env = resolvedEnvironment()
+        guard let pathValue = env["PATH"] else { return nil }
+        for dir in pathValue.split(separator: ":") {
+            let fullPath = "\(dir)/\(binary)"
+            if FileManager.default.isExecutableFile(atPath: fullPath) {
+                return fullPath
             }
         }
-
-        // Search versioned node managers (nvm, fnm)
+        // Fallback: well-known directories not always in PATH (nvm, fnm, volta, Homebrew)
+        let home = NSHomeDirectory()
+        let fallbackDirs = [
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "\(home)/.volta/bin",
+        ]
+        for dir in fallbackDirs {
+            let fullPath = "\(dir)/\(binary)"
+            if FileManager.default.isExecutableFile(atPath: fullPath) {
+                return fullPath
+            }
+        }
+        // Fallback: scan nvm/fnm versioned directories
         let versionedDirs = [
             "\(home)/.nvm/versions/node",
             "\(home)/.local/share/fnm/node-versions",
             "\(home)/.fnm/node-versions",
         ]
         for dir in versionedDirs {
-            if let found = searchNodeVersions(dir: dir, binary: "claude") {
+            if let found = searchNodeVersions(dir: dir, binary: binary) {
                 return found
             }
         }
-
-        // Fallback: which via user's login shell
-        if let path = whichViashell("claude") {
-            return path
-        }
-
         return nil
     }
 
@@ -81,7 +84,6 @@ enum Constants {
     private nonisolated static func searchNodeVersions(dir: String, binary: String) -> String? {
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
         for v in versions.sorted().reversed() {
-            // nvm: <dir>/<version>/bin/<binary>, fnm: <dir>/<version>/installation/bin/<binary>
             for sub in ["bin", "installation/bin"] {
                 let path = "\(dir)/\(v)/\(sub)/\(binary)"
                 if FileManager.default.isExecutableFile(atPath: path) {
@@ -89,35 +91,6 @@ enum Constants {
                 }
             }
         }
-        return nil
-    }
-
-    /// Resolve a binary via `which` using the user's login shell.
-    nonisolated static func whichViashell(_ binary: String) -> String? {
-        // Use the user's actual shell, not hardcoded zsh
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
-        // Validate binary name to prevent shell injection
-        guard binary.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else {
-            return nil
-        }
-        process.arguments = ["-lc", "which \(binary)"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus == 0 {
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !path.isEmpty {
-                return path
-            }
-        }
-
         return nil
     }
 
@@ -130,12 +103,19 @@ enum Constants {
                 let shell = env["SHELL"] ?? "/bin/zsh"
                 let pathProc = Process()
                 pathProc.executableURL = URL(fileURLWithPath: shell)
+                pathProc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
                 pathProc.arguments = ["-lc", "echo $PATH"]
                 let pathPipe = Pipe()
                 pathProc.standardOutput = pathPipe
                 pathProc.standardError = FileHandle.nullDevice
                 try? pathProc.run()
+                // Timeout: kill after 5s to avoid hanging on broken shell configs
+                let timer = DispatchSource.makeTimerSource()
+                timer.schedule(deadline: .now() + 5)
+                timer.setEventHandler { pathProc.terminate() }
+                timer.resume()
                 pathProc.waitUntilExit()
+                timer.cancel()
                 if let fullPath = String(data: pathPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines), !fullPath.isEmpty {
                     env["PATH"] = fullPath
@@ -148,7 +128,7 @@ enum Constants {
     }
 
     /// Resolve the watchtower CLI binary path.
-    /// Priority: app bundle → known system paths → `which` lookup.
+    /// Priority: app bundle → search resolved PATH.
     nonisolated static func findCLIPath() -> String? {
         // 1. Inside the app bundle
         if let bundlePath = Bundle.main.executableURL?
@@ -158,23 +138,7 @@ enum Constants {
             return bundlePath
         }
 
-        // 2. Known system paths
-        let paths = [
-            "/usr/local/bin/watchtower",
-            "/opt/homebrew/bin/watchtower",
-            NSString("~/go/bin/watchtower").expandingTildeInPath,
-        ]
-        for path in paths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-
-        // 3. which via login shell (picks up user's full PATH)
-        if let path = whichViashell("watchtower") {
-            return path
-        }
-
-        return nil
+        // 2. Search user's PATH
+        return findInPath("watchtower")
     }
 }
