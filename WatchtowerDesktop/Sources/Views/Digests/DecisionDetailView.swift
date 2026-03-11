@@ -13,7 +13,12 @@ struct DecisionDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Header
                 HStack(alignment: .center) {
-                    ImportanceBadge(importance: entry.decision.resolvedImportance)
+                    EditableImportanceBadge(
+                        importance: entry.effectiveImportance,
+                        isCorrected: entry.correctedImportance != nil
+                    ) { newImportance in
+                        viewModel.setDecisionImportance(entry, newImportance: newImportance)
+                    }
 
                     if let name = entry.channelName {
                         Text("#\(name)")
@@ -151,7 +156,7 @@ struct DecisionDetailView: View {
     }
 
     private var importanceColor: Color {
-        switch entry.decision.resolvedImportance {
+        switch entry.effectiveImportance {
         case "high": .red
         case "low": .gray
         default: .orange
@@ -168,7 +173,7 @@ struct DecisionDetailView: View {
     }
 }
 
-/// Colored badge showing decision importance.
+/// Colored badge showing decision importance (read-only).
 struct ImportanceBadge: View {
     let importance: String
 
@@ -200,5 +205,88 @@ struct ImportanceBadge: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(color.opacity(0.1), in: Capsule())
+    }
+}
+
+/// Clickable importance badge with a picker menu to change importance.
+struct EditableImportanceBadge: View {
+    let importance: String
+    let isCorrected: Bool
+    let onChange: (String) -> Void
+
+    private static let levels = ["high", "medium", "low"]
+
+    private var color: Color {
+        switch importance {
+        case "high": .red
+        case "low": .gray
+        default: .orange
+        }
+    }
+
+    private var label: String {
+        switch importance {
+        case "high": "High"
+        case "low": "Low"
+        default: "Medium"
+        }
+    }
+
+    private func labelFor(_ level: String) -> String {
+        switch level {
+        case "high": "High"
+        case "low": "Low"
+        default: "Medium"
+        }
+    }
+
+    private func colorFor(_ level: String) -> Color {
+        switch level {
+        case "high": .red
+        case "low": .gray
+        default: .orange
+        }
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(Self.levels, id: \.self) { level in
+                Button {
+                    onChange(level)
+                } label: {
+                    HStack {
+                        Circle()
+                            .fill(colorFor(level))
+                            .frame(width: 8, height: 8)
+                        Text(labelFor(level))
+                        if level == importance {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(color)
+                if isCorrected {
+                    Image(systemName: "pencil.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(color)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(isCorrected ? "Importance changed (click to adjust)" : "Click to change importance")
     }
 }

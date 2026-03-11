@@ -186,6 +186,131 @@ func (t *Tuner) Suggest(ctx context.Context, promptID string) (*TuneResult, erro
 	}, nil
 }
 
+const tuneImportanceMetaPrompt = `You are a prompt engineering expert. Your task is to improve the IMPORTANCE classification criteria in an AI prompt template.
+
+Current prompt template (version %d):
+---
+%s
+---
+
+The user has corrected the importance level on %d decisions. Here are the corrections:
+
+%s
+
+Analyze the pattern of corrections and improve the importance classification criteria in the prompt so the AI assigns importance levels that better match user expectations.
+
+Rules:
+1. Only modify the importance-related instructions (the section about high/medium/low classification)
+2. Preserve the output JSON format exactly (same fields, same structure)
+3. Keep all format placeholders (%%s, %%[1]s, etc.) in their original positions
+4. Do NOT change other aspects of the prompt (topics, action items, summary, etc.)
+
+Return ONLY a JSON object (no markdown fences):
+{
+  "improved_prompt": "the full improved prompt text with all placeholders preserved",
+  "explanation": "2-3 sentences explaining what was changed in importance criteria",
+  "changes": ["bullet point 1", "bullet point 2"]
+}`
+
+// SuggestImportance generates a prompt improvement based on importance corrections.
+func (t *Tuner) SuggestImportance(ctx context.Context) (*TuneResult, error) {
+	corrections, err := t.database.GetImportanceCorrections()
+	if err != nil {
+		return nil, fmt.Errorf("loading importance corrections: %w", err)
+	}
+	if len(corrections) == 0 {
+		return nil, fmt.Errorf("no importance corrections found — change importance on some decisions first")
+	}
+
+	// Use digest.channel prompt since that's where importance is generated
+	promptID := DigestChannel
+	current, version, err := t.store.Get(promptID)
+	if err != nil {
+		return nil, fmt.Errorf("loading prompt %q: %w", promptID, err)
+	}
+
+	// Format corrections for the meta-prompt
+	var lines []string
+	for _, c := range corrections {
+		text := strings.ReplaceAll(c.DecisionText, "---", "- - -")
+		text = strings.ReplaceAll(text, "===", "= = =")
+		lines = append(lines, fmt.Sprintf("- Decision: %q\n  AI said: %s → User corrected to: %s",
+			text, c.OriginalImportance, c.NewImportance))
+	}
+	correctionsText := strings.Join(lines, "\n")
+	correctionsText = strings.ReplaceAll(correctionsText, "%", "%%")
+
+	escaped := strings.ReplaceAll(current, "%", "%%")
+	prompt := fmt.Sprintf(tuneImportanceMetaPrompt, version, escaped, len(corrections), correctionsText)
+
+	raw, err := t.generator.GenerateText(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("AI generation failed: %w", err)
+	}
+
+	var result struct {
+		ImprovedPrompt string   `json:"improved_prompt"`
+		Explanation    string   `json:"explanation"`
+		Changes        []string `json:"changes"`
+	}
+
+	cleaned := strings.TrimSpace(raw)
+	var parseErr error
+	parsed := false
+	for i := 0; i < len(cleaned); i++ {
+		if cleaned[i] == '{' {
+			candidate := cleaned[i:]
+			if err := json.Unmarshal([]byte(candidate), &result); err == nil {
+				parsed = true
+				break
+			}
+			if last := strings.LastIndex(candidate, "}"); last >= 0 {
+				if err := json.Unmarshal([]byte(candidate[:last+1]), &result); err == nil {
+					parsed = true
+					break
+				}
+				parseErr = err
+			}
+		}
+	}
+
+	if !parsed {
+		if parseErr != nil {
+			return nil, fmt.Errorf("parsing tune result: %w", parseErr)
+		}
+		return nil, fmt.Errorf("parsing tune result: no JSON object found in response")
+	}
+
+	if result.ImprovedPrompt == "" {
+		return nil, fmt.Errorf("AI returned empty improved prompt")
+	}
+
+	return &TuneResult{
+		PromptID:       promptID,
+		CurrentVersion: version,
+		Suggestion:     result.ImprovedPrompt,
+		Explanation:    result.Explanation,
+		Changes:        result.Changes,
+	}, nil
+}
+
+// ApplyImportance applies the importance tuning result and clears corrections.
+func (t *Tuner) ApplyImportance(result *TuneResult) error {
+	if err := t.Apply(result); err != nil {
+		return err
+	}
+	return t.database.ClearImportanceCorrections()
+}
+
+// HasImportanceCorrections returns true if there are pending corrections.
+func (t *Tuner) HasImportanceCorrections() bool {
+	exists, err := t.database.HasImportanceCorrections()
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
 // Apply saves the tuning suggestion as a new prompt version.
 // Returns an error if the prompt has been modified since the suggestion was generated.
 func (t *Tuner) Apply(result *TuneResult) error {

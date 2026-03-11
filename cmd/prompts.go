@@ -262,6 +262,34 @@ func runTune(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Auto-detect importance corrections
+	if tuner.HasImportanceCorrections() {
+		fmt.Fprintln(out, "Analyzing importance corrections...")
+
+		result, err := tuner.SuggestImportance(cmd.Context())
+		if err != nil {
+			fmt.Fprintf(out, "  Skipped: %v\n\n", err)
+		} else {
+			fmt.Fprintf(out, "\nSuggested importance criteria changes for %s (v%d → v%d):\n",
+				result.PromptID, result.CurrentVersion, result.CurrentVersion+1)
+			fmt.Fprintf(out, "  Explanation: %s\n", result.Explanation)
+			for _, change := range result.Changes {
+				fmt.Fprintf(out, "  - %s\n", change)
+			}
+			fmt.Fprintln(out, "")
+
+			if tuneFlagApply {
+				if err := tuner.ApplyImportance(result); err != nil {
+					return fmt.Errorf("applying importance tune: %w", err)
+				}
+				fmt.Fprintf(out, "  Applied! Importance criteria updated, corrections cleared.\n\n")
+			} else {
+				fmt.Fprintln(out, "  Run with --apply to save these changes.")
+				fmt.Fprintln(out, "")
+			}
+		}
+	}
+
 	return nil
 }
 

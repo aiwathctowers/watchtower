@@ -22,6 +22,9 @@ struct SidebarView: View {
 
             Spacer()
 
+            // Background tasks progress
+            SidebarProgressView()
+
             // Tools section
             VStack(alignment: .leading, spacing: 2) {
                 Text("TOOLS")

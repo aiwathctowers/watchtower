@@ -30,6 +30,9 @@ final class AppState {
     /// Manages app updates from GitHub Releases.
     let updateService = UpdateService()
 
+    /// Manages background pipeline tasks (digests, action items) started after onboarding sync.
+    let backgroundTaskManager = BackgroundTaskManager()
+
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
     func ensureChatViewModels() {
         guard let db = databaseManager, chatViewModel == nil else { return }

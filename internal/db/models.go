@@ -222,6 +222,17 @@ type Feedback struct {
 	CreatedAt  string
 }
 
+// ImportanceCorrection records a user's override of AI-assigned decision importance.
+type ImportanceCorrection struct {
+	ID                 int
+	DigestID           int
+	DecisionIdx        int
+	DecisionText       string
+	OriginalImportance string
+	NewImportance      string
+	CreatedAt          string
+}
+
 // Prompt represents an editable AI prompt template.
 type Prompt struct {
 	ID        string // "digest.channel", "actionitems.extract", "analysis.user", etc.

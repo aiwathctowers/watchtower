@@ -106,7 +106,7 @@ struct DecisionsListView: View {
 
             // Left importance bar
             RoundedRectangle(cornerRadius: 2)
-                .fill(importanceColor(entry.decision.resolvedImportance))
+                .fill(importanceColor(entry.effectiveImportance))
                 .frame(width: 3)
                 .padding(.vertical, 2)
 
@@ -120,13 +120,13 @@ struct DecisionsListView: View {
 
                     Spacer()
 
-                    Text(importanceLabel(entry.decision.resolvedImportance))
+                    Text(importanceLabel(entry.effectiveImportance))
                         .font(.caption2)
                         .fontWeight(.semibold)
-                        .foregroundStyle(importanceColor(entry.decision.resolvedImportance))
+                        .foregroundStyle(importanceColor(entry.effectiveImportance))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(importanceColor(entry.decision.resolvedImportance).opacity(0.12), in: Capsule())
+                        .background(importanceColor(entry.effectiveImportance).opacity(0.12), in: Capsule())
 
                     Button {
                         toggleExpanded(entry.id)

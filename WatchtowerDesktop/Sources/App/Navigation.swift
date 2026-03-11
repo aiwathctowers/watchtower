@@ -61,40 +61,56 @@ struct MainNavigationView: View {
     @Environment(AppState.self) private var appState
     @State private var showMenu = true
 
+    private var sidebarToggleRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showMenu.toggle()
+                }
+            } label: {
+                Image(systemName: "sidebar.leading")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle Menu")
+            .keyboardShortcut("b", modifiers: [.command])
+
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
     var body: some View {
         @Bindable var state = appState
         VStack(spacing: 0) {
             // Content
             HStack(spacing: 0) {
-                // Toggle menu button (always visible)
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showMenu.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.leading")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.borderless)
-                .help("Toggle Menu")
-                .keyboardShortcut("b", modifiers: [.command])
-                .padding(.leading, 8)
-
                 if showMenu {
-                    // Left sidebar (menu)
-                    SidebarView(selection: $state.selectedDestination)
-                        .frame(width: 180)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    // Left sidebar with toggle button in toolbar row
+                    VStack(spacing: 0) {
+                        sidebarToggleRow
+
+                        SidebarView(selection: $state.selectedDestination)
+                    }
+                    .frame(width: 180)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .transition(.move(edge: .leading).combined(with: .opacity))
 
                     Divider()
                 }
 
                 // Main content
-                detailView
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .controlBackgroundColor))
+                VStack(spacing: 0) {
+                    if !showMenu {
+                        sidebarToggleRow
+                            .background(Color(nsColor: .windowBackgroundColor))
+                    }
+
+                    detailView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                }
             }
 
             StatusBarView()
@@ -128,8 +144,6 @@ enum OnboardingStep: Int, CaseIterable {
     case settings = 1
     case claude = 2
     case sync = 3
-    case generate = 4
-    case ready = 5
 
     var title: String {
         switch self {
@@ -137,8 +151,6 @@ enum OnboardingStep: Int, CaseIterable {
         case .settings: "Settings"
         case .claude: "AI Setup"
         case .sync: "Sync"
-        case .generate: "Insights"
-        case .ready: "Ready"
         }
     }
 }
@@ -147,16 +159,12 @@ struct OnboardingView: View {
     let errorMessage: String?
     let onRetry: () -> Void
 
+    @Environment(AppState.self) private var appState
     @State private var step: OnboardingStep = .connect
     @State private var isRunning = false
     @State private var output = ""
     @State private var cliError: String?
     @State private var syncProgress: SyncProgressData?
-    @State private var digestProgress: InsightProgressData?
-    @State private var actionsProgress: InsightProgressData?
-    @State private var totalTokensIn = 0
-    @State private var totalTokensOut = 0
-    @State private var totalCost = 0.0
 
     // Settings
     @State private var settingsLanguage = "English"
@@ -202,10 +210,6 @@ struct OnboardingView: View {
                 claudeStepView
             case .sync:
                 syncStep
-            case .generate:
-                generateStep
-            case .ready:
-                readyStep
             }
 
             // Error display (only show cliError, not appState.errorMessage which is stale)
@@ -1021,133 +1025,6 @@ struct OnboardingView: View {
         return "\(n)"
     }
 
-    // MARK: - Generate Step
-
-    private var generateStep: some View {
-        VStack(spacing: 16) {
-            Text("Generating insights from your Slack data.")
-                .foregroundStyle(.secondary)
-
-            if isRunning {
-                VStack(alignment: .leading, spacing: 12) {
-                    insightRow(
-                        label: "Digests",
-                        icon: "doc.text.magnifyingglass",
-                        progress: digestProgress
-                    )
-                    insightRow(
-                        label: "Action Items",
-                        icon: "checklist",
-                        progress: actionsProgress
-                    )
-
-                    if totalTokensIn > 0 || totalTokensOut > 0 {
-                        Divider()
-                        HStack {
-                            Image(systemName: "cpu")
-                                .foregroundStyle(.secondary)
-                            Text("Tokens: \(fmtNum(totalTokensIn)) in + \(fmtNum(totalTokensOut)) out")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if totalCost > 0 {
-                                Text("| $\(String(format: "%.4f", totalCost))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .padding()
-                .frame(maxWidth: 450)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
-    private func insightRow(label: String, icon: String, progress: InsightProgressData?) -> some View {
-        let isFinished = progress?.finished == true
-        let hasError = progress?.error != nil && !(progress?.error?.isEmpty ?? true)
-        let isActive = progress != nil && !isFinished
-        let done = progress?.done ?? 0
-        let total = progress?.total ?? 0
-        let itemsFound = progress?.itemsFound ?? 0
-
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                if isFinished && !hasError {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .frame(width: 16)
-                } else if hasError {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .frame(width: 16)
-                } else {
-                    Image(systemName: icon)
-                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary.opacity(0.4))
-                        .frame(width: 16)
-                }
-
-                Text(label)
-                    .font(.caption)
-                    .fontWeight(isActive ? .semibold : .regular)
-                    .foregroundStyle(progress == nil ? Color.secondary.opacity(0.4) : Color.primary)
-
-                Spacer()
-
-                if isFinished && !hasError {
-                    Text("\(itemsFound) generated")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else if isFinished && hasError {
-                    Text("failed")
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                } else if isActive && total > 0 {
-                    Text("\(done)/\(total)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if isActive && total > 0 {
-                ProgressView(value: Double(done), total: Double(max(total, 1)))
-                    .tint(.accentColor)
-            } else if isActive {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7, anchor: .leading)
-            }
-
-            if isActive, let status = progress?.status, !status.isEmpty {
-                Text(status)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-    }
-
-    // MARK: - Ready Step
-
-    private var readyStep: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(.green)
-
-            Text("You're all set!")
-                .font(.headline)
-
-            Button("Get Started") {
-                onRetry()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-        }
-    }
-
     // MARK: - CLI Execution
 
     private func runAuthLogin() {
@@ -1263,108 +1140,16 @@ struct OnboardingView: View {
 
             isRunning = false
             if exitCode == 0 {
-                step = .generate
                 syncProgress = nil
-                runGenerate()
+                // Transition to main app immediately — pipelines run in background
+                appState.backgroundTaskManager.startPipelines()
+                onRetry()
             } else {
                 cliError = stderrText.isEmpty
                     ? "Sync failed (exit code \(exitCode))"
                     : stderrText
             }
         }
-    }
-
-    private func runGenerate() {
-        guard let path = cliPath else { return }
-        isRunning = true
-        cliError = nil
-        digestProgress = nil
-        actionsProgress = nil
-        totalTokensIn = 0
-        totalTokensOut = 0
-        totalCost = 0.0
-
-        Task {
-            // Phase 1: Digests
-            let digestFinal = await runPipelineWithProgress(path: path, arguments: ["digest", "generate", "--progress-json"], pipeline: "digest")
-            if let f = digestFinal {
-                totalTokensIn += f.inputTokens
-                totalTokensOut += f.outputTokens
-                totalCost += f.costUsd
-            }
-
-            // Phase 2: Action items (depend on digests for related_digest_ids)
-            let actionsFinal = await runPipelineWithProgress(path: path, arguments: ["actions", "generate", "--progress-json"], pipeline: "actions")
-            if let f = actionsFinal {
-                totalTokensIn += f.inputTokens
-                totalTokensOut += f.outputTokens
-                totalCost += f.costUsd
-            }
-
-            // Start daemon (will run People analysis in background)
-            _ = await Self.runCLI(path: path, arguments: ["sync", "--daemon", "--detach"])
-
-            isRunning = false
-            step = .ready
-            onRetry()
-        }
-    }
-
-    private func runPipelineWithProgress(path: String, arguments: [String], pipeline: String) async -> InsightProgressData? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let decoder = JSONDecoder()
-
-        // Read JSON lines
-        let readTask = Task<InsightProgressData?, Never> {
-            var final: InsightProgressData?
-            do {
-                for try await line in stdoutPipe.fileHandleForReading.bytes.lines {
-                    if let data = line.data(using: .utf8),
-                       let json = try? decoder.decode(InsightProgressData.self, from: data) {
-                        await MainActor.run {
-                            switch pipeline {
-                            case "digest": self.digestProgress = json
-                            case "actions": self.actionsProgress = json
-                            default: break
-                            }
-                        }
-                        if json.finished == true {
-                            final = json
-                        }
-                    }
-                }
-            } catch {
-                // EOF
-            }
-            return final
-        }
-
-        // Wait for process exit
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in
-                cont.resume()
-            }
-        }
-
-        let lastFinished = await readTask.value
-
-        // Read stderr (for debugging, not shown to user)
-        _ = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        return lastFinished
     }
 
     private struct CLIResult {

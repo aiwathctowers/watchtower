@@ -327,3 +327,16 @@ CREATE TABLE IF NOT EXISTS action_item_history (
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_action_item_history_item ON action_item_history(action_item_id);
+
+-- Decision importance corrections (training signal for prompt tuning)
+CREATE TABLE IF NOT EXISTS decision_importance_corrections (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest_id            INTEGER NOT NULL,
+    decision_idx         INTEGER NOT NULL,
+    decision_text        TEXT NOT NULL DEFAULT '',
+    original_importance  TEXT NOT NULL CHECK(original_importance IN ('high', 'medium', 'low')),
+    new_importance       TEXT NOT NULL CHECK(new_importance IN ('high', 'medium', 'low')),
+    created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dic_dedup ON decision_importance_corrections(digest_id, decision_idx);
+CREATE INDEX IF NOT EXISTS idx_dic_created ON decision_importance_corrections(created_at);

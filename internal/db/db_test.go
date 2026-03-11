@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 17, v)
+	assert.Equal(t, 18, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {

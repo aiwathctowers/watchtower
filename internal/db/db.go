@@ -81,7 +81,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 17"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 18"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -671,6 +671,40 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v17: %w", err)
 		}
 		version = 17
+	}
+
+	if version < 18 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v18: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS decision_importance_corrections (
+			id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+			digest_id            INTEGER NOT NULL,
+			decision_idx         INTEGER NOT NULL,
+			decision_text        TEXT NOT NULL DEFAULT '',
+			original_importance  TEXT NOT NULL CHECK(original_importance IN ('high', 'medium', 'low')),
+			new_importance       TEXT NOT NULL CHECK(new_importance IN ('high', 'medium', 'low')),
+			created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v18 create decision_importance_corrections: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dic_dedup ON decision_importance_corrections(digest_id, decision_idx)`); err != nil {
+			return fmt.Errorf("migration v18 dedup index: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_dic_created ON decision_importance_corrections(created_at)`); err != nil {
+			return fmt.Errorf("migration v18 created index: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 18"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v18: %w", err)
+		}
+		version = 18
 	}
 
 	_ = version // silence unused variable if this is the last migration

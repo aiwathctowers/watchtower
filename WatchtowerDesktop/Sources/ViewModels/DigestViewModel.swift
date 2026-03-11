@@ -21,10 +21,20 @@ final class DigestViewModel {
         self.dbManager = dbManager
     }
 
+    private struct LoadResult {
+        let digests: [Digest]
+        let withDecisions: [Digest]
+        let channelNames: [String: String]
+        let domain: String?
+        let readIndices: [Int: Set<Int>]
+        let unreadDigests: Int
+        let importanceCorrections: [String: String]
+    }
+
     func load() {
         isLoading = true
         do {
-            let result = try dbManager.dbPool.read { db in
+            let result = try dbManager.dbPool.read { db -> LoadResult in
                 let d = try DigestQueries.fetchAll(db, type: selectedType)
                 let withDecisions = try DigestQueries.fetchWithDecisions(db, limit: 200)
                 let ws = try WorkspaceQueries.fetchWorkspace(db)
@@ -57,14 +67,23 @@ final class DigestViewModel {
                 let readIndices = try DigestQueries.readDecisionIndices(db, digestIDs: digestIDs)
 
                 let unreadDigests = try DigestQueries.unreadDigestCount(db)
+                let importanceCorrections = try ImportanceCorrectionQueries.allCorrections(db)
 
-                return (d, withDecisions, nameMap, ws?.domain, readIndices, unreadDigests)
+                return LoadResult(
+                    digests: d,
+                    withDecisions: withDecisions,
+                    channelNames: nameMap,
+                    domain: ws?.domain,
+                    readIndices: readIndices,
+                    unreadDigests: unreadDigests,
+                    importanceCorrections: importanceCorrections
+                )
             }
-            digests = result.0
-            channelNameCache = result.2
-            workspaceDomain = result.3
-            decisionEntries = buildDecisionEntries(from: result.1, readIndices: result.4)
-            unreadDigestCount = result.5
+            digests = result.digests
+            channelNameCache = result.channelNames
+            workspaceDomain = result.domain
+            decisionEntries = buildDecisionEntries(from: result.withDecisions, readIndices: result.readIndices, importanceCorrections: result.importanceCorrections)
+            unreadDigestCount = result.unreadDigests
             unreadDecisionCount = decisionEntries.filter { !$0.isRead }.count
             errorMessage = nil
         } catch {
@@ -75,7 +94,7 @@ final class DigestViewModel {
         isLoading = false
     }
 
-    private func buildDecisionEntries(from digests: [Digest], readIndices: [Int: Set<Int>]) -> [DecisionEntry] {
+    private func buildDecisionEntries(from digests: [Digest], readIndices: [Int: Set<Int>], importanceCorrections: [String: String] = [:]) -> [DecisionEntry] {
         // Separate digests by type: prefer higher-level (daily/weekly) over channel
         let dailyWeekly = digests.filter { $0.type == "daily" || $0.type == "weekly" }
         let channelOnly = digests.filter { $0.type == "channel" }
@@ -111,6 +130,8 @@ final class DigestViewModel {
             let date = Date(timeIntervalSince1970: digest.periodTo)
             let chName = digest.channelID.isEmpty ? nil : channelNameCache[digest.channelID]
             let isRead = readIndices[digest.id]?.contains(idx) ?? false
+            let correctionKey = "\(digest.id):\(idx)"
+            let corrected = importanceCorrections[correctionKey]
             entries.append(DecisionEntry(
                 decision: decision,
                 digestID: digest.id,
@@ -121,7 +142,8 @@ final class DigestViewModel {
                 digestType: digest.type,
                 date: date,
                 messageTS: decision.messageTS,
-                isRead: isRead
+                isRead: isRead,
+                correctedImportance: corrected
             ))
         }
 
@@ -173,18 +195,7 @@ final class DigestViewModel {
             if let idx = decisionEntries.firstIndex(where: {
                 $0.digestID == digestID && $0.decisionIdx == decisionIdx && !$0.isRead
             }) {
-                decisionEntries[idx] = DecisionEntry(
-                    decision: decisionEntries[idx].decision,
-                    digestID: decisionEntries[idx].digestID,
-                    decisionIdx: decisionEntries[idx].decisionIdx,
-                    channelID: decisionEntries[idx].channelID,
-                    channelName: decisionEntries[idx].channelName,
-                    digestSummary: decisionEntries[idx].digestSummary,
-                    digestType: decisionEntries[idx].digestType,
-                    date: decisionEntries[idx].date,
-                    messageTS: decisionEntries[idx].messageTS,
-                    isRead: true
-                )
+                decisionEntries[idx] = decisionEntries[idx].with(isRead: true)
                 unreadDecisionCount = max(0, unreadDecisionCount - 1)
             }
         } catch {
@@ -225,18 +236,7 @@ final class DigestViewModel {
                 if let idx = decisionEntries.firstIndex(where: {
                     $0.digestID == entry.digestID && $0.decisionIdx == entry.decisionIdx && !$0.isRead
                 }) {
-                    decisionEntries[idx] = DecisionEntry(
-                        decision: decisionEntries[idx].decision,
-                        digestID: decisionEntries[idx].digestID,
-                        decisionIdx: decisionEntries[idx].decisionIdx,
-                        channelID: decisionEntries[idx].channelID,
-                        channelName: decisionEntries[idx].channelName,
-                        digestSummary: decisionEntries[idx].digestSummary,
-                        digestType: decisionEntries[idx].digestType,
-                        date: decisionEntries[idx].date,
-                        messageTS: decisionEntries[idx].messageTS,
-                        isRead: true
-                    )
+                    decisionEntries[idx] = decisionEntries[idx].with(isRead: true)
                     unreadDecisionCount = max(0, unreadDecisionCount - 1)
                 }
             }
@@ -254,6 +254,47 @@ final class DigestViewModel {
             }
         } catch {
             print("Failed to submit batch feedback: \(error)")
+        }
+    }
+
+    // MARK: - Importance corrections
+
+    func setDecisionImportance(_ entry: DecisionEntry, newImportance: String) {
+        let originalImportance = entry.decision.resolvedImportance
+        guard newImportance != originalImportance else {
+            // User reverted to original — delete correction
+            do {
+                try dbManager.dbPool.write { db in
+                    try ImportanceCorrectionQueries.delete(db, digestID: entry.digestID, decisionIdx: entry.decisionIdx)
+                }
+                updateEntryImportance(entry, corrected: nil)
+            } catch {
+                print("Failed to delete importance correction: \(error)")
+            }
+            return
+        }
+        do {
+            try dbManager.dbPool.write { db in
+                try ImportanceCorrectionQueries.upsert(
+                    db,
+                    digestID: entry.digestID,
+                    decisionIdx: entry.decisionIdx,
+                    decisionText: entry.decision.text,
+                    originalImportance: originalImportance,
+                    newImportance: newImportance
+                )
+            }
+            updateEntryImportance(entry, corrected: newImportance)
+        } catch {
+            print("Failed to save importance correction: \(error)")
+        }
+    }
+
+    private func updateEntryImportance(_ entry: DecisionEntry, corrected: String?) {
+        if let idx = decisionEntries.firstIndex(where: {
+            $0.digestID == entry.digestID && $0.decisionIdx == entry.decisionIdx
+        }) {
+            decisionEntries[idx] = decisionEntries[idx].with(correctedImportance: corrected)
         }
     }
 

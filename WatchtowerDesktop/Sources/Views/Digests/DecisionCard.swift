@@ -5,9 +5,15 @@ struct DecisionCard: View {
     var slackURL: URL? = nil
     var feedbackEntityID: String? = nil  // "digestID:decisionIdx"
     var dbManager: DatabaseManager? = nil
+    var correctedImportance: String? = nil
+    var onImportanceChange: ((String) -> Void)? = nil
+
+    private var effectiveImportance: String {
+        correctedImportance ?? decision.resolvedImportance
+    }
 
     private var accentColor: Color {
-        switch decision.resolvedImportance {
+        switch effectiveImportance {
         case "high": .red
         case "low": .gray
         default: .orange
@@ -25,7 +31,15 @@ struct DecisionCard: View {
                     Text(decision.text)
                         .textSelection(.enabled)
                     Spacer()
-                    ImportanceBadge(importance: decision.resolvedImportance)
+                    if let onChange = onImportanceChange {
+                        EditableImportanceBadge(
+                            importance: effectiveImportance,
+                            isCorrected: correctedImportance != nil,
+                            onChange: onChange
+                        )
+                    } else {
+                        ImportanceBadge(importance: effectiveImportance)
+                    }
                 }
 
                 HStack {
