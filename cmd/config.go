@@ -59,16 +59,6 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	reader := bufio.NewReader(cmd.InOrStdin())
 	var workspace, slackToken string
 
-	// OAuth credentials: use built-in defaults, allow env var override.
-	clientID := os.Getenv("WATCHTOWER_OAUTH_CLIENT_ID")
-	clientSecret := os.Getenv("WATCHTOWER_OAUTH_CLIENT_SECRET")
-	if clientID == "" {
-		clientID = auth.DefaultClientID
-	}
-	if clientSecret == "" {
-		clientSecret = auth.DefaultClientSecret
-	}
-
 	fmt.Fprintln(out, "How do you want to authenticate?")
 	fmt.Fprintln(out, "  [1] OAuth via browser (recommended)")
 	fmt.Fprintln(out, "  [2] Paste a Slack token manually")
@@ -83,6 +73,18 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 	}
 
 	if choice == "1" {
+		clientID := os.Getenv("WATCHTOWER_OAUTH_CLIENT_ID")
+		clientSecret := os.Getenv("WATCHTOWER_OAUTH_CLIENT_SECRET")
+		if clientID == "" {
+			clientID = auth.DefaultClientID
+		}
+		if clientSecret == "" {
+			clientSecret = auth.DefaultClientSecret
+		}
+		if clientID == "" || clientSecret == "" {
+			return fmt.Errorf("OAuth credentials not configured. Set WATCHTOWER_OAUTH_CLIENT_ID and WATCHTOWER_OAUTH_CLIENT_SECRET environment variables, or use an official release build")
+		}
+
 		result, err := auth.Login(cmd.Context(), auth.OAuthConfig{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,

@@ -23,6 +23,8 @@ builds:
       - -X watchtower/cmd.Version={{.Version}}
       - -X watchtower/cmd.Commit={{.Commit}}
       - -X watchtower/cmd.BuildDate={{.Date}}
+      - -X watchtower/internal/auth.DefaultClientID={{ .Env.WATCHTOWER_OAUTH_CLIENT_ID }}
+      - -X watchtower/internal/auth.DefaultClientSecret={{ .Env.WATCHTOWER_OAUTH_CLIENT_SECRET }}
 
 archives:
   - format: tar.gz

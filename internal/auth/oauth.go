@@ -28,20 +28,18 @@ const (
 	slackAuthorizeURL = "https://slack.com/oauth/v2/authorize"
 	callbackPath      = "/callback"
 	loginTimeout      = 5 * time.Minute
+)
 
-	// Default Slack App credentials for the open-source Watchtower CLI.
-	//
-	// YES, the client secret is intentionally committed to source code.
-	// This is standard practice for public OAuth apps distributed as open-source
-	// CLIs (see: GitHub CLI, Slack CLI, etc.). For public apps the client secret
-	// is NOT a security boundary — OAuth security relies on redirect URI
-	// validation and user consent. Keeping these here lets users run
-	// `watchtower auth login` without any extra setup.
-	//
-	// Override with WATCHTOWER_OAUTH_CLIENT_ID / WATCHTOWER_OAUTH_CLIENT_SECRET
-	// env vars if you run your own Slack app.
-	DefaultClientID     = "REDACTED_CLIENT_ID"
-	DefaultClientSecret = "REDACTED_CLIENT_SECRET"
+// DefaultClientID and DefaultClientSecret are the Slack app credentials
+// for the Watchtower CLI. They are injected at build time via -ldflags:
+//
+//	-X watchtower/internal/auth.DefaultClientID=...
+//	-X watchtower/internal/auth.DefaultClientSecret=...
+//
+// Override at runtime with WATCHTOWER_OAUTH_CLIENT_ID / WATCHTOWER_OAUTH_CLIENT_SECRET.
+var (
+	DefaultClientID     string
+	DefaultClientSecret string
 )
 
 // UserScopes are the Slack user token scopes required by Watchtower.

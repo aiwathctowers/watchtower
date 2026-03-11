@@ -23,8 +23,10 @@ echo "==> Building Go CLI..."
 cd "$PROJECT_ROOT"
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+OAUTH_ID="${WATCHTOWER_OAUTH_CLIENT_ID:-}"
+OAUTH_SECRET="${WATCHTOWER_OAUTH_CLIENT_SECRET:-}"
 GOARCH=arm64 CGO_ENABLED=0 go build \
-    -ldflags="-s -w -X watchtower/cmd.Version=${VERSION} -X watchtower/cmd.Commit=${COMMIT} -X watchtower/cmd.BuildDate=${BUILD_DATE}" \
+    -ldflags="-s -w -X watchtower/cmd.Version=${VERSION} -X watchtower/cmd.Commit=${COMMIT} -X watchtower/cmd.BuildDate=${BUILD_DATE} -X watchtower/internal/auth.DefaultClientID=${OAUTH_ID} -X watchtower/internal/auth.DefaultClientSecret=${OAUTH_SECRET}" \
     -o "$BUILD_DIR/watchtower" .
 echo "    Go CLI built ($(du -h "$BUILD_DIR/watchtower" | cut -f1))"
 

@@ -43,6 +43,9 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	if clientSecret == "" {
 		clientSecret = auth.DefaultClientSecret
 	}
+	if clientID == "" || clientSecret == "" {
+		return fmt.Errorf("OAuth credentials not configured. Set WATCHTOWER_OAUTH_CLIENT_ID and WATCHTOWER_OAUTH_CLIENT_SECRET environment variables, or use an official release build")
+	}
 
 	cfg := auth.OAuthConfig{
 		ClientID:     clientID,
