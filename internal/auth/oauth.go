@@ -158,6 +158,7 @@ type callbackResult struct {
 //  2. Opens the Slack authorize URL in the user's browser
 //  3. Waits for the callback with an authorization code
 //  4. Exchanges the code for a user token
+//
 // LoginOptions configures the Login flow behaviour.
 type LoginOptions struct {
 	// SkipBrowserOpen disables automatic browser launch; the authorize URL is still printed.

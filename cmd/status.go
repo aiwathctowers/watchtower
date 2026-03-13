@@ -70,7 +70,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Database line
 	dbSize := dbFileSize(dbPath)
-	fmt.Fprintf(out, "Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize)))
+	fmt.Fprintf(out, "Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize))) //nolint:gosec // dbSize is always positive
 
 	// Last sync line
 	if lastSync != "" {

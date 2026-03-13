@@ -118,10 +118,10 @@ func runSyncStop(cfg *config.Config) error {
 	// Poll until process exits (10s timeout).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil { //nolint:nilerr // err means process exited, which is the desired outcome
+		if err := syscall.Kill(pid, 0); err != nil {
 			daemon.RemovePID(pidPath)
 			fmt.Println("Daemon stopped.")
-			return nil
+			return nil //nolint:nilerr // err means process exited, which is the desired outcome
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
