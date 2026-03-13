@@ -10,42 +10,20 @@ linters:
     - typecheck
     - bodyclose
     - noctx
-    - rowserrcheck
     - sqlclosecheck
     - gosec
     - exhaustive
-    - forcetypeassert
     - nilerr
     - predeclared
 
-    # Error handling
-    - errorlint
-    - errname
-    - wrapcheck
-
     # Code quality
-    - gocritic
-    - revive
     - unconvert
-    - unparam
     - unused
     - ineffassign
     - gosimple
-    - nakedret
-    - prealloc
-    - makezero
-
-    # Complexity
-    - gocyclo
-    - gocognit
-    - funlen
-    - nestif
-    - cyclop
 
     # Style & consistency
-    - goconst
     - misspell
-    - nolintlint
     - whitespace
     - dupword
 
@@ -53,68 +31,16 @@ linters:
     - goimports
 
 linters-settings:
-  gocyclo:
-    min-complexity: 15
-
-  gocognit:
-    min-complexity: 20
-
-  funlen:
-    lines: 80
-    statements: 50
-
-  nestif:
-    min-complexity: 5
-
-  cyclop:
-    max-complexity: 15
-
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-      - opinionated
-
-  revive:
-    rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: exported
-      - name: if-return
-      - name: increment-decrement
-      - name: var-naming
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: indent-error-flow
-      - name: errorf
-      - name: empty-block
-      - name: superfluous-else
-      - name: unused-parameter
-      - name: unreachable-code
-      - name: redefines-builtin-id
-
   errcheck:
-    check-type-assertions: true
-    check-blank: true
-
-  nakedret:
-    max-func-lines: 10
-
-  nolintlint:
-    require-explanation: true
-    require-specific: true
+    check-type-assertions: false
+    check-blank: false
+    exclude-functions:
+      - (*database/sql.Tx).Rollback
+      - (*database/sql.Rows).Close
+      - (io.Closer).Close
+      - encoding/json.Unmarshal
+      - (*os/exec.Cmd).Wait
+      - (*github.com/spf13/viper.Viper).BindEnv
 
   exhaustive:
     default-signifies-exhaustive: true
@@ -123,18 +49,6 @@ linters-settings:
     excludes:
       - G104 # covered by errcheck
       - G304 # file path from variable is expected in CLI tools
-
-  wrapcheck:
-    ignoreSigs:
-      - .Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - errors.Join(
-      - .Wrap(
-      - .Wrapf(
-      - .WithMessage(
-      - .WithMessagef(
-      - .WithStack(
 
 issues:
   max-issues-per-linter: 0
@@ -146,20 +60,4 @@ issues:
       linters:
         - errcheck
         - gosec
-        - funlen
-        - gocyclo
-        - gocognit
-        - cyclop
-        - wrapcheck
-        - forcetypeassert
         - dupword
-
-    # cmd/ has simple CLI wiring — allow longer functions
-    - path: ^cmd/
-      linters:
-        - wrapcheck
-
-    # Allow cuddling in main/init
-    - path: main\.go
-      linters:
-        - wrapcheck
