@@ -51,8 +51,11 @@ enum ChatConversationQueries {
         try db.execute(sql: """
             INSERT INTO chat_conversations (title, context_type, context_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
         """, arguments: [title, contextType, contextID, now, now])
-        let id = db.lastInsertedRowID
-        return try ChatConversation.fetchOne(db, sql: "SELECT * FROM chat_conversations WHERE id = ?", arguments: [id])!
+        let rowID = db.lastInsertedRowID
+        guard let conversation = try ChatConversation.fetchOne(db, sql: "SELECT * FROM chat_conversations WHERE id = ?", arguments: [rowID]) else {
+            throw DatabaseError(message: "Failed to fetch newly created chat conversation")
+        }
+        return conversation
     }
 
     static func fetchByContext(_ db: Database, type: String, id: String) throws -> ChatConversation? {

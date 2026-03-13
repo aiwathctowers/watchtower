@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,9 +47,9 @@ func simulateCallback(redirectURI, state, code, errMsg string) {
 }
 
 func TestLogin_HappyPath(t *testing.T) {
-	var capturedURL string
+	var capturedURL atomic.Value
 	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL = u }
+	openBrowserFunc = func(u string) { capturedURL.Store(u) }
 	defer func() { openBrowserFunc = oldOpen }()
 
 	oldExchange := exchangeToken
@@ -89,9 +90,9 @@ func TestLogin_HappyPath(t *testing.T) {
 		}{r, err}
 	}()
 
-	require.Eventually(t, func() bool { return capturedURL != "" }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { v := capturedURL.Load(); return v != nil && v.(string) != "" }, 3*time.Second, 10*time.Millisecond)
 
-	parsed, err := url.Parse(capturedURL)
+	parsed, err := url.Parse(capturedURL.Load().(string))
 	require.NoError(t, err)
 	state := parsed.Query().Get("state")
 	redirectURI := parsed.Query().Get("redirect_uri")
@@ -123,9 +124,9 @@ func TestLogin_HappyPath(t *testing.T) {
 }
 
 func TestLogin_StateMismatch(t *testing.T) {
-	var capturedURL string
+	var capturedURL atomic.Value
 	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL = u }
+	openBrowserFunc = func(u string) { capturedURL.Store(u) }
 	defer func() { openBrowserFunc = oldOpen }()
 
 	oldExchange := exchangeToken
@@ -144,9 +145,9 @@ func TestLogin_StateMismatch(t *testing.T) {
 		resultCh <- err
 	}()
 
-	require.Eventually(t, func() bool { return capturedURL != "" }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { v := capturedURL.Load(); return v != nil && v.(string) != "" }, 3*time.Second, 10*time.Millisecond)
 
-	parsed, err := url.Parse(capturedURL)
+	parsed, err := url.Parse(capturedURL.Load().(string))
 	require.NoError(t, err)
 	redirectURI := parsed.Query().Get("redirect_uri")
 
@@ -162,9 +163,9 @@ func TestLogin_StateMismatch(t *testing.T) {
 }
 
 func TestLogin_UserDenied(t *testing.T) {
-	var capturedURL string
+	var capturedURL atomic.Value
 	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL = u }
+	openBrowserFunc = func(u string) { capturedURL.Store(u) }
 	defer func() { openBrowserFunc = oldOpen }()
 
 	oldExchange := exchangeToken
@@ -183,9 +184,9 @@ func TestLogin_UserDenied(t *testing.T) {
 		resultCh <- err
 	}()
 
-	require.Eventually(t, func() bool { return capturedURL != "" }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { v := capturedURL.Load(); return v != nil && v.(string) != "" }, 3*time.Second, 10*time.Millisecond)
 
-	parsed, err := url.Parse(capturedURL)
+	parsed, err := url.Parse(capturedURL.Load().(string))
 	require.NoError(t, err)
 	redirectURI := parsed.Query().Get("redirect_uri")
 
@@ -231,9 +232,9 @@ func TestLogin_PortBusy(t *testing.T) {
 		}
 	}()
 
-	var capturedURL string
+	var capturedURL atomic.Value
 	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL = u }
+	openBrowserFunc = func(u string) { capturedURL.Store(u) }
 	defer func() { openBrowserFunc = oldOpen }()
 
 	oldExchange := exchangeToken
@@ -263,9 +264,9 @@ func TestLogin_PortBusy(t *testing.T) {
 		}{r, err}
 	}()
 
-	require.Eventually(t, func() bool { return capturedURL != "" }, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { v := capturedURL.Load(); return v != nil && v.(string) != "" }, 3*time.Second, 10*time.Millisecond)
 
-	parsed, err := url.Parse(capturedURL)
+	parsed, err := url.Parse(capturedURL.Load().(string))
 	require.NoError(t, err)
 	redirectURI := parsed.Query().Get("redirect_uri")
 	state := parsed.Query().Get("state")
@@ -304,4 +305,90 @@ func TestGenerateSelfSignedCert(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, cert.Certificate, 1)
 	assert.NotNil(t, cert.PrivateKey)
+}
+
+func TestPrepare(t *testing.T) {
+	cfg := OAuthConfig{ClientID: "cid", ClientSecret: "csec"}
+	result, err := Prepare(cfg, "")
+	require.NoError(t, err)
+
+	assert.Contains(t, result.AuthorizeURL, "https://slack.com/oauth/v2/authorize")
+	assert.Contains(t, result.AuthorizeURL, "client_id=cid")
+	assert.Contains(t, result.AuthorizeURL, "user_scope=")
+	assert.Contains(t, result.AuthorizeURL, "state="+result.State)
+	assert.Contains(t, result.AuthorizeURL, url.QueryEscape(result.RedirectURI))
+
+	assert.Equal(t, fmt.Sprintf("https://127.0.0.1:%d/callback", defaultRedirectPort), result.RedirectURI)
+	assert.Len(t, result.State, 64)
+}
+
+func TestPrepare_UniqueState(t *testing.T) {
+	cfg := OAuthConfig{ClientID: "id", ClientSecret: "sec"}
+	r1, err := Prepare(cfg, "")
+	require.NoError(t, err)
+	r2, err := Prepare(cfg, "")
+	require.NoError(t, err)
+	assert.NotEqual(t, r1.State, r2.State, "each Prepare call should generate a unique state")
+}
+
+func TestComplete_HappyPath(t *testing.T) {
+	oldExchange := exchangeToken
+	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
+		assert.Equal(t, "cid", clientID)
+		assert.Equal(t, "csec", clientSecret)
+		assert.Equal(t, "the-code", code)
+		assert.Equal(t, "https://127.0.0.1:18491/callback", redirectURI)
+		return &slack.OAuthV2Response{
+			AuthedUser: slack.OAuthV2ResponseAuthedUser{
+				ID:          "U111",
+				AccessToken: "xoxp-complete-token",
+			},
+			Team: slack.OAuthV2ResponseTeam{ID: "T111", Name: "Complete Team"},
+		}, nil
+	}
+	defer func() { exchangeToken = oldExchange }()
+
+	cfg := OAuthConfig{ClientID: "cid", ClientSecret: "csec"}
+	result, err := Complete(context.Background(), cfg, "the-code", "https://127.0.0.1:18491/callback")
+	require.NoError(t, err)
+	assert.Equal(t, "xoxp-complete-token", result.AccessToken)
+	assert.Equal(t, "T111", result.TeamID)
+	assert.Equal(t, "Complete Team", result.TeamName)
+	assert.Equal(t, "U111", result.UserID)
+}
+
+func TestComplete_EmptyCode(t *testing.T) {
+	cfg := OAuthConfig{ClientID: "id", ClientSecret: "sec"}
+	_, err := Complete(context.Background(), cfg, "", "https://127.0.0.1:18491/callback")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no authorization code")
+}
+
+func TestComplete_ExchangeError(t *testing.T) {
+	oldExchange := exchangeToken
+	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
+		return nil, fmt.Errorf("slack API error")
+	}
+	defer func() { exchangeToken = oldExchange }()
+
+	cfg := OAuthConfig{ClientID: "id", ClientSecret: "sec"}
+	_, err := Complete(context.Background(), cfg, "code", "https://127.0.0.1:18491/callback")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exchanging code")
+}
+
+func TestComplete_EmptyToken(t *testing.T) {
+	oldExchange := exchangeToken
+	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
+		return &slack.OAuthV2Response{
+			AuthedUser: slack.OAuthV2ResponseAuthedUser{ID: "U1", AccessToken: ""},
+			Team:       slack.OAuthV2ResponseTeam{ID: "T1", Name: "Team"},
+		}, nil
+	}
+	defer func() { exchangeToken = oldExchange }()
+
+	cfg := OAuthConfig{ClientID: "id", ClientSecret: "sec"}
+	_, err := Complete(context.Background(), cfg, "code", "https://127.0.0.1:18491/callback")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no user access token")
 }

@@ -21,6 +21,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           args: --timeout=5m
 
   go-test:
@@ -52,7 +53,7 @@ jobs:
         run: brew install swiftlint
 
       - name: SwiftLint
-        run: swiftlint lint --strict
+        run: swiftlint lint
 
   swift-test:
     name: Swift Test

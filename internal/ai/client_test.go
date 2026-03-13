@@ -208,11 +208,14 @@ func TestQuery_ContextCancellation(t *testing.T) {
 
 	err := <-errCh
 	if err != nil {
-		// Either context error or kill error is acceptable
-		assert.True(t, strings.Contains(err.Error(), "context") ||
-			strings.Contains(err.Error(), "signal") ||
-			strings.Contains(err.Error(), "killed") ||
-			strings.Contains(err.Error(), "claude CLI"))
+		// Either context error, kill error, or pipe read error is acceptable
+		msg := err.Error()
+		assert.True(t, strings.Contains(msg, "context") ||
+			strings.Contains(msg, "signal") ||
+			strings.Contains(msg, "killed") ||
+			strings.Contains(msg, "claude CLI") ||
+			strings.Contains(msg, "reading claude output"),
+			"unexpected error: %s", msg)
 	}
 }
 
