@@ -126,7 +126,7 @@ fi
 
 # Create DMG
 echo "==> Creating DMG..."
-DMG_NAME="Watchtower-${VERSION}-arm64.dmg"
+DMG_NAME="Watchtower-arm64.dmg"
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
 DMG_STAGING="$BUILD_DIR/dmg-staging"
 
