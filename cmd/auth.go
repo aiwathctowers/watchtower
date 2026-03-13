@@ -73,6 +73,8 @@ func init() {
 	_ = authCompleteCmd.MarkFlagRequired("redirect-uri")
 
 	authPrepareCmd.Flags().String("redirect-uri", "", "Custom redirect URI (e.g. watchtower-auth://callback for desktop app)")
+
+	authLoginCmd.Flags().Bool("no-open", false, "Don't open the browser automatically (print the URL instead)")
 }
 
 func runAuthLogin(cmd *cobra.Command, _ []string) error {
@@ -81,8 +83,9 @@ func runAuthLogin(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	noOpen, _ := cmd.Flags().GetBool("no-open")
 	out := cmd.OutOrStdout()
-	result, err := auth.Login(cmd.Context(), cfg, out)
+	result, err := auth.Login(cmd.Context(), cfg, out, auth.LoginOptions{SkipBrowserOpen: noOpen})
 	if err != nil {
 		return fmt.Errorf("oauth login: %w", err)
 	}
@@ -127,7 +130,6 @@ func runAuthTrustCert(_ *cobra.Command, _ []string) error {
 	}
 
 	fmt.Println("Adding localhost certificate to macOS trust store...")
-	fmt.Println("You may be prompted for your password or Touch ID.")
 	if err := auth.TrustCert(); err != nil {
 		return err
 	}

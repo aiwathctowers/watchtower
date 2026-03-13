@@ -158,7 +158,18 @@ type callbackResult struct {
 //  2. Opens the Slack authorize URL in the user's browser
 //  3. Waits for the callback with an authorization code
 //  4. Exchanges the code for a user token
-func Login(ctx context.Context, cfg OAuthConfig, out io.Writer) (*OAuthResult, error) {
+// LoginOptions configures the Login flow behaviour.
+type LoginOptions struct {
+	// SkipBrowserOpen disables automatic browser launch; the authorize URL is still printed.
+	SkipBrowserOpen bool
+}
+
+func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOptions) (*OAuthResult, error) {
+	var opt LoginOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	_ = opt // used below
 	// Use persistent TLS cert (generated once, can be trusted via `auth trust-cert`)
 	tlsCert, err := EnsureCert()
 	if err != nil {
@@ -208,7 +219,7 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer) (*OAuthResult, e
 		fmt.Fprint(w, "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
 	})
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go server.Serve(listener) //nolint:errcheck
 	defer func() {
 		// Grace period to let the browser receive the HTML response before closing.
@@ -216,12 +227,15 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer) (*OAuthResult, e
 		server.Close()
 	}()
 
-	// Print URL and try to open browser
-	fmt.Fprintf(out, "Opening browser for Slack authorization...\n")
-	fmt.Fprintf(out, "If the browser doesn't open, visit this URL:\n\n  %s\n\n", authorizeURL)
-	fmt.Fprintf(out, "Note: your browser may show a security warning for the localhost redirect.\n")
-	fmt.Fprintf(out, "This is expected — click \"Advanced\" → \"Proceed\" to continue.\n\n")
-	openBrowserFunc(authorizeURL)
+	// Print URL and optionally open browser
+	if opt.SkipBrowserOpen {
+		fmt.Fprintf(out, "Authorize URL:\n\n  %s\n\n", authorizeURL)
+		fmt.Fprintf(out, "Waiting for authorization callback...\n")
+	} else {
+		fmt.Fprintf(out, "Opening browser for Slack authorization...\n")
+		fmt.Fprintf(out, "If the browser doesn't open, visit this URL:\n\n  %s\n\n", authorizeURL)
+		openBrowserFunc(authorizeURL)
+	}
 
 	// Wait for callback or timeout
 	ctx, cancel := context.WithTimeout(ctx, loginTimeout)

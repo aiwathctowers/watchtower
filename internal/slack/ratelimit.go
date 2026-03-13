@@ -115,7 +115,7 @@ func (rl *RateLimiter) HandleRateLimit(tier int, retryAfter time.Duration) {
 	if jitterMax <= 0 {
 		jitterMax = 1
 	}
-	jitter := time.Duration(rand.Int64N(jitterMax))
+	jitter := time.Duration(rand.Int64N(jitterMax)) //nolint:gosec // weak random is fine for jitter
 	backoff := retryAfter + jitter
 	until := time.Now().Add(backoff)
 

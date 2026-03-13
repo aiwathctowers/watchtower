@@ -92,7 +92,7 @@ func runStatus(deps Deps) string {
 	if statErr == nil {
 		dbSize = info.Size()
 	}
-	b.WriteString(fmt.Sprintf("Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize))))
+	b.WriteString(fmt.Sprintf("Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize)))) //nolint:gosec // safe conversion within expected range
 
 	if lastSync != "" {
 		t, err := time.Parse(time.RFC3339, lastSync)

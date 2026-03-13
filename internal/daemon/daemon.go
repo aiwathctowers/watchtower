@@ -75,7 +75,6 @@ func (d *Daemon) SetPIDPath(path string) {
 // The caller is responsible for wiring signal handling into the context.
 // Each tick or wake event triggers an incremental sync.
 func (d *Daemon) Run(ctx context.Context) error {
-
 	if d.pidPath != "" {
 		if err := WritePID(d.pidPath); err != nil {
 			return fmt.Errorf("writing pid file: %w", err)

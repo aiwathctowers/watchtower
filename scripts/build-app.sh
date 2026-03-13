@@ -124,21 +124,70 @@ else
     codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
 fi
 
-# Create ZIP
-echo "==> Packaging..."
-cd "$BUILD_DIR"
-ZIP_NAME="Watchtower-${VERSION}-arm64.zip"
-ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_NAME"
+# Create DMG
+echo "==> Creating DMG..."
+DMG_NAME="Watchtower-${VERSION}-arm64.dmg"
+DMG_PATH="$BUILD_DIR/$DMG_NAME"
+DMG_STAGING="$BUILD_DIR/dmg-staging"
 
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+if command -v create-dmg &>/dev/null; then
+    # Pretty DMG with window layout (brew install create-dmg)
+    create-dmg \
+        --volname "Watchtower" \
+        --volicon "$APP_BUNDLE/Contents/Resources/AppIcon.icns" \
+        --window-pos 200 120 \
+        --window-size 600 400 \
+        --icon-size 100 \
+        --icon "$APP_NAME.app" 150 185 \
+        --icon "Applications" 450 185 \
+        --hide-extension "$APP_NAME.app" \
+        --app-drop-link 450 185 \
+        --no-internet-enable \
+        "$DMG_PATH" \
+        "$DMG_STAGING" || {
+            # create-dmg returns 2 if icon positioning fails (non-fatal)
+            [ $? -eq 2 ] || exit 1
+        }
+else
+    # Fallback: hdiutil (always available on macOS)
+    hdiutil create \
+        -volname "Watchtower" \
+        -srcfolder "$DMG_STAGING" \
+        -ov \
+        -format UDZO \
+        "$DMG_PATH"
+fi
+
+rm -rf "$DMG_STAGING"
+
+DMG_SIZE=$(du -h "$DMG_PATH" | cut -f1)
+
+# Create ZIP (used by auto-update + install script)
+echo "==> Creating ZIP..."
+ZIP_NAME="Watchtower-${VERSION}-arm64.zip"
+cd "$BUILD_DIR"
+ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_NAME"
 ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+
+# Generate checksums
+echo "==> Generating checksums..."
+CHECKSUMS="$BUILD_DIR/checksums.txt"
+shasum -a 256 "$DMG_NAME" "$ZIP_NAME" > "$CHECKSUMS"
 
 echo ""
 echo "==> Done!"
 echo "    App:  $APP_BUNDLE"
-echo "    ZIP:  $BUILD_DIR/$ZIP_NAME ($ZIP_SIZE)"
+echo "    DMG:  $DMG_PATH ($DMG_SIZE)"
+echo "    ZIP:  $BUILD_DIR/$ZIP_NAME ($ZIP_SIZE)  ← auto-update"
+echo "    SHA:  $CHECKSUMS"
 echo ""
 echo "    Contents:"
 echo "      - WatchtowerDesktop (GUI app)"
 echo "      - watchtower (CLI — bundled)"
 echo ""
-echo "    To install: unzip → drag to Applications → right-click → Open"
+echo "    To install: open DMG → drag Watchtower to Applications"

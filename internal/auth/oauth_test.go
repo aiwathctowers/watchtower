@@ -40,7 +40,8 @@ func simulateCallback(redirectURI, state, code, errMsg string) {
 	}
 	u.RawQuery = q.Encode()
 
-	resp, err := insecureClient.Get(u.String())
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, u.String(), nil)
+	resp, err := insecureClient.Do(req)
 	if err == nil {
 		resp.Body.Close()
 	}

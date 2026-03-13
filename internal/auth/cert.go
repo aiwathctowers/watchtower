@@ -72,14 +72,16 @@ func generateAndSaveCert(certPath, keyPath string) (tls.Certificate, error) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "Watchtower Localhost"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
-		DNSNames:     []string{"localhost"},
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "Watchtower Localhost CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
+		DNSNames:              []string{"localhost"},
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
@@ -130,8 +132,17 @@ func IsCertTrusted() bool {
 	return cmd.Run() == nil
 }
 
-// TrustCert adds the localhost cert to the macOS user trust store.
-// This triggers a system authorization dialog (Touch ID or password) — one time only.
+// loginKeychainPath returns the path to the user's login keychain.
+func loginKeychainPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Library", "Keychains", "login.keychain-db")
+}
+
+// TrustCert imports the localhost cert into the login keychain and marks it as trusted.
+// Importing into the keychain is required for Chrome/Firefox to recognise the trust.
 func TrustCert() error {
 	certPath, _, err := CertPaths()
 	if err != nil {
@@ -141,14 +152,30 @@ func TrustCert() error {
 		return fmt.Errorf("certificate not found — run the command again to generate it")
 	}
 
-	cmd := exec.Command("security", "add-trusted-cert", "-r", "trustAsRoot", "-p", "ssl", certPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	keychain := loginKeychainPath()
+
+	// Step 1: Import cert into login keychain (Chrome needs this).
+	importCmd := exec.Command("security", "import", certPath, "-k", keychain)
+	if output, err := importCmd.CombinedOutput(); err != nil {
+		out := strings.TrimSpace(string(output))
+		// "already exists" is fine — skip
+		if !strings.Contains(out, "already exists") && !strings.Contains(out, "duplicate") {
+			if out != "" {
+				return fmt.Errorf("importing cert: %s", out)
+			}
+			return fmt.Errorf("importing cert: %w", err)
+		}
+	}
+
+	// Step 2: Set trust policy for SSL on this cert.
+	trustCmd := exec.Command("security", "add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", keychain, certPath)
+	if output, err := trustCmd.CombinedOutput(); err != nil {
 		out := strings.TrimSpace(string(output))
 		if out != "" {
 			return fmt.Errorf("trusting cert: %s", out)
 		}
-		return fmt.Errorf("trusting cert: %w (user may have cancelled the authorization)", err)
+		return fmt.Errorf("trusting cert: %w", err)
 	}
+
 	return nil
 }

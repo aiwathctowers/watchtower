@@ -1,18 +1,13 @@
 import AuthenticationServices
 import SwiftUI
 
-/// Result of the in-app OAuth flow.
-enum OAuthWebResult {
-    case success(code: String, state: String)
-    case error(String)
-    case cancelled
-}
-
-/// Custom URL scheme used for the OAuth redirect.
-/// Must be registered in the Slack app settings and in the app's Info.plist.
+/// Constants for the OAuth redirect.
+/// The HTTPS redirect URI must be registered in the Slack app settings.
 enum OAuthConstants {
-    static let callbackScheme = "watchtower-auth"
-    static let redirectURI = "watchtower-auth://callback"
+    static let redirectHost = "127.0.0.1"
+    static let redirectPort = 18491
+    static let callbackPath = "/callback"
+    static let redirectURI = "https://127.0.0.1:18491/callback"
 }
 
 /// Presentation context provider for ASWebAuthenticationSession.

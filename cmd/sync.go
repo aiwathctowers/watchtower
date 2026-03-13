@@ -118,7 +118,7 @@ func runSyncStop(cfg *config.Config) error {
 	// Poll until process exits (10s timeout).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
+		if err := syscall.Kill(pid, 0); err != nil { //nolint:nilerr // err means process exited, which is the desired outcome
 			daemon.RemovePID(pidPath)
 			fmt.Println("Daemon stopped.")
 			return nil
@@ -213,7 +213,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fmt.Errorf("another sync is already running (lock: %s)", lockPath)
 	}
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
 
 	ws, err := cfg.GetActiveWorkspace()
 	if err != nil {
@@ -355,7 +355,7 @@ func printProgress(w io.Writer, p *sync.Progress, workspace string) {
 	}
 	output := p.Render(workspace)
 	fmt.Fprintln(w, output)
-	progressLines.Store(int32(strings.Count(output, "\n") + 1))
+	progressLines.Store(int32(strings.Count(output, "\n") + 1)) //nolint:gosec // safe conversion within expected range
 }
 
 func isTerminal(f *os.File) bool {

@@ -38,8 +38,8 @@ type aiRequester struct {
 }
 
 type aiItem struct {
-	ExistingID      *int            `json:"existing_id"`      // non-nil → update existing item
-	StatusHint      string          `json:"status_hint"`      // "done", "active", or empty
+	ExistingID      *int            `json:"existing_id"` // non-nil → update existing item
+	StatusHint      string          `json:"status_hint"` // "done", "active", or empty
 	Text            string          `json:"text"`
 	Context         string          `json:"context"`
 	ChannelID       string          `json:"channel_id"`
@@ -208,7 +208,7 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 				if err != nil {
 					p.logger.Printf("action-items: error processing #%s: %v", channelName, err)
 				} else if n > 0 {
-					totalStored.Add(int32(n))
+					totalStored.Add(int32(n)) //nolint:gosec // safe conversion within expected range
 				}
 				completed.Add(1)
 				p.progress(int(completed.Load()), total, fmt.Sprintf("#%s done", channelName))

@@ -32,12 +32,12 @@ type SyncConfig struct {
 }
 
 type DigestConfig struct {
-	Enabled              bool          `mapstructure:"enabled"`
-	Model                string        `mapstructure:"model"`
-	MinMessages          int           `mapstructure:"min_messages"`
-	Language             string        `mapstructure:"language"`
-	Workers              int           `mapstructure:"workers"`
-	ActionItemsInterval  time.Duration `mapstructure:"action_items_interval"`
+	Enabled             bool          `mapstructure:"enabled"`
+	Model               string        `mapstructure:"model"`
+	MinMessages         int           `mapstructure:"min_messages"`
+	Language            string        `mapstructure:"language"`
+	Workers             int           `mapstructure:"workers"`
+	ActionItemsInterval time.Duration `mapstructure:"action_items_interval"`
 }
 
 type Config struct {

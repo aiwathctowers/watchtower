@@ -376,7 +376,7 @@ func (cb *ContextBuilder) buildRelevantContext(query ParsedQuery, budget int, se
 			section := cb.formatSearchResults(results, remaining, seen)
 			if section != "" {
 				b.WriteString(section)
-				tokensUsed += estimateTokens(section)
+				_ = estimateTokens(section) // count tokens for potential future use
 			}
 		}
 	}

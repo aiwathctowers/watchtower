@@ -1,4 +1,3 @@
-import AuthenticationServices
 import SwiftUI
 
 enum SidebarDestination: String, CaseIterable, Identifiable {
@@ -179,8 +178,6 @@ struct OnboardingView: View {
     @State private var settingsNotifications = true
 
     // OAuth
-    @State private var oauthState = ""
-    @State private var authSession: ASWebAuthenticationSession?
     @State private var oauthStatus = ""
 
     // Claude setup
@@ -194,6 +191,7 @@ struct OnboardingView: View {
     private var cliPath: String? { Constants.findCLIPath() }
     private var claudePath: String? { Constants.findClaudePath() }
     private var hasCLI: Bool { cliPath != nil }
+
 
     var body: some View {
         VStack(spacing: 24) {
@@ -593,14 +591,35 @@ struct OnboardingView: View {
                     .foregroundStyle(.red)
                     .font(.caption)
             } else {
-                // Primary: open in default browser (Chrome, Firefox, Safari — uses existing cookies)
+                // Privacy notice
+                GroupBox {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "lock.shield")
+                            .font(.title2)
+                            .foregroundStyle(.green)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Your data never leaves your Mac")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+
+                            Text("Watchtower stores everything locally — messages, digests, and analytics never leave your Mac. A local TLS certificate will be generated on your machine to securely handle the Slack OAuth callback. No data is sent to external servers.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(4)
+                }
+                .frame(maxWidth: 420)
+
                 Button {
                     startBrowserOAuthFlow()
                 } label: {
                     HStack {
                         if isRunning {
-                            ProgressView()
-                                .controlSize(.small)
+                            ProgressView().controlSize(.small)
                         }
                         Text(isRunning ? "Authenticating..." : "Connect to Slack")
                     }
@@ -616,17 +635,6 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
-
-                // Fallback: Safari popup
-                Button {
-                    startOAuthFlow()
-                } label: {
-                    Text("Use Safari popup instead")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .disabled(isRunning)
             }
         }
     }
@@ -1102,160 +1110,34 @@ struct OnboardingView: View {
 
     // MARK: - CLI Execution
 
-    /// Step 1: Call `watchtower auth prepare` to get the OAuth URL, then open ASWebAuthenticationSession popup.
-    private func startOAuthFlow() {
-        guard let path = cliPath else { return }
-        isRunning = true
-        cliError = nil
-        output = ""
-
-        Task.detached {
-            let result = await Self.runCLI(path: path, arguments: [
-                "auth", "prepare",
-                "--redirect-uri", OAuthConstants.redirectURI,
-            ])
-            await MainActor.run {
-                guard result.exitCode == 0,
-                      let data = result.stdout.data(using: .utf8),
-                      let json = try? JSONDecoder().decode(OAuthPrepareResponse.self, from: data),
-                      let url = URL(string: json.authorizeURL) else {
-                    isRunning = false
-                    cliError = result.stderr.isEmpty
-                        ? "Failed to prepare OAuth (exit code \(result.exitCode))"
-                        : result.stderr
-                    return
-                }
-                oauthState = json.state
-                openAuthSession(url: url)
-            }
-        }
-    }
-
-    /// Step 2: Open system OAuth popup via ASWebAuthenticationSession.
-    private func openAuthSession(url: URL) {
-        let expectedState = oauthState
-
-        let session = ASWebAuthenticationSession(
-            url: url,
-            callbackURLScheme: OAuthConstants.callbackScheme
-        ) { callbackURL, error in
-            if let error = error {
-                let nsError = error as NSError
-                if nsError.domain == ASWebAuthenticationSessionErrorDomain,
-                   nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                    isRunning = false
-                    return
-                }
-                cliError = error.localizedDescription
-                isRunning = false
-                return
-            }
-
-            guard let callbackURL = callbackURL,
-                  let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
-                cliError = "No callback URL received"
-                isRunning = false
-                return
-            }
-
-            let queryItems = components.queryItems ?? []
-
-            if let errorParam = queryItems.first(where: { $0.name == "error" })?.value {
-                cliError = "Slack authorization denied: \(errorParam)"
-                isRunning = false
-                return
-            }
-
-            guard let code = queryItems.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
-                cliError = "No authorization code in callback"
-                isRunning = false
-                return
-            }
-
-            guard let state = queryItems.first(where: { $0.name == "state" })?.value,
-                  state == expectedState else {
-                cliError = "State mismatch — possible CSRF attack"
-                isRunning = false
-                return
-            }
-
-            completeOAuthFlow(code: code)
-        }
-
-        session.presentationContextProvider = OAuthPresentationContext.shared
-        session.prefersEphemeralWebBrowserSession = false
-
-        if session.start() {
-            authSession = session
-        } else {
-            cliError = "Failed to start authentication session"
-            isRunning = false
-        }
-    }
-
-    /// Step 3: Call `watchtower auth complete` to exchange code for token.
-    private func completeOAuthFlow(code: String) {
-        guard let path = cliPath else { return }
-        isRunning = true
-        cliError = nil
-
-        Task.detached {
-            let result = await Self.runCLI(path: path, arguments: [
-                "auth", "complete",
-                "--code", code,
-                "--redirect-uri", OAuthConstants.redirectURI,
-            ])
-            await MainActor.run {
-                isRunning = false
-                oauthState = ""
-                authSession = nil
-                if result.exitCode == 0 {
-                    step = .settings
-                } else {
-                    cliError = result.stderr.isEmpty
-                        ? "Token exchange failed (exit code \(result.exitCode))"
-                        : result.stderr
-                }
-            }
-        }
-    }
-
     /// Open OAuth in the default browser (Chrome, Firefox, Safari).
-    /// First ensures the localhost TLS cert is trusted (one-time macOS prompt),
-    /// then runs `watchtower auth login` which opens the browser with no cert warnings.
+    /// Ensures the localhost TLS cert is trusted (silent, no admin prompt needed),
+    /// then runs `watchtower auth login` which opens the browser.
     private func startBrowserOAuthFlow() {
         guard let path = cliPath else { return }
         isRunning = true
         cliError = nil
-        oauthStatus = "Preparing..."
+        oauthStatus = "Preparing secure connection..."
 
         Task.detached {
-            // Step 1: Check if cert is already trusted
-            let checkResult = await Self.runCLI(path: path, arguments: ["auth", "check-cert"])
-            let isTrusted = checkResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "trusted"
-
-            if !isTrusted {
+            // Ensure cert is trusted (silent — adds to user trust store, no password needed)
+            let trustResult = await Self.runCLI(path: path, arguments: ["auth", "trust-cert"])
+            if trustResult.exitCode != 0 {
                 await MainActor.run {
-                    oauthStatus = "Setting up secure connection (one-time)..."
+                    isRunning = false
+                    oauthStatus = ""
+                    cliError = trustResult.stderr.isEmpty
+                        ? "Failed to set up secure connection"
+                        : trustResult.stderr
                 }
-
-                // Step 2: Trust cert — macOS shows system dialog with password / Touch ID
-                let trustResult = await Self.runCLI(path: path, arguments: ["auth", "trust-cert"])
-                if trustResult.exitCode != 0 {
-                    await MainActor.run {
-                        isRunning = false
-                        oauthStatus = ""
-                        cliError = "Certificate trust was cancelled. Click again to retry."
-                    }
-                    return
-                }
+                return
             }
 
             await MainActor.run {
                 oauthStatus = "Complete the Slack authorization in your browser."
             }
 
-            // Step 3: Run auth login (opens default browser, trusted HTTPS callback)
+            // Run auth login (opens default browser, trusted HTTPS callback)
             let result = await Self.runCLI(path: path, arguments: ["auth", "login"])
             await MainActor.run {
                 isRunning = false
@@ -1268,18 +1150,6 @@ struct OnboardingView: View {
                         : result.stderr
                 }
             }
-        }
-    }
-
-    private struct OAuthPrepareResponse: Decodable {
-        let authorizeURL: String
-        let redirectURI: String
-        let state: String
-
-        enum CodingKeys: String, CodingKey {
-            case authorizeURL = "authorize_url"
-            case redirectURI = "redirect_uri"
-            case state
         }
     }
 
