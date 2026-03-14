@@ -25,10 +25,8 @@ struct OnboardingChatView: View {
                     .multilineTextAlignment(.center)
             }
             .padding(.top, 24)
-            .padding(.bottom, 12)
+            .padding(.bottom, 20)
             .padding(.horizontal, 40)
-
-            Divider()
 
             // Chat messages + inline quick-reply buttons
             ScrollViewReader { proxy in
@@ -78,15 +76,17 @@ struct OnboardingChatView: View {
                 }
             }
 
-            Divider()
-
-            // Text input (only after questionnaire is done)
-            if viewModel.quickReplies.isEmpty {
+            // Bottom section: text input (during chat) or completion button (after chat)
+            if !viewModel.chatReady && viewModel.quickReplies.isEmpty {
                 HStack(spacing: 8) {
-                    ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
-                        viewModel.send()
+                    // Show ChatInput only if we can't skip yet
+                    if !canSkip {
+                        ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
+                            viewModel.send()
+                        }
                     }
 
+                    // Show Continue button if we can skip
                     if canSkip {
                         Button(viewModel.loc("continue")) {
                             viewModel.finishChat()
@@ -96,6 +96,37 @@ struct OnboardingChatView: View {
                         .padding(.trailing, 12)
                         .padding(.bottom, 8)
                     }
+                }
+            } else if viewModel.chatReady {
+                VStack(spacing: 16) {
+                    VStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.green)
+
+                        Text(viewModel.loc("header"))
+                            .font(.title3)
+                            .fontWeight(.semibold)
+
+                        Text(viewModel.loc("subtitle"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.top, 20)
+
+                    Button {
+                        viewModel.finishChat()
+                        onComplete()
+                    } label: {
+                        Label(viewModel.loc("continue"), systemImage: "arrow.right.circle.fill")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 20)
                 }
             }
         }

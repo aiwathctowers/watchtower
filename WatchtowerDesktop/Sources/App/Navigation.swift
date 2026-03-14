@@ -1075,35 +1075,70 @@ struct OnboardingView: View {
     }
 
     private var syncProgressCompactBanner: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            if let p = syncProgress {
-                Text("Syncing: \(p.phase)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if p.elapsedSec > 0 {
-                    Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
-                    Text(formatElapsed(p.elapsedSec))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.accentColor)
+
+                if let p = syncProgress {
+                    Text("Syncing: \(p.phase)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let eta = syncEtaSeconds, eta > 0 {
-                    Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
-                    Text("\(formatETA(eta)) left")
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
+                    if p.elapsedSec > 0 {
+                        Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
+                        Text(formatElapsed(p.elapsedSec))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let eta = syncEtaSeconds, eta > 0 {
+                        Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
+                        Text("\(formatETA(eta)) left")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Starting sync...")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
                 }
-            } else {
-                Text("Starting sync...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Spacer()
             }
-            Spacer()
+
+            // Progress bar from current phase
+            if let p = syncProgress {
+                let (done, total) = currentPhaseProgress(p)
+                if total > 0 {
+                    ProgressView(value: Double(done), total: Double(total))
+                        .tint(.accentColor)
+                        .scaleEffect(y: 0.65, anchor: .leading)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.8, anchor: .leading)
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private func currentPhaseProgress(_ p: SyncProgressData) -> (done: Int, total: Int) {
+        switch p.phase {
+        case "Discovery":
+            return (p.discoveryPages, p.discoveryTotalPages)
+        case "Messages":
+            return (p.msgChannelsDone, p.msgChannelsTotal)
+        case "Users":
+            return (p.userProfilesDone, p.userProfilesTotal)
+        case "Threads":
+            return (p.threadsDone, p.threadsTotal)
+        default:
+            return (0, 0)
+        }
     }
 
 private func syncProgressView(_ p: SyncProgressData) -> some View {
