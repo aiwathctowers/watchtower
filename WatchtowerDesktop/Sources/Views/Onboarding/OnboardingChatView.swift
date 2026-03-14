@@ -82,26 +82,10 @@ struct OnboardingChatView: View {
                 }
             }
 
-            // Bottom section: text input (during chat) or completion button (after chat)
+            // Bottom section: text input (during chat) or completion screen (after AI says ready)
             if !viewModel.chatReady && viewModel.quickReplies.isEmpty {
-                HStack(spacing: 8) {
-                    // Show ChatInput only if we can't skip yet
-                    if !canSkip {
-                        ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
-                            viewModel.send()
-                        }
-                    }
-
-                    // Show Continue button if we can skip
-                    if canSkip {
-                        Button(viewModel.loc("continue")) {
-                            viewModel.finishChat()
-                            onComplete()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.trailing, 12)
-                        .padding(.bottom, 8)
-                    }
+                ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
+                    viewModel.send()
                 }
             } else if viewModel.chatReady {
                 VStack(spacing: 16) {
@@ -147,20 +131,4 @@ struct OnboardingChatView: View {
         }
     }
 
-    /// Show "Continue" after at least 1 free-form user message (after questionnaire)
-    /// and no active stream.
-    private var canSkip: Bool {
-        let freeFormMessages = viewModel.messages
-            .filter({ $0.role == .user })
-            .count - questionAnswerCount
-        return viewModel.isRoleDetermined && !viewModel.isStreaming && freeFormMessages > 0
-    }
-
-    /// Number of user messages that are questionnaire answers (not free-form chat).
-    private var questionAnswerCount: Int {
-        if !viewModel.hasAnsweredRoleQ1 { return 0 }
-        if !viewModel.hasAnsweredRoleQ2 { return 1 }
-        if viewModel.shouldShowRoleQ3 && !viewModel.hasAnsweredRoleQ3 { return 2 }
-        return viewModel.shouldShowRoleQ3 ? 3 : 2
-    }
 }
