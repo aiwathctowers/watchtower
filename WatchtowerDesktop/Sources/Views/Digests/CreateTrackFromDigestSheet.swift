@@ -8,7 +8,7 @@ private func encodeToJSON<T: Encodable>(_ value: T?) -> String? {
     return String(data: data, encoding: .utf8)
 }
 
-struct CreateActionFromDigestSheet: View {
+struct CreateTrackFromDigestSheet: View {
     let digest: Digest
     let channelName: String?
     let dbManager: DatabaseManager
@@ -22,7 +22,7 @@ struct CreateActionFromDigestSheet: View {
         VStack(spacing: 16) {
             // Header
             HStack {
-                Text("Create Action from Digest")
+                Text("Create Track from Digest")
                     .font(.headline)
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -63,7 +63,7 @@ struct CreateActionFromDigestSheet: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color.secondary.opacity(0.3))
                     )
-                Text("Describe what action you want to create, or leave empty to let AI decide.")
+                Text("Describe what track you want to create, or leave empty to let AI decide.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -76,7 +76,7 @@ struct CreateActionFromDigestSheet: View {
                 Button {
                     startBackgroundGeneration()
                 } label: {
-                    Label("Create Action", systemImage: "sparkles")
+                    Label("Create Track", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -116,14 +116,14 @@ private func generateAndSave(
     note: String
 ) async {
     do {
-        let generated: GeneratedActionItem = try await service.generateActionItem(
+        let generated: GeneratedTrack = try await service.generateTrack(
             from: digest,
             userNote: note.isEmpty ? nil : note,
             channelName: channelName
         )
 
         let currentUserID: String = try await db.dbPool.read { db in
-            try ActionItemQueries.fetchCurrentUserID(db)
+            try TrackQueries.fetchCurrentUserID(db)
         } ?? ""
 
         let participantsJSON: String = encodeToJSON(generated.participants) ?? "[]"
@@ -154,7 +154,7 @@ private func generateAndSave(
         let decSummary: String = generated.decisionSummary ?? ""
 
         _ = try await db.dbPool.write { db in
-            try ActionItemQueries.insertActionItem(
+            try TrackQueries.insertTrack(
                 db,
                 channelID: channelID,
                 assigneeUserID: currentUserID,
@@ -167,7 +167,7 @@ private func generateAndSave(
                 dueDate: dueDateUnix,
                 periodFrom: periodFrom,
                 periodTo: periodTo,
-                model: "claude-sonnet-4-6",
+                model: "claude",
                 inputTokens: 0,
                 outputTokens: 0,
                 costUSD: 0,
@@ -187,7 +187,7 @@ private func generateAndSave(
 
         // Notify success
         let channel: String = channelName ?? "digest"
-        NotificationService.shared.sendActionItemNotification(
+        NotificationService.shared.sendTrackNotification(
             text: generated.text,
             channelName: channel,
             priority: generated.priority
@@ -195,11 +195,11 @@ private func generateAndSave(
     } catch {
         // Notify error
         let content = UNMutableNotificationContent()
-        content.title = "Action creation failed"
+        content.title = "Track creation failed"
         content.body = error.localizedDescription
         content.sound = .default
         let request = UNNotificationRequest(
-            identifier: "action-create-error-\(Int(Date().timeIntervalSince1970))",
+            identifier: "track-create-error-\(Int(Date().timeIntervalSince1970))",
             content: content,
             trigger: nil
         )

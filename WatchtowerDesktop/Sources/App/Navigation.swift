@@ -2,7 +2,7 @@ import SwiftUI
 
 enum SidebarDestination: String, CaseIterable, Identifiable {
     case chat
-    case actions
+    case tracks
     case digests
     case people
     case search
@@ -13,7 +13,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chat: "AI Chat"
-        case .actions: "Actions"
+        case .tracks: "Tracks"
         case .digests: "Digests"
         case .people: "People"
         case .search: "Search"
@@ -24,7 +24,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .chat: "bubble.left.and.bubble.right"
-        case .actions: "checklist"
+        case .tracks: "checklist"
         case .digests: "doc.text.magnifyingglass"
         case .people: "person.2"
         case .search: "magnifyingglass"
@@ -34,7 +34,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
 
     /// Main navigation items (shown above the separator).
     static var mainItems: [SidebarDestination] {
-        [.chat, .actions, .digests, .people, .search]
+        [.chat, .tracks, .digests, .people, .search]
     }
 
     /// Tool items (shown below the separator).
@@ -48,7 +48,11 @@ struct NavigationRoot: View {
 
     var body: some View {
         if appState.isDBAvailable {
-            MainNavigationView()
+            if appState.needsOnboarding {
+                OnboardingChatFlow()
+            } else {
+                MainNavigationView()
+            }
         } else {
             OnboardingView(errorMessage: appState.errorMessage) {
                 appState.initialize()
@@ -123,8 +127,8 @@ struct MainNavigationView: View {
         switch appState.selectedDestination {
         case .chat:
             ChatView()
-        case .actions:
-            ActionItemsListView()
+        case .tracks:
+            TracksListView()
         case .digests:
             DigestListView()
         case .people:
@@ -279,7 +283,7 @@ struct OnboardingView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
 
-                Text("Watchtower uses Claude Code for AI-powered digests,\npeople analytics, and action items.")
+                Text("Watchtower uses Claude Code for AI-powered digests,\npeople analytics, and tracks.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -765,7 +769,7 @@ struct OnboardingView: View {
                     // AI Model
                     settingRow(
                         title: "AI Model",
-                        subtitle: "For digests, analysis, action items"
+                        subtitle: "For digests, analysis, tracks"
                     ) {
                         Picker("", selection: $settingsModelPreset) {
                             ForEach(ModelPreset.allCases, id: \.self) { preset in
@@ -825,7 +829,7 @@ struct OnboardingView: View {
                     // Notifications
                     settingRow(
                         title: "Notifications",
-                        subtitle: "Action items and daily digest alerts"
+                        subtitle: "Tracks and daily digest alerts"
                     ) {
                         Toggle("", isOn: $settingsNotifications)
                             .toggleStyle(.switch)

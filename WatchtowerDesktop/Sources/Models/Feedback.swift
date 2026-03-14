@@ -3,7 +3,7 @@ import Foundation
 
 struct Feedback: FetchableRecord, Decodable, Identifiable, Equatable {
     let id: Int
-    let entityType: String  // "digest", "action_item", "decision"
+    let entityType: String  // "digest", "track", "decision"
     let entityID: String
     let rating: Int         // +1 = good, -1 = bad
     let comment: String

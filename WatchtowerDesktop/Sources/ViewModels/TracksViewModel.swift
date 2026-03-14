@@ -3,8 +3,8 @@ import GRDB
 
 @MainActor
 @Observable
-final class ActionItemsViewModel {
-    var items: [ActionItem] = []
+final class TracksViewModel {
+    var items: [Track] = []
     var isLoading = false
     var errorMessage: String?
     var openCount: Int = 0
@@ -15,6 +15,9 @@ final class ActionItemsViewModel {
     var statusFilter: String?
     var priorityFilter: String?
     var channelFilter: String?
+    var ownershipFilter: String?
+    var ownershipCounts: [String: Int] = [:]
+    var availableChannels: [(id: String, name: String)] = []
 
     private(set) var workspaceDomain: String?
     private let dbManager: DatabaseManager
@@ -24,11 +27,11 @@ final class ActionItemsViewModel {
         self.dbManager = dbManager
     }
 
-    var inboxItems: [ActionItem] {
+    var inboxItems: [Track] {
         items.filter { $0.isInbox }
     }
 
-    var activeItems: [ActionItem] {
+    var activeItems: [Track] {
         items.filter { $0.isActive }
     }
 
@@ -37,24 +40,25 @@ final class ActionItemsViewModel {
         do {
             // When statusFilter is nil, default to showing inbox
             let effectiveStatus: String? = statusFilter == nil ? "inbox" : statusFilter
-            let effectiveStatuses: [String]? = nil
             let result = try dbManager.dbPool.read { db in
-                let uid = try ActionItemQueries.fetchCurrentUserID(db)
+                let uid = try TrackQueries.fetchCurrentUserID(db)
                 let ws = try WorkspaceQueries.fetchWorkspace(db)
-                let all = try ActionItemQueries.fetchAll(
+                let all = try TrackQueries.fetchAll(
                     db,
                     assigneeUserID: uid,
                     status: effectiveStatus == "all" ? nil : effectiveStatus,
-                    statuses: effectiveStatuses,
+                    statuses: nil,
                     channelID: channelFilter,
-                    priority: priorityFilter
+                    priority: priorityFilter,
+                    ownership: ownershipFilter
                 )
-                let count = uid.map { try? ActionItemQueries.fetchOpenCount(db, assigneeUserID: $0) } ?? nil
-                let inbox = uid.map { try? ActionItemQueries.fetchInboxCount(db, assigneeUserID: $0) } ?? nil
-                let updated = uid.map { try? ActionItemQueries.fetchUpdatedCount(db, assigneeUserID: $0) } ?? nil
-                let sCounts = uid.map { try? ActionItemQueries.fetchStatusCounts(db, assigneeUserID: $0) } ?? nil
-                let total = uid.map { try? ActionItemQueries.fetchTotalCount(db, assigneeUserID: $0) } ?? nil
-                return (uid, ws?.domain, all, count ?? 0, inbox ?? 0, updated ?? 0, sCounts ?? [:], total ?? 0)
+                let count = try uid.map { try TrackQueries.fetchOpenCount(db, assigneeUserID: $0) } ?? 0
+                let inbox = try uid.map { try TrackQueries.fetchInboxCount(db, assigneeUserID: $0) } ?? 0
+                let updated = try uid.map { try TrackQueries.fetchUpdatedCount(db, assigneeUserID: $0) } ?? 0
+                let sCounts = try uid.map { try TrackQueries.fetchStatusCounts(db, assigneeUserID: $0) } ?? [:]
+                let total = try uid.map { try TrackQueries.fetchTotalCount(db, assigneeUserID: $0) } ?? 0
+                let oCounts = try uid.map { try TrackQueries.fetchOwnershipCounts(db, assigneeUserID: $0) } ?? [:]
+                return (uid, ws?.domain, all, count, inbox, updated, sCounts, total, oCounts)
             }
             currentUserID = result.0
             workspaceDomain = result.1
@@ -64,6 +68,8 @@ final class ActionItemsViewModel {
             updatedCount = result.5
             statusCounts = result.6
             totalCount = result.7
+            ownershipCounts = result.8
+            availableChannels = loadAvailableChannels()
             errorMessage = nil
         } catch {
             items = []
@@ -72,22 +78,22 @@ final class ActionItemsViewModel {
         isLoading = false
     }
 
-    func markDone(_ item: ActionItem) {
+    func markDone(_ item: Track) {
         updateStatus(item, to: "done")
     }
 
-    func dismiss(_ item: ActionItem) {
+    func dismiss(_ item: Track) {
         updateStatus(item, to: "dismissed")
     }
 
-    func reopen(_ item: ActionItem) {
+    func reopen(_ item: Track) {
         updateStatus(item, to: "inbox")
     }
 
-    func accept(_ item: ActionItem) {
+    func accept(_ item: Track) {
         do {
             try dbManager.dbPool.write { db in
-                try ActionItemQueries.acceptItem(db, id: item.id)
+                try TrackQueries.acceptItem(db, id: item.id)
             }
             load()
         } catch {
@@ -95,10 +101,10 @@ final class ActionItemsViewModel {
         }
     }
 
-    func snooze(_ item: ActionItem, until: Date) {
+    func snooze(_ item: Track, until: Date) {
         do {
             try dbManager.dbPool.write { db in
-                try ActionItemQueries.snoozeItem(db, id: item.id, until: until.timeIntervalSince1970)
+                try TrackQueries.snoozeItem(db, id: item.id, until: until.timeIntervalSince1970)
             }
             load()
         } catch {
@@ -106,7 +112,7 @@ final class ActionItemsViewModel {
         }
     }
 
-    func toggleSubItem(_ item: ActionItem, subItemIndex: Int) {
+    func toggleSubItem(_ item: Track, subItemIndex: Int) {
         var subs = item.decodedSubItems
         guard subItemIndex < subs.count else { return }
         subs[subItemIndex].status = subs[subItemIndex].isDone ? "open" : "done"
@@ -114,7 +120,7 @@ final class ActionItemsViewModel {
               let json = String(data: data, encoding: .utf8) else { return }
         do {
             try dbManager.dbPool.write { db in
-                try ActionItemQueries.updateSubItems(db, id: item.id, subItemsJSON: json)
+                try TrackQueries.updateSubItems(db, id: item.id, subItemsJSON: json)
             }
             load()
         } catch {
@@ -122,10 +128,10 @@ final class ActionItemsViewModel {
         }
     }
 
-    func markUpdateRead(_ item: ActionItem) {
+    func markUpdateRead(_ item: Track) {
         do {
             try dbManager.dbPool.write { db in
-                try ActionItemQueries.markUpdateRead(db, id: item.id)
+                try TrackQueries.markUpdateRead(db, id: item.id)
             }
             load()
         } catch {
@@ -133,10 +139,10 @@ final class ActionItemsViewModel {
         }
     }
 
-    private func updateStatus(_ item: ActionItem, to status: String) {
+    private func updateStatus(_ item: Track, to status: String) {
         do {
             try dbManager.dbPool.write { db in
-                try ActionItemQueries.updateStatus(db, id: item.id, status: status)
+                try TrackQueries.updateStatus(db, id: item.id, status: status)
             }
             load()
         } catch {
@@ -144,20 +150,20 @@ final class ActionItemsViewModel {
         }
     }
 
-    func itemByID(_ id: Int) -> ActionItem? {
+    func itemByID(_ id: Int) -> Track? {
         do {
             return try dbManager.dbPool.read { db in
-                try ActionItemQueries.fetchByID(db, id: id)
+                try TrackQueries.fetchByID(db, id: id)
             }
         } catch {
             return nil
         }
     }
 
-    func fetchHistory(for itemID: Int) -> [ActionItemHistoryEntry] {
+    func fetchHistory(for itemID: Int) -> [TrackHistoryEntry] {
         do {
             return try dbManager.dbPool.read { db in
-                try ActionItemQueries.fetchHistory(db, actionItemID: itemID)
+                try TrackQueries.fetchHistory(db, trackID: itemID)
             }
         } catch {
             return []
@@ -170,16 +176,24 @@ final class ActionItemsViewModel {
         return URL(string: "https://\(domain).slack.com/archives/\(channelID)/\(tsForURL)")
     }
 
-    /// Unique channel names for filter picker
-    var availableChannels: [(id: String, name: String)] {
-        var seen = Set<String>()
-        var result: [(id: String, name: String)] = []
-        for item in items {
-            if seen.insert(item.channelID).inserted {
-                let name = item.sourceChannelName.isEmpty ? item.channelID : item.sourceChannelName
-                result.append((id: item.channelID, name: name))
+    /// Unique channel names for filter picker, refreshed on each load().
+    private func loadAvailableChannels() -> [(id: String, name: String)] {
+        guard let uid = currentUserID else { return [] }
+        do {
+            return try dbManager.dbPool.read { db in
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT DISTINCT channel_id, source_channel_name FROM tracks
+                    WHERE assignee_user_id = ?
+                    ORDER BY source_channel_name
+                    """, arguments: [uid])
+                return rows.map { row in
+                    let chID: String = row["channel_id"]
+                    let name: String = row["source_channel_name"] ?? chID
+                    return (id: chID, name: name.isEmpty ? chID : name)
+                }
             }
+        } catch {
+            return []
         }
-        return result.sorted { $0.name < $1.name }
     }
 }

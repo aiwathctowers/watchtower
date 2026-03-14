@@ -1,4 +1,4 @@
-package actionitems
+package tracks
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,14 +87,14 @@ func TestPipelineRunForWindow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	// Verify stored item
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	// Verify stored track
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "Review the PR", items[0].Text)
-	assert.Equal(t, "medium", items[0].Priority)
-	assert.Equal(t, "inbox", items[0].Status)
-	assert.Equal(t, "C1", items[0].ChannelID)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "Review the PR", tracks[0].Text)
+	assert.Equal(t, "medium", tracks[0].Priority)
+	assert.Equal(t, "inbox", tracks[0].Status)
+	assert.Equal(t, "C1", tracks[0].ChannelID)
 }
 
 func TestPipelineNoCurrentUser(t *testing.T) {
@@ -143,13 +144,13 @@ func TestParseResultMarkdownFences(t *testing.T) {
 	assert.Equal(t, "test", result.Items[0].Text)
 }
 
-func TestActionItemStatusUpdate(t *testing.T) {
+func TestTrackStatusUpdate(t *testing.T) {
 	database := testDB(t)
 
-	id, err := database.UpsertActionItem(db.ActionItem{
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID:      "C1",
 		AssigneeUserID: "U001",
-		Text:           "test item",
+		Text:           "test track",
 		Status:         "inbox",
 		Priority:       "medium",
 		PeriodFrom:     1000,
@@ -158,62 +159,62 @@ func TestActionItemStatusUpdate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mark as done
-	require.NoError(t, database.UpdateActionItemStatus(int(id), "done"))
+	require.NoError(t, database.UpdateTrackStatus(int(id), "done"))
 
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "done", items[0].Status)
-	assert.True(t, items[0].CompletedAt.Valid)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "done", tracks[0].Status)
+	assert.True(t, tracks[0].CompletedAt.Valid)
 }
 
-func TestDeleteActionItemsForWindow(t *testing.T) {
+func TestDeleteTracksForWindow(t *testing.T) {
 	database := testDB(t)
 
-	// Insert open item
-	_, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "old item",
+	// Insert open track
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "old track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Insert done item (should NOT be deleted)
-	id2, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "done item",
+	// Insert done track (should NOT be deleted)
+	id2, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "done track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.UpdateActionItemStatus(int(id2), "done"))
+	require.NoError(t, database.UpdateTrackStatus(int(id2), "done"))
 
-	deleted, err := database.DeleteActionItemsForWindow("U001", 1000, 2000)
+	deleted, err := database.DeleteTracksForWindow("U001", 1000, 2000)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted) // only the open one
 
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	assert.Len(t, items, 1)
-	assert.Equal(t, "done item", items[0].Text)
+	assert.Len(t, tracks, 1)
+	assert.Equal(t, "done track", tracks[0].Text)
 }
 
-func TestAcceptActionItem(t *testing.T) {
+func TestAcceptTrack(t *testing.T) {
 	database := testDB(t)
 
-	id, err := database.UpsertActionItem(db.ActionItem{
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "review PR",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
 	// Accept: inbox → active
-	require.NoError(t, database.AcceptActionItem(int(id)))
+	require.NoError(t, database.AcceptTrack(int(id)))
 
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "active", items[0].Status)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "active", tracks[0].Status)
 
 	// Accept again should fail (not in inbox)
-	err = database.AcceptActionItem(int(id))
+	err = database.AcceptTrack(int(id))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not in inbox")
 }
@@ -221,53 +222,53 @@ func TestAcceptActionItem(t *testing.T) {
 func TestSnoozeAndReactivate(t *testing.T) {
 	database := testDB(t)
 
-	// Create inbox item and snooze it
-	id1, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox item",
+	// Create inbox track and snooze it
+	id1, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Create active item and snooze it
-	id2, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "active item",
+	// Create active track and snooze it
+	id2, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "active track",
 		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.AcceptActionItem(int(id2)))
+	require.NoError(t, database.AcceptTrack(int(id2)))
 
 	// Snooze both — set snooze_until to the past so reactivation triggers immediately
 	pastTS := float64(1000000000) // well in the past
-	require.NoError(t, database.SnoozeActionItem(int(id1), pastTS))
-	require.NoError(t, database.SnoozeActionItem(int(id2), pastTS))
+	require.NoError(t, database.SnoozeTrack(int(id1), pastTS))
+	require.NoError(t, database.SnoozeTrack(int(id2), pastTS))
 
 	// Both should be snoozed
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001", Status: "snoozed"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001", Status: "snoozed"})
 	require.NoError(t, err)
-	assert.Len(t, items, 2)
+	assert.Len(t, tracks, 2)
 
 	// Reactivate
-	n, err := database.ReactivateSnoozedItems()
+	n, err := database.ReactivateSnoozedTracks()
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 
 	// Check they returned to their pre-snooze statuses
-	items, err = database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err = database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 2)
+	require.Len(t, tracks, 2)
 
 	statusByText := map[string]string{}
-	for _, item := range items {
-		statusByText[item.Text] = item.Status
+	for _, track := range tracks {
+		statusByText[track.Text] = track.Status
 	}
-	assert.Equal(t, "inbox", statusByText["inbox item"])
-	assert.Equal(t, "active", statusByText["active item"])
+	assert.Equal(t, "inbox", statusByText["inbox track"])
+	assert.Equal(t, "active", statusByText["active track"])
 }
 
 func TestSnoozeFutureNotReactivated(t *testing.T) {
 	database := testDB(t)
 
-	id, err := database.UpsertActionItem(db.ActionItem{
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "future snooze",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
@@ -275,23 +276,23 @@ func TestSnoozeFutureNotReactivated(t *testing.T) {
 
 	// Snooze far in the future
 	futureTS := float64(9999999999)
-	require.NoError(t, database.SnoozeActionItem(int(id), futureTS))
+	require.NoError(t, database.SnoozeTrack(int(id), futureTS))
 
 	// Should not reactivate
-	n, err := database.ReactivateSnoozedItems()
+	n, err := database.ReactivateSnoozedTracks()
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "snoozed", items[0].Status)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "snoozed", tracks[0].Status)
 }
 
 func TestHasUpdatesFlag(t *testing.T) {
 	database := testDB(t)
 
-	id, err := database.UpsertActionItem(db.ActionItem{
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "track updates",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 		SourceMessageTS: "1000000001.000000",
@@ -299,95 +300,95 @@ func TestHasUpdatesFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Initially no updates
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	assert.False(t, items[0].HasUpdates)
+	assert.False(t, tracks[0].HasUpdates)
 
 	// Set has_updates
-	require.NoError(t, database.SetActionItemHasUpdates(int(id), true))
+	require.NoError(t, database.SetTrackHasUpdates(int(id), true))
 
-	items, err = database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err = database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	assert.True(t, items[0].HasUpdates)
+	assert.True(t, tracks[0].HasUpdates)
 
 	// Filter by has_updates
 	hasUpdates := true
-	items, err = database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001", HasUpdates: &hasUpdates})
+	tracks, err = database.GetTracks(db.TrackFilter{AssigneeUserID: "U001", HasUpdates: &hasUpdates})
 	require.NoError(t, err)
-	assert.Len(t, items, 1)
+	assert.Len(t, tracks, 1)
 
 	noUpdates := false
-	items, err = database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001", HasUpdates: &noUpdates})
+	tracks, err = database.GetTracks(db.TrackFilter{AssigneeUserID: "U001", HasUpdates: &noUpdates})
 	require.NoError(t, err)
-	assert.Len(t, items, 0)
+	assert.Len(t, tracks, 0)
 
 	// Mark as read
-	require.NoError(t, database.MarkActionItemUpdateRead(int(id)))
-	items, err = database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	require.NoError(t, database.MarkTrackUpdateRead(int(id)))
+	tracks, err = database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	assert.False(t, items[0].HasUpdates)
+	assert.False(t, tracks[0].HasUpdates)
 }
 
-func TestGetActionItemsForUpdateCheck(t *testing.T) {
+func TestGetTracksForUpdateCheck(t *testing.T) {
 	database := testDB(t)
 
-	// Item with source_message_ts — should be returned
-	_, err := database.UpsertActionItem(db.ActionItem{
+	// Track with source_message_ts — should be returned
+	_, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "with ts",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 		SourceMessageTS: "1000000001.000000",
 	})
 	require.NoError(t, err)
 
-	// Item without source_message_ts — should NOT be returned
-	_, err = database.UpsertActionItem(db.ActionItem{
+	// Track without source_message_ts — should NOT be returned
+	_, err = database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "without ts",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Done item — should NOT be returned
-	id3, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "done item",
+	// Done track — should NOT be returned
+	id3, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "done track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 		SourceMessageTS: "1000000003.000000",
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.UpdateActionItemStatus(int(id3), "done"))
+	require.NoError(t, database.UpdateTrackStatus(int(id3), "done"))
 
-	items, err := database.GetActionItemsForUpdateCheck()
+	tracks, err := database.GetTracksForUpdateCheck()
 	require.NoError(t, err)
-	assert.Len(t, items, 1)
-	assert.Equal(t, "with ts", items[0].Text)
+	assert.Len(t, tracks, 1)
+	assert.Equal(t, "with ts", tracks[0].Text)
 }
 
 func TestDeleteWindowPreservesActive(t *testing.T) {
 	database := testDB(t)
 
-	// Inbox item — will be deleted
-	_, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox item",
+	// Inbox track — will be deleted
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Active item — should NOT be deleted
-	id2, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "active item",
+	// Active track — should NOT be deleted
+	id2, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "active track",
 		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.AcceptActionItem(int(id2)))
+	require.NoError(t, database.AcceptTrack(int(id2)))
 
-	deleted, err := database.DeleteActionItemsForWindow("U001", 1000, 2000)
+	deleted, err := database.DeleteTracksForWindow("U001", 1000, 2000)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted)
 
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "active item", items[0].Text)
-	assert.Equal(t, "active", items[0].Status)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "active track", tracks[0].Text)
+	assert.Equal(t, "active", tracks[0].Status)
 }
 
 func TestCheckForUpdates(t *testing.T) {
@@ -400,14 +401,14 @@ func TestCheckForUpdates(t *testing.T) {
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob"}))
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
 
-	// Original message that generated the action item
+	// Original message that generated the track
 	require.NoError(t, database.UpsertMessage(db.Message{
 		ChannelID: "C1", TS: "1000000001.000000", UserID: "U002",
 		Text: "@alice review the PR please",
 	}))
 
-	// Create action item for this message
-	_, err := database.UpsertActionItem(db.ActionItem{
+	// Create track for this message
+	_, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "review PR",
 		Status: "active", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 		SourceMessageTS: "1000000001.000000", SourceChannelName: "general",
@@ -431,10 +432,10 @@ func TestCheckForUpdates(t *testing.T) {
 	assert.Equal(t, 1, n)
 
 	// Verify has_updates flag is set
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.True(t, items[0].HasUpdates)
+	require.Len(t, tracks, 1)
+	assert.True(t, tracks[0].HasUpdates)
 }
 
 func nullString(s string) sql.NullString {
@@ -451,14 +452,14 @@ func TestCheckForUpdatesChannelMessage(t *testing.T) {
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "denis"}))
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "dev-europe", Type: "public"}))
 
-	// Original message that generated the action item
+	// Original message that generated the track
 	require.NoError(t, database.UpsertMessage(db.Message{
 		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
 		Text: "need to whitelist IP 136.226.198.1 for EY consultants",
 	}))
 
-	// Create action item
-	_, err := database.UpsertActionItem(db.ActionItem{
+	// Create track
+	_, err := database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "whitelist IP for EY",
 		Status: "active", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
 		SourceMessageTS: "1000000001.000000", SourceChannelName: "dev-europe",
@@ -481,13 +482,13 @@ func TestCheckForUpdatesChannelMessage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	// Verify item is marked done
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	// Verify track is marked done
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "done", items[0].Status)
-	assert.True(t, items[0].HasUpdates)
-	assert.True(t, items[0].CompletedAt.Valid)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "done", tracks[0].Status)
+	assert.True(t, tracks[0].HasUpdates)
+	assert.True(t, tracks[0].CompletedAt.Valid)
 }
 
 func TestDayWindow(t *testing.T) {
@@ -501,8 +502,9 @@ func TestDayWindow(t *testing.T) {
 	assert.Equal(t, from1, from2, "same day should have same from")
 	assert.Equal(t, to1, to2, "same day should have same to")
 
-	// Window should be exactly 24h.
-	assert.Equal(t, float64(86400), to1-from1, "window should be 24h")
+	// Window should span from midnight to next midnight.
+	// Not asserting exactly 86400s because DST transitions can be 23h or 25h.
+	assert.True(t, to1-from1 >= 82800 && to1-from1 <= 90000, "window should be ~24h")
 
 	// Different day should produce different window.
 	t3, _ := time.Parse(time.RFC3339, "2026-03-13T01:00:00+03:00")
@@ -527,11 +529,11 @@ func TestExistingIDParsing(t *testing.T) {
 	assert.Nil(t, result.Items[1].ExistingID)
 }
 
-func TestUpdateActionItemFromExtraction(t *testing.T) {
+func TestUpdateTrackFromExtraction(t *testing.T) {
 	database := testDB(t)
 
-	// Create original item.
-	id, err := database.UpsertActionItem(db.ActionItem{
+	// Create original track.
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID:       "C1",
 		AssigneeUserID:  "U001",
 		Text:            "original task",
@@ -545,7 +547,7 @@ func TestUpdateActionItemFromExtraction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update with new extraction data.
-	changed, err := database.UpdateActionItemFromExtraction(int(id), db.ActionItem{
+	changed, err := database.UpdateTrackFromExtraction(int(id), db.Track{
 		Context:         "updated context with new info",
 		Priority:        "high",
 		DecisionSummary: "evolved decision",
@@ -555,17 +557,17 @@ func TestUpdateActionItemFromExtraction(t *testing.T) {
 	assert.True(t, changed)
 
 	// Verify changes.
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "updated context with new info", items[0].Context)
-	assert.Equal(t, "high", items[0].Priority)
-	assert.Equal(t, "active", items[0].Status) // preserved
-	assert.Equal(t, "evolved decision", items[0].DecisionSummary)
-	assert.Equal(t, `["infra"]`, items[0].Tags)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "updated context with new info", tracks[0].Context)
+	assert.Equal(t, "high", tracks[0].Priority)
+	assert.Equal(t, "active", tracks[0].Status) // preserved
+	assert.Equal(t, "evolved decision", tracks[0].DecisionSummary)
+	assert.Equal(t, `["infra"]`, tracks[0].Tags)
 
 	// Verify history.
-	history, err := database.GetActionItemHistory(int(id))
+	history, err := database.GetTrackHistory(int(id))
 	require.NoError(t, err)
 	require.True(t, len(history) >= 3) // re_extracted, priority_changed, decision_evolved
 
@@ -581,7 +583,7 @@ func TestUpdateActionItemFromExtraction(t *testing.T) {
 func TestUpdateNoChange(t *testing.T) {
 	database := testDB(t)
 
-	id, err := database.UpsertActionItem(db.ActionItem{
+	id, err := database.UpsertTrack(db.Track{
 		ChannelID:      "C1",
 		AssigneeUserID: "U001",
 		Text:           "task",
@@ -594,7 +596,7 @@ func TestUpdateNoChange(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update with same values → no change.
-	changed, err := database.UpdateActionItemFromExtraction(int(id), db.ActionItem{
+	changed, err := database.UpdateTrackFromExtraction(int(id), db.Track{
 		Context:  "context",
 		Priority: "medium",
 	})
@@ -611,8 +613,8 @@ func TestPipelineExistingIDUpdate(t *testing.T) {
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob", DisplayName: "Bob"}))
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
 
-	// Create existing action item.
-	existingID, err := database.UpsertActionItem(db.ActionItem{
+	// Create existing track.
+	existingID, err := database.UpsertTrack(db.Track{
 		ChannelID:      "C1",
 		AssigneeUserID: "U001",
 		Text:           "prepare migration plan",
@@ -630,7 +632,7 @@ func TestPipelineExistingIDUpdate(t *testing.T) {
 		Text: "migration vendor confirmed Q2 timeline",
 	}))
 
-	// AI returns existing_id pointing to existing item.
+	// AI returns existing_id pointing to existing track.
 	gen := &mockGenerator{
 		response: fmt.Sprintf(`{
 			"items": [
@@ -650,85 +652,85 @@ func TestPipelineExistingIDUpdate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	// Should have updated the existing item, not created a new one.
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	// Should have updated the existing track, not created a new one.
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "vendor confirmed Q2 timeline, plan needs update", items[0].Context)
-	assert.Equal(t, "high", items[0].Priority)
-	assert.Equal(t, "active", items[0].Status) // preserved
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "vendor confirmed Q2 timeline, plan needs update", tracks[0].Context)
+	assert.Equal(t, "high", tracks[0].Priority)
+	assert.Equal(t, "active", tracks[0].Status) // preserved
 }
 
-func TestDeleteActionItemsForWindowRangeBased(t *testing.T) {
+func TestDeleteTracksForWindowRangeBased(t *testing.T) {
 	database := testDB(t)
 
-	// Item from earlier run with slightly different window (old sliding behavior).
-	_, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "old sliding item",
+	// Track from earlier run with slightly different window (old sliding behavior).
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "old sliding track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Delete with a window that encompasses the old item's period.
-	deleted, err := database.DeleteActionItemsForWindow("U001", 900, 2100)
+	// Delete with a window that encompasses the old track's period.
+	deleted, err := database.DeleteTracksForWindow("U001", 900, 2100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted)
 
-	// Item outside the window should NOT be deleted.
-	_, err = database.UpsertActionItem(db.ActionItem{
+	// Track outside the window should NOT be deleted.
+	_, err = database.UpsertTrack(db.Track{
 		ChannelID: "C1", AssigneeUserID: "U001", Text: "outside window",
 		Status: "inbox", Priority: "medium", PeriodFrom: 3000, PeriodTo: 4000,
 	})
 	require.NoError(t, err)
 
-	deleted, err = database.DeleteActionItemsForWindow("U001", 900, 2100)
+	deleted, err = database.DeleteTracksForWindow("U001", 900, 2100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), deleted)
 }
 
-func TestGetExistingActionItemsForChannel(t *testing.T) {
+func TestGetExistingTracksForChannel(t *testing.T) {
 	database := testDB(t)
 
-	// Inbox item — should be returned.
-	_, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox item",
+	// Inbox track — should be returned.
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "inbox track",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	// Active item — should be returned.
-	id2, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "active item",
+	// Active track — should be returned.
+	id2, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "active track",
 		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.AcceptActionItem(int(id2)))
+	require.NoError(t, database.AcceptTrack(int(id2)))
 
-	// Done item — should NOT be returned.
-	id3, err := database.UpsertActionItem(db.ActionItem{
-		ChannelID: "C1", AssigneeUserID: "U001", Text: "done item",
+	// Done track — should NOT be returned.
+	id3, err := database.UpsertTrack(db.Track{
+		ChannelID: "C1", AssigneeUserID: "U001", Text: "done track",
 		Status: "inbox", Priority: "low", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
-	require.NoError(t, database.UpdateActionItemStatus(int(id3), "done"))
+	require.NoError(t, database.UpdateTrackStatus(int(id3), "done"))
 
 	// Different channel — should NOT be returned.
-	_, err = database.UpsertActionItem(db.ActionItem{
+	_, err = database.UpsertTrack(db.Track{
 		ChannelID: "C2", AssigneeUserID: "U001", Text: "other channel",
 		Status: "inbox", Priority: "medium", PeriodFrom: 1000, PeriodTo: 2000,
 	})
 	require.NoError(t, err)
 
-	items, err := database.GetExistingActionItemsForChannel("C1", "U001")
+	tracks, err := database.GetExistingTracksForChannel("C1", "U001")
 	require.NoError(t, err)
-	assert.Len(t, items, 2)
+	assert.Len(t, tracks, 2)
 
 	texts := map[string]bool{}
-	for _, item := range items {
-		texts[item.Text] = true
+	for _, track := range tracks {
+		texts[track.Text] = true
 	}
-	assert.True(t, texts["inbox item"])
-	assert.True(t, texts["active item"])
+	assert.True(t, texts["inbox track"])
+	assert.True(t, texts["active track"])
 }
 
 func TestPipelineExistingIDStatusHintDone(t *testing.T) {
@@ -740,8 +742,8 @@ func TestPipelineExistingIDStatusHintDone(t *testing.T) {
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob", DisplayName: "Bob"}))
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "dev-europe", Type: "public"}))
 
-	// Create existing active action item (e.g., "whitelist IP for EY consultants").
-	existingID, err := database.UpsertActionItem(db.ActionItem{
+	// Create existing active track (e.g., "whitelist IP for EY consultants").
+	existingID, err := database.UpsertTrack(db.Track{
 		ChannelID:      "C1",
 		AssigneeUserID: "U001",
 		Text:           "whitelist IP 136.226.198.1 for EY consultants",
@@ -780,14 +782,14 @@ func TestPipelineExistingIDStatusHintDone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	// The existing item should be marked as done with has_updates flag.
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	// The existing track should be marked as done with has_updates flag.
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "done", items[0].Status)
-	assert.True(t, items[0].HasUpdates)
-	assert.True(t, items[0].CompletedAt.Valid)
-	assert.Contains(t, items[0].Context, "Denis opened access")
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "done", tracks[0].Status)
+	assert.True(t, tracks[0].HasUpdates)
+	assert.True(t, tracks[0].CompletedAt.Valid)
+	assert.Contains(t, tracks[0].Context, "Denis opened access")
 }
 
 func TestPipelineCrossChannelCompletion(t *testing.T) {
@@ -800,8 +802,8 @@ func TestPipelineCrossChannelCompletion(t *testing.T) {
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "dev-europe", Type: "public"}))
 	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C2", Name: "devops", Type: "public"}))
 
-	// Action item created in dev-europe.
-	existingID, err := database.UpsertActionItem(db.ActionItem{
+	// Track created in dev-europe.
+	existingID, err := database.UpsertTrack(db.Track{
 		ChannelID:      "C1",
 		AssigneeUserID: "U001",
 		Text:           "whitelist IP 136.226.198.1 for EY consultants",
@@ -840,13 +842,13 @@ func TestPipelineCrossChannelCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
-	// Item from C1 should be marked done via message from C2.
-	items, err := database.GetActionItems(db.ActionItemFilter{AssigneeUserID: "U001"})
+	// Track from C1 should be marked done via message from C2.
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
 	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "done", items[0].Status)
-	assert.Equal(t, "C1", items[0].ChannelID) // still in original channel
-	assert.True(t, items[0].CompletedAt.Valid)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "done", tracks[0].Status)
+	assert.Equal(t, "C1", tracks[0].ChannelID) // still in original channel
+	assert.True(t, tracks[0].CompletedAt.Valid)
 }
 
 // Verify JSON structure matches what the AI produces
@@ -879,4 +881,121 @@ func TestAIResultStructure(t *testing.T) {
 	var parsed aiResult
 	require.NoError(t, json.Unmarshal(data, &parsed))
 	assert.Equal(t, sample, parsed)
+}
+
+// capturingGenerator captures the prompt passed to Generate for inspection.
+// Thread-safe: uses a mutex to protect capturedPrompt from concurrent writes.
+type capturingGenerator struct {
+	mu             sync.Mutex
+	response       string
+	capturedPrompt string
+}
+
+func (m *capturingGenerator) Generate(_ context.Context, _, prompt string) (string, *digest.Usage, error) {
+	m.mu.Lock()
+	m.capturedPrompt = prompt
+	m.mu.Unlock()
+	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01}, nil
+}
+
+func (m *capturingGenerator) getCapturedPrompt() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.capturedPrompt
+}
+
+func TestProfileContextInjectedIntoExtractPrompt(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000050.000000", UserID: "U001",
+		Text: "test message",
+	}))
+
+	// Create profile with custom context.
+	require.NoError(t, database.UpsertUserProfile(db.UserProfile{
+		SlackUserID:         "U001",
+		Role:                "Engineering Manager",
+		CustomPromptContext: "You are helping an EM responsible for Platform team. Reports: alice, bob.",
+		Reports:             `["U002","U003"]`,
+		StarredChannels:     `["C1"]`,
+		StarredPeople:       `["U010"]`,
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"items": []}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	_, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+
+	// Profile context should appear in the prompt.
+	captured := gen.getCapturedPrompt()
+	assert.Contains(t, captured, "USER PROFILE CONTEXT")
+	assert.Contains(t, captured, "Platform team")
+	assert.Contains(t, captured, "OWNERSHIP RULES")
+	assert.Contains(t, captured, `["U002","U003"]`)
+	assert.Contains(t, captured, "STARRED CHANNELS")
+	assert.Contains(t, captured, "STARRED PEOPLE")
+	assert.Contains(t, captured, "CATEGORY PRIORITY")
+	assert.Contains(t, captured, "decision_needed, follow_up") // EM role
+}
+
+func TestNoProfileContextWhenProfileEmpty(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000050.000000", UserID: "U001",
+		Text: "test message",
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"items": []}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	_, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+
+	// No profile context should appear in the prompt.
+	captured2 := gen.getCapturedPrompt()
+	assert.NotContains(t, captured2, "USER PROFILE CONTEXT")
+	assert.NotContains(t, captured2, "OWNERSHIP RULES")
+	assert.NotContains(t, captured2, "CATEGORY PRIORITY")
+}
+
+func TestCategoryWeightingByRole(t *testing.T) {
+	p := &Pipeline{}
+
+	tests := []struct {
+		role     string
+		expected string
+	}{
+		{"Engineering Manager", "decision_needed, follow_up"},
+		{"Tech Lead", "decision_needed, code_review"},
+		{"Product Manager", "decision_needed, approval"},
+		{"Software Engineer", "code_review, bug_fix, task"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.role, func(t *testing.T) {
+			p.profile = &db.UserProfile{
+				Role:                tt.role,
+				CustomPromptContext: "test context",
+			}
+			ctx := p.formatProfileContext()
+			assert.Contains(t, ctx, tt.expected)
+		})
+	}
 }

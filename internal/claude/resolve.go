@@ -1,3 +1,4 @@
+// Package claude provides utilities for resolving and locating the Claude CLI binary.
 package claude
 
 import (

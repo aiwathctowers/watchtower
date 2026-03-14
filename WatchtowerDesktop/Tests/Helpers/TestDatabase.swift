@@ -110,14 +110,14 @@ enum TestDatabase {
         summary: String = "Test summary",
         topics: String = "[]",
         decisions: String = "[]",
-        actionItems: String = "[]",
+        tracksJSON: String = "[]",
         messageCount: Int = 10,
         model: String = "haiku"
     ) throws {
         try db.execute(sql: """
             INSERT INTO digests (channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: [channelID, periodFrom, periodTo, type, summary, topics, decisions, actionItems, messageCount, model])
+            """, arguments: [channelID, periodFrom, periodTo, type, summary, topics, decisions, tracksJSON, messageCount, model])
     }
 
     static func insertWatchItem(
@@ -181,7 +181,7 @@ enum TestDatabase {
                              styleDetails, recommendations, concerns, model])
     }
 
-    static func insertActionItem(
+    static func insertTrack(
         _ db: Database,
         channelID: String = "C001",
         assigneeUserID: String = "U001",
@@ -195,13 +195,17 @@ enum TestDatabase {
         dueDate: Double? = nil,
         periodFrom: Double = 1700000000,
         periodTo: Double = 1700086400,
-        model: String = "haiku"
+        model: String = "haiku",
+        ownership: String = "mine",
+        ballOn: String = "",
+        ownerUserID: String = ""
     ) throws {
-        var cols = "channel_id, assignee_user_id, assignee_raw, text, context, source_message_ts, source_channel_name, status, priority, period_from, period_to, model"
-        var placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+        var cols = "channel_id, assignee_user_id, assignee_raw, text, context, source_message_ts, source_channel_name, status, priority, period_from, period_to, model, ownership, ball_on, owner_user_id"
+        var placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
         var args: [any DatabaseValueConvertible] = [
             channelID, assigneeUserID, assigneeRaw, text, context,
-            sourceMessageTS, sourceChannelName, status, priority, periodFrom, periodTo, model
+            sourceMessageTS, sourceChannelName, status, priority, periodFrom, periodTo, model,
+            ownership, ballOn, ownerUserID
         ]
         if let dueDate {
             cols += ", due_date"
@@ -209,7 +213,7 @@ enum TestDatabase {
             args.append(dueDate)
         }
         try db.execute(
-            sql: "INSERT INTO action_items (\(cols)) VALUES (\(placeholders))",
+            sql: "INSERT INTO tracks (\(cols)) VALUES (\(placeholders))",
             arguments: StatementArguments(args)
         )
     }
@@ -324,6 +328,7 @@ enum TestDatabase {
         cost_usd      REAL NOT NULL DEFAULT 0,
         created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         read_at       TEXT,
+        prompt_version INTEGER NOT NULL DEFAULT 0,
         UNIQUE(channel_id, type, period_from, period_to)
     );
     CREATE TABLE IF NOT EXISTS decision_reads (
@@ -357,6 +362,7 @@ enum TestDatabase {
         input_tokens        INTEGER NOT NULL DEFAULT 0,
         output_tokens       INTEGER NOT NULL DEFAULT 0,
         cost_usd            REAL NOT NULL DEFAULT 0,
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
         created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         UNIQUE(user_id, period_from, period_to)
     );
@@ -379,7 +385,7 @@ enum TestDatabase {
         alias_for  TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
-    CREATE TABLE IF NOT EXISTS action_items (
+    CREATE TABLE IF NOT EXISTS tracks (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         channel_id          TEXT NOT NULL,
         assignee_user_id    TEXT NOT NULL,
@@ -403,26 +409,106 @@ enum TestDatabase {
         cost_usd            REAL NOT NULL DEFAULT 0,
         created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         completed_at        TEXT,
-        participants        TEXT NOT NULL DEFAULT '',
-        source_refs         TEXT NOT NULL DEFAULT '',
+        participants        TEXT NOT NULL DEFAULT '[]',
+        source_refs         TEXT NOT NULL DEFAULT '[]',
         requester_name      TEXT NOT NULL DEFAULT '',
         requester_user_id   TEXT NOT NULL DEFAULT '',
         category            TEXT NOT NULL DEFAULT '',
         blocking            TEXT NOT NULL DEFAULT '',
-        tags                TEXT NOT NULL DEFAULT '',
+        tags                TEXT NOT NULL DEFAULT '[]',
         decision_summary    TEXT NOT NULL DEFAULT '',
-        decision_options    TEXT NOT NULL DEFAULT '',
-        related_digest_ids  TEXT NOT NULL DEFAULT '',
-        sub_items           TEXT NOT NULL DEFAULT ''
+        decision_options    TEXT NOT NULL DEFAULT '[]',
+        related_digest_ids  TEXT NOT NULL DEFAULT '[]',
+        sub_items           TEXT NOT NULL DEFAULT '[]',
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
+        ownership           TEXT NOT NULL DEFAULT 'mine',
+        ball_on             TEXT NOT NULL DEFAULT '',
+        owner_user_id       TEXT NOT NULL DEFAULT ''
     );
-    CREATE TABLE IF NOT EXISTS action_item_history (
+    CREATE TABLE IF NOT EXISTS track_history (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        action_item_id  INTEGER NOT NULL,
+        track_id        INTEGER NOT NULL,
         event           TEXT NOT NULL,
         field           TEXT NOT NULL DEFAULT '',
         old_value       TEXT NOT NULL DEFAULT '',
         new_value       TEXT NOT NULL DEFAULT '',
         created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
+    CREATE TABLE IF NOT EXISTS feedback (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis')),
+        entity_id   TEXT NOT NULL,
+        rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),
+        comment     TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_entity ON feedback(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(entity_type, rating);
+    CREATE TABLE IF NOT EXISTS prompts (
+        id         TEXT PRIMARY KEY,
+        template   TEXT NOT NULL,
+        version    INTEGER NOT NULL DEFAULT 1,
+        language   TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS prompt_history (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        prompt_id  TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+        version    INTEGER NOT NULL,
+        template   TEXT NOT NULL,
+        reason     TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_history_prompt ON prompt_history(prompt_id);
+    CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
+    CREATE TABLE IF NOT EXISTS user_profile (
+        id                    INTEGER PRIMARY KEY,
+        slack_user_id         TEXT NOT NULL UNIQUE,
+        role                  TEXT NOT NULL DEFAULT '',
+        team                  TEXT NOT NULL DEFAULT '',
+        responsibilities      TEXT NOT NULL DEFAULT '[]',
+        reports               TEXT NOT NULL DEFAULT '[]',
+        peers                 TEXT NOT NULL DEFAULT '[]',
+        manager               TEXT NOT NULL DEFAULT '',
+        starred_channels      TEXT NOT NULL DEFAULT '[]',
+        starred_people        TEXT NOT NULL DEFAULT '[]',
+        pain_points           TEXT NOT NULL DEFAULT '[]',
+        track_focus           TEXT NOT NULL DEFAULT '[]',
+        onboarding_done       INTEGER NOT NULL DEFAULT 0,
+        custom_prompt_context TEXT NOT NULL DEFAULT '',
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
     """
+
+    // MARK: - Profile Fixtures
+
+    static func insertProfile(
+        _ db: Database,
+        slackUserID: String = "U001",
+        role: String = "",
+        team: String = "",
+        responsibilities: String = "[]",
+        reports: String = "[]",
+        peers: String = "[]",
+        manager: String = "",
+        starredChannels: String = "[]",
+        starredPeople: String = "[]",
+        painPoints: String = "[]",
+        trackFocus: String = "[]",
+        onboardingDone: Bool = false,
+        customPromptContext: String = ""
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO user_profile
+                (slack_user_id, role, team, responsibilities, reports, peers, manager,
+                 starred_channels, starred_people, pain_points, track_focus,
+                 onboarding_done, custom_prompt_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                slackUserID, role, team, responsibilities, reports, peers, manager,
+                starredChannels, starredPeople, painPoints, trackFocus,
+                onboardingDone ? 1 : 0, customPromptContext,
+            ])
+    }
 }

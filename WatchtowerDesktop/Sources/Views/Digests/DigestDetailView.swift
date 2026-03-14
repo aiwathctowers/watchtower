@@ -6,7 +6,7 @@ struct DigestDetailView: View {
     let viewModel: DigestViewModel
     var onClose: (() -> Void)? = nil
     @Environment(AppState.self) private var appState
-    @State private var showCreateAction = false
+    @State private var showCreateTrack = false
     @State private var markingRead = false
     @State private var markedRead = false
     @State private var markReadError: String?
@@ -37,11 +37,11 @@ struct DigestDetailView: View {
                 // Decisions
                 decisionsSection
 
-                // Action Items
-                actionItemsSection
+                // Tracks
+                tracksSection
 
-                // Create Action button
-                createActionButton
+                // Create Track button
+                createTrackButton
 
                 Divider()
 
@@ -51,9 +51,9 @@ struct DigestDetailView: View {
             .padding()
         }
         .navigationTitle(channelName.map { "#\($0)" } ?? "Digest")
-        .sheet(isPresented: $showCreateAction) {
+        .sheet(isPresented: $showCreateTrack) {
             if let dbManager = appState.databaseManager {
-                CreateActionFromDigestSheet(
+                CreateTrackFromDigestSheet(
                     digest: digest,
                     channelName: channelName,
                     dbManager: dbManager
@@ -126,9 +126,9 @@ struct DigestDetailView: View {
                 }
 
                 Button {
-                    showCreateAction = true
+                    showCreateTrack = true
                 } label: {
-                    Label("Create Action", systemImage: "plus.circle")
+                    Label("Create Track", systemImage: "plus.circle")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -245,13 +245,13 @@ struct DigestDetailView: View {
     }
 
     @ViewBuilder
-    private var actionItemsSection: some View {
-        let actions = digest.parsedActionItems
-        if !actions.isEmpty {
+    private var tracksSection: some View {
+        let tracks = digest.parsedTracks
+        if !tracks.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Action Items")
+                Text("Tracks")
                     .font(.headline)
-                ForEach(actions) { item in
+                ForEach(tracks) { item in
                     HStack(alignment: .top) {
                         Image(systemName: item.status == "done" ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(item.status == "done" ? .green : .secondary)
@@ -271,11 +271,11 @@ struct DigestDetailView: View {
         }
     }
 
-    private var createActionButton: some View {
+    private var createTrackButton: some View {
         Button {
-            showCreateAction = true
+            showCreateTrack = true
         } label: {
-            Label("Create Action", systemImage: "plus.circle.fill")
+            Label("Create Track", systemImage: "plus.circle.fill")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)

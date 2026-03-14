@@ -106,9 +106,7 @@ workspaces:
 	database2.Close()
 
 	// Override HOME so DBPath() resolves to our temp dir
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("HOME", homeDir)
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
@@ -150,9 +148,7 @@ workspaces:
 	require.NoError(t, err)
 	database.Close()
 
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("HOME", homeDir)
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath

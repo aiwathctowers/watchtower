@@ -39,10 +39,17 @@ enum ChatConversationQueries {
         let columns = try db.columns(in: "chat_conversations").map(\.name)
         if !columns.contains("context_type") {
             try db.execute(sql: "ALTER TABLE chat_conversations ADD COLUMN context_type TEXT")
+            // Fresh column — no migration needed.
+            if !columns.contains("context_id") {
+                try db.execute(sql: "ALTER TABLE chat_conversations ADD COLUMN context_id TEXT")
+            }
+            return
         }
         if !columns.contains("context_id") {
             try db.execute(sql: "ALTER TABLE chat_conversations ADD COLUMN context_id TEXT")
         }
+        // One-time migration: rename old "action_item" context type to "track".
+        try db.execute(sql: "UPDATE chat_conversations SET context_type = 'track' WHERE context_type = 'action_item'")
     }
 
     @discardableResult

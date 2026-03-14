@@ -3,8 +3,8 @@ import GRDB
 
 // MARK: - Participant & SourceRef
 
-struct ActionItemParticipant: Decodable, Identifiable, Equatable {
-    var id: String { name + (userID ?? "") }
+struct TrackParticipant: Decodable, Identifiable, Equatable {
+    let id = UUID()
     let name: String
     let userID: String?
     let stance: String?
@@ -14,34 +14,68 @@ struct ActionItemParticipant: Decodable, Identifiable, Equatable {
         case userID = "user_id"
         case stance
     }
+
+    static func == (lhs: TrackParticipant, rhs: TrackParticipant) -> Bool {
+        lhs.name == rhs.name && lhs.userID == rhs.userID && lhs.stance == rhs.stance
+    }
 }
 
-struct ActionItemSourceRef: Decodable, Identifiable, Equatable {
+struct TrackSourceRef: Decodable, Identifiable, Equatable {
     var id: String { ts }
     let ts: String
     let author: String
     let text: String
 }
 
-struct ActionItemDecisionOption: Decodable, Identifiable, Equatable {
-    var id: String { option }
+struct TrackDecisionOption: Decodable, Identifiable, Equatable {
+    let id = UUID()
     let option: String
     let supporters: [String]?
     let pros: String?
     let cons: String?
+
+    enum CodingKeys: String, CodingKey {
+        case option, supporters, pros, cons
+    }
+
+    static func == (lhs: TrackDecisionOption, rhs: TrackDecisionOption) -> Bool {
+        lhs.option == rhs.option && lhs.supporters == rhs.supporters && lhs.pros == rhs.pros && lhs.cons == rhs.cons
+    }
 }
 
-struct ActionItemSubItem: Codable, Identifiable, Equatable {
-    var id: String { text }
+struct TrackSubItem: Codable, Identifiable, Equatable {
+    let id: UUID
+
     let text: String
     var status: String // "open" or "done"
 
+    enum CodingKeys: String, CodingKey {
+        case text, status
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = UUID()
+        self.text = try container.decode(String.self, forKey: .text)
+        self.status = try container.decode(String.self, forKey: .status)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(text, forKey: .text)
+        try container.encode(status, forKey: .status)
+    }
+
     var isDone: Bool { status == "done" }
+
+    static func == (lhs: TrackSubItem, rhs: TrackSubItem) -> Bool {
+        lhs.text == rhs.text && lhs.status == rhs.status
+    }
 }
 
-// MARK: - ActionItem
+// MARK: - Track
 
-struct ActionItem: FetchableRecord, Identifiable, Equatable {
+struct Track: FetchableRecord, Identifiable, Equatable {
     let id: Int
     let channelID: String
     let assigneeUserID: String
@@ -76,6 +110,10 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
     let decisionOptions: String
     let relatedDigestIDs: String
     let subItems: String
+    let promptVersion: Int
+    let ownership: String       // "mine", "delegated", "watching"
+    let ballOn: String          // user_id of person who needs to act next
+    let ownerUserID: String     // owner of the track
 
     init(row: Row) {
         id = row["id"]
@@ -112,6 +150,10 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
         decisionOptions = row["decision_options"] ?? ""
         relatedDigestIDs = row["related_digest_ids"] ?? ""
         subItems = row["sub_items"] ?? ""
+        promptVersion = row["prompt_version"] ?? 0
+        ownership = row["ownership"] ?? "mine"
+        ballOn = row["ball_on"] ?? ""
+        ownerUserID = row["owner_user_id"] ?? ""
     }
 
     var isInbox: Bool { status == "inbox" }
@@ -119,35 +161,63 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
     var isDone: Bool { status == "done" }
     var isDismissed: Bool { status == "dismissed" }
     var isSnoozed: Bool { status == "snoozed" }
+    var isMine: Bool { ownership == "mine" }
+    var isDelegated: Bool { ownership == "delegated" }
+    var isWatching: Bool { ownership == "watching" }
+
+    var ownershipLabel: String {
+        switch ownership {
+        case "delegated": return "Delegated"
+        case "watching": return "Watching"
+        default: return "Mine"
+        }
+    }
 
     var snoozeUntilDate: Date? {
         guard let ts = snoozeUntil, ts > 0 else { return nil }
         return Date(timeIntervalSince1970: ts)
     }
 
-    var snoozeUntilFormatted: String? {
-        guard let date = snoozeUntilDate else { return nil }
+    private static let mediumDateTimeFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         fmt.timeStyle = .short
-        return fmt.string(from: date)
+        return fmt
+    }()
+
+    private static let mediumDateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        return fmt
+    }()
+
+    private static let iso8601WithFractional: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt
+    }()
+
+    private static let iso8601Standard: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
+        return fmt
+    }()
+
+    var snoozeUntilFormatted: String? {
+        guard let date = snoozeUntilDate else { return nil }
+        return Self.mediumDateTimeFormatter.string(from: date)
     }
 
     var dueDateFormatted: String? {
         guard let ts = dueDate, ts > 0 else { return nil }
         let date = Date(timeIntervalSince1970: ts)
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .none
-        return fmt.string(from: date)
+        return Self.mediumDateFormatter.string(from: date)
     }
 
     var createdDate: Date {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = fmt.date(from: createdAt) { return d }
-        fmt.formatOptions = [.withInternetDateTime]
-        return fmt.date(from: createdAt) ?? Date()
+        if let d = Self.iso8601WithFractional.date(from: createdAt) { return d }
+        return Self.iso8601Standard.date(from: createdAt) ?? Date()
     }
 
     var isOverdue: Bool {
@@ -155,16 +225,16 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
         return Date(timeIntervalSince1970: ts) < Date()
     }
 
-    var decodedParticipants: [ActionItemParticipant] {
+    var decodedParticipants: [TrackParticipant] {
         guard !participants.isEmpty,
               let data = participants.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([ActionItemParticipant].self, from: data)) ?? []
+        return (try? JSONDecoder().decode([TrackParticipant].self, from: data)) ?? []
     }
 
-    var decodedSourceRefs: [ActionItemSourceRef] {
+    var decodedSourceRefs: [TrackSourceRef] {
         guard !sourceRefs.isEmpty,
               let data = sourceRefs.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([ActionItemSourceRef].self, from: data)) ?? []
+        return (try? JSONDecoder().decode([TrackSourceRef].self, from: data)) ?? []
     }
 
     var decodedTags: [String] {
@@ -173,10 +243,10 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
         return (try? JSONDecoder().decode([String].self, from: data)) ?? []
     }
 
-    var decodedDecisionOptions: [ActionItemDecisionOption] {
+    var decodedDecisionOptions: [TrackDecisionOption] {
         guard !decisionOptions.isEmpty, decisionOptions != "[]",
               let data = decisionOptions.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([ActionItemDecisionOption].self, from: data)) ?? []
+        return (try? JSONDecoder().decode([TrackDecisionOption].self, from: data)) ?? []
     }
 
     var decodedRelatedDigestIDs: [Int] {
@@ -185,10 +255,10 @@ struct ActionItem: FetchableRecord, Identifiable, Equatable {
         return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
     }
 
-    var decodedSubItems: [ActionItemSubItem] {
+    var decodedSubItems: [TrackSubItem] {
         guard !subItems.isEmpty, subItems != "[]",
               let data = subItems.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([ActionItemSubItem].self, from: data)) ?? []
+        return (try? JSONDecoder().decode([TrackSubItem].self, from: data)) ?? []
     }
 
     var subItemsProgress: (done: Int, total: Int) {

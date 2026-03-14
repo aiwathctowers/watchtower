@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 18, v)
+	assert.Equal(t, 21, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -117,8 +117,8 @@ func TestAllTablesExist(t *testing.T) {
 		"workspace", "users", "channels", "messages",
 		"reactions", "files", "sync_state", "watch_list", "user_checkpoints",
 		"digests", "decision_reads", "user_analyses", "period_summaries",
-		"custom_emojis", "action_items", "action_item_history",
-		"feedback", "prompts", "prompt_history",
+		"custom_emojis", "tracks", "track_history", "decision_importance_corrections",
+		"feedback", "prompts", "prompt_history", "user_profile",
 	}
 
 	for _, table := range expectedTables {
@@ -436,6 +436,133 @@ func TestUnicodeMessage(t *testing.T) {
 	).Scan(&got)
 	require.NoError(t, err)
 	assert.Equal(t, text, got)
+}
+
+func TestMigrationV19ActionItemsToTracks(t *testing.T) {
+	// Simulate a v18 database, then open it to trigger migration v19.
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "watchtower.db")
+
+	// Open fresh DB (creates all tables up to v19), then revert to v18 state.
+	db1, err := Open(dbPath)
+	require.NoError(t, err)
+
+	// Rename tables back to v18 names and restore v18 indexes.
+	_, err = db1.Exec("PRAGMA foreign_keys = OFF")
+	require.NoError(t, err)
+	_, err = db1.Exec("ALTER TABLE tracks RENAME TO action_items")
+	require.NoError(t, err)
+	_, err = db1.Exec("ALTER TABLE track_history RENAME TO action_item_history")
+	require.NoError(t, err)
+	_, err = db1.Exec("ALTER TABLE action_item_history RENAME COLUMN track_id TO action_item_id")
+	require.NoError(t, err)
+	// Drop v19 indexes so migration can recreate them.
+	for _, idx := range []string{
+		"idx_tracks_dedup", "idx_tracks_assignee", "idx_tracks_status",
+		"idx_tracks_period", "idx_track_history_track",
+		"idx_feedback_entity", "idx_feedback_rating",
+	} {
+		_, err = db1.Exec("DROP INDEX IF EXISTS " + idx)
+		require.NoError(t, err)
+	}
+	// Create v18-era indexes that migration expects to drop.
+	_, err = db1.Exec("CREATE UNIQUE INDEX idx_action_items_dedup ON action_items(channel_id, assignee_user_id, source_message_ts, text)")
+	require.NoError(t, err)
+	_, err = db1.Exec("CREATE INDEX idx_action_items_assignee ON action_items(assignee_user_id)")
+	require.NoError(t, err)
+	_, err = db1.Exec("CREATE INDEX idx_action_items_status ON action_items(status)")
+	require.NoError(t, err)
+	_, err = db1.Exec("CREATE INDEX idx_action_items_period ON action_items(period_from, period_to)")
+	require.NoError(t, err)
+	_, err = db1.Exec("CREATE INDEX idx_action_item_history_item ON action_item_history(action_item_id)")
+	require.NoError(t, err)
+
+	// Recreate feedback with old CHECK constraint (action_item instead of track, no user_analysis).
+	_, err = db1.Exec(`CREATE TABLE feedback_old (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'action_item', 'decision')),
+		entity_id   TEXT NOT NULL,
+		rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),
+		comment     TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+	)`)
+	require.NoError(t, err)
+	_, err = db1.Exec(`INSERT INTO feedback_old SELECT * FROM feedback`)
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP TABLE feedback")
+	require.NoError(t, err)
+	_, err = db1.Exec("ALTER TABLE feedback_old RENAME TO feedback")
+	require.NoError(t, err)
+
+	// Insert test data using v18 names.
+	_, err = db1.Exec("INSERT INTO workspace (id, name, domain) VALUES ('T1', 'test', 'test.slack.com')")
+	require.NoError(t, err)
+	_, err = db1.Exec(`INSERT INTO action_items (channel_id, assignee_user_id, text, status, priority, period_from, period_to, participants)
+		VALUES ('C1', 'U1', 'review PR', 'inbox', 'high', 1000, 2000, '')`)
+	require.NoError(t, err)
+	_, err = db1.Exec(`INSERT INTO feedback (entity_type, entity_id, rating) VALUES ('action_item', '1', 1)`)
+	require.NoError(t, err)
+	_, err = db1.Exec(`INSERT INTO action_item_history (action_item_id, event, field, old_value, new_value)
+		VALUES (1, 'created', '', '', '')`)
+	require.NoError(t, err)
+	_, err = db1.Exec(`INSERT INTO prompts (id, template, version) VALUES ('actionitems.extract', 'old template', 1)`)
+	require.NoError(t, err)
+
+	// Downgrade user_version to 18 so migration v19 runs on next open.
+	_, err = db1.Exec("PRAGMA user_version = 18")
+	require.NoError(t, err)
+	_, err = db1.Exec("PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+	db1.Close()
+
+	// Reopen — migration v19 should run.
+	db2, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	v, err := db2.UserVersion()
+	require.NoError(t, err)
+	assert.Equal(t, 21, v)
+
+	// Verify table rename: action_items → tracks.
+	var text string
+	err = db2.QueryRow("SELECT text FROM tracks WHERE id = 1").Scan(&text)
+	require.NoError(t, err)
+	assert.Equal(t, "review PR", text)
+
+	// Verify column rename: action_item_id → track_id.
+	var event string
+	err = db2.QueryRow("SELECT event FROM track_history WHERE track_id = 1").Scan(&event)
+	require.NoError(t, err)
+	assert.Equal(t, "created", event)
+
+	// Verify feedback entity_type transformed: action_item → track.
+	var entityType string
+	err = db2.QueryRow("SELECT entity_type FROM feedback WHERE entity_id = '1'").Scan(&entityType)
+	require.NoError(t, err)
+	assert.Equal(t, "track", entityType)
+
+	// Verify user_analysis entity type is now allowed by updated CHECK constraint.
+	_, err = db2.Exec(`INSERT INTO feedback (entity_type, entity_id, rating) VALUES ('user_analysis', '1', 1)`)
+	require.NoError(t, err, "user_analysis entity_type should be allowed by CHECK constraint")
+
+	// Verify prompt ID renamed.
+	var promptID string
+	err = db2.QueryRow("SELECT id FROM prompts WHERE id = 'tracks.extract'").Scan(&promptID)
+	require.NoError(t, err)
+	assert.Equal(t, "tracks.extract", promptID)
+
+	// Verify customized prompt template was reset (arity mismatch protection).
+	var tmpl string
+	err = db2.QueryRow("SELECT template FROM prompts WHERE id = 'tracks.extract'").Scan(&tmpl)
+	require.NoError(t, err)
+	assert.Equal(t, "", tmpl, "customized prompt should be reset to force fallback to built-in default")
+
+	// Verify JSON column defaults fixed: '' → '[]'.
+	var participants string
+	err = db2.QueryRow("SELECT participants FROM tracks WHERE id = 1").Scan(&participants)
+	require.NoError(t, err)
+	assert.Equal(t, "[]", participants, "empty JSON columns should be migrated to '[]'")
 }
 
 func TestNullableFields(t *testing.T) {

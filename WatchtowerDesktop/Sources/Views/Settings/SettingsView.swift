@@ -9,6 +9,10 @@ struct SettingsView: View {
                 .environment(appState)
                 .tabItem { Label("General", systemImage: "gear") }
 
+            ProfileSettings()
+                .environment(appState)
+                .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+
             NotificationSettings()
                 .tabItem { Label("Notifications", systemImage: "bell") }
 

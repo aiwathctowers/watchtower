@@ -10,7 +10,7 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
     let summary: String
     let topics: String
     let decisions: String
-    let actionItems: String
+    let tracksJSON: String
     let messageCount: Int
     let model: String
     let inputTokens: Int?
@@ -24,7 +24,7 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
         case channelID = "channel_id"
         case periodFrom = "period_from"
         case periodTo = "period_to"
-        case actionItems = "action_items"
+        case tracksJSON = "action_items"
         case messageCount = "message_count"
         case inputTokens = "input_tokens"
         case outputTokens = "output_tokens"
@@ -43,9 +43,9 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
         return (try? Self.decoder.decode([Decision].self, from: data)) ?? []
     }
 
-    var parsedActionItems: [DigestActionItem] {
-        guard let data = actionItems.data(using: .utf8) else { return [] }
-        return (try? Self.decoder.decode([DigestActionItem].self, from: data)) ?? []
+    var parsedTracks: [DigestTrack] {
+        guard let data = tracksJSON.data(using: .utf8) else { return [] }
+        return (try? Self.decoder.decode([DigestTrack].self, from: data)) ?? []
     }
 
     var parsedTopics: [String] {

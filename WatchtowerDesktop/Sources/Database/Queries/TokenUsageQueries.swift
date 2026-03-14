@@ -82,12 +82,12 @@ enum TokenUsageQueries {
 
             UNION ALL
 
-            SELECT 'actions' AS source, model,
+            SELECT 'tracks' AS source, model,
                    COUNT(*) AS calls,
                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
                    COALESCE(SUM(cost_usd), 0) AS cost_usd
-            FROM action_items
+            FROM tracks
             WHERE input_tokens > 0 OR output_tokens > 0
             GROUP BY model
             """

@@ -1,33 +1,33 @@
 import Foundation
 
-/// Manages background pipeline tasks (digests, action items) after onboarding sync.
+/// Manages background pipeline tasks (digests, tracks) after onboarding sync.
 @MainActor
 @Observable
 final class BackgroundTaskManager {
     enum TaskKind: String, CaseIterable, Identifiable {
         case digests
-        case actions
+        case tracks
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .digests: "Generating Digests"
-            case .actions: "Generating Action Items"
+            case .tracks: "Generating Tracks"
             }
         }
 
         var icon: String {
             switch self {
             case .digests: "doc.text.magnifyingglass"
-            case .actions: "checklist"
+            case .tracks: "checklist"
             }
         }
 
         var cliArguments: [String] {
             switch self {
             case .digests: ["digest", "generate", "--progress-json"]
-            case .actions: ["actions", "generate", "--progress-json"]
+            case .tracks: ["tracks", "generate", "--progress-json"]
             }
         }
     }
@@ -80,7 +80,7 @@ final class BackgroundTaskManager {
 
     private var runningProcess: Process?
 
-    /// Start all background pipelines sequentially (digests first, then actions).
+    /// Start all background pipelines sequentially (digests first, then tracks).
     func startPipelines() {
         // Initialize task states
         for kind in TaskKind.allCases {
@@ -89,7 +89,7 @@ final class BackgroundTaskManager {
 
         Task {
             await runTask(.digests)
-            await runTask(.actions)
+            await runTask(.tracks)
 
             // Start daemon after all pipelines complete
             if let path = Constants.findCLIPath() {

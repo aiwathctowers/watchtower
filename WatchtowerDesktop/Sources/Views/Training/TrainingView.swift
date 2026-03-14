@@ -397,7 +397,7 @@ struct TrainingView: View {
     private func feedbackTypeLabel(_ type: String) -> String {
         switch type {
         case "digest": return "Digests"
-        case "action_item": return "Actions"
+        case "track": return "Tracks"
         case "decision": return "Decisions"
         default: return type.capitalized
         }
@@ -415,8 +415,8 @@ let sharedPromptLabels: [String: String] = [
     "digest.daily": "Daily Rollup",
     "digest.weekly": "Weekly Summary",
     "digest.period": "Period Summary",
-    "actionitems.extract": "Action Items Extract",
-    "actionitems.update": "Action Items Update",
+    "tracks.extract": "Tracks Extract",
+    "tracks.update": "Tracks Update",
     "analysis.user": "User Analysis",
     "analysis.period": "Period Analysis",
 ]
@@ -468,14 +468,14 @@ struct PromptCard: View {
 
     private var categoryColor: Color {
         if prompt.id.hasPrefix("digest") { return .blue }
-        if prompt.id.hasPrefix("action") { return .orange }
+        if prompt.id.hasPrefix("tracks") { return .orange }
         if prompt.id.hasPrefix("analysis") { return .purple }
         return .gray
     }
 
     private var categoryLabel: String {
         if prompt.id.hasPrefix("digest") { return "Digest" }
-        if prompt.id.hasPrefix("action") { return "Actions" }
+        if prompt.id.hasPrefix("tracks") { return "Tracks" }
         if prompt.id.hasPrefix("analysis") { return "Analysis" }
         return "Other"
     }

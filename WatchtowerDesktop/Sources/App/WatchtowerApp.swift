@@ -38,8 +38,8 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
                 } else {
                     appState?.selectedDestination = .digests
                 }
-            case "action_item", "action_item_update":
-                appState?.selectedDestination = .actions
+            case "track", "track_update":
+                appState?.selectedDestination = .tracks
             case "daily_summary":
                 appState?.selectedDestination = .digests
             default:

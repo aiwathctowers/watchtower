@@ -39,13 +39,11 @@ workspaces:
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob"}))
 	database.Close()
 
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
+	t.Setenv("HOME", homeDir)
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
 
 	return func() {
-		os.Setenv("HOME", oldHome)
 		flagConfig = oldFlagConfig
 	}
 }

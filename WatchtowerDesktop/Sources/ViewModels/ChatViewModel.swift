@@ -303,7 +303,7 @@ final class ChatViewModel {
                 - Match the user's language and tone
                 - Use markdown for readability (headers, bullet lists, bold for emphasis)
                 - Use line breaks between sections for clarity
-                - Highlight: decisions, action items, unanswered questions, unusual activity
+                - Highlight: decisions, tracks, unanswered questions, unusual activity
                 """
             }
         } catch {

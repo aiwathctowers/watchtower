@@ -1,9 +1,9 @@
 import Foundation
 import GRDB
 
-struct ActionItemHistoryEntry: FetchableRecord, Decodable, Identifiable, Equatable {
+struct TrackHistoryEntry: FetchableRecord, Decodable, Identifiable, Equatable {
     let id: Int
-    let actionItemID: Int
+    let trackID: Int
     let event: String       // "created", "status_changed", "priority_changed", "reopened", etc.
     let field: String
     let oldValue: String
@@ -12,16 +12,28 @@ struct ActionItemHistoryEntry: FetchableRecord, Decodable, Identifiable, Equatab
 
     enum CodingKeys: String, CodingKey {
         case id, event, field
-        case actionItemID = "action_item_id"
+        case trackID = "track_id"
         case oldValue = "old_value"
         case newValue = "new_value"
         case createdAt = "created_at"
     }
 
-    var createdDate: Date {
+    private static let isoFormatter: ISO8601DateFormatter = {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime]
-        return fmt.date(from: createdAt) ?? Date()
+        return fmt
+    }()
+
+    private static let isoFractionalFormatter: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt
+    }()
+
+    var createdDate: Date {
+        Self.isoFractionalFormatter.date(from: createdAt)
+            ?? Self.isoFormatter.date(from: createdAt)
+            ?? Date()
     }
 
     var displayText: String {

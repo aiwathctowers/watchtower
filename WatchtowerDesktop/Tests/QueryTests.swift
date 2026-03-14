@@ -717,3 +717,124 @@ final class ChatConversationQueryTests: XCTestCase {
         XCTAssertEqual(conv2.displayTitle, "My Chat")
     }
 }
+
+// MARK: - ProfileQueries
+
+final class ProfileQueryTests: XCTestCase {
+
+    func testFetchProfileNotFound() throws {
+        let db = try TestDatabase.create()
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U_NONE") }
+        XCTAssertNil(profile)
+    }
+
+    func testFetchCurrentProfileNoWorkspace() throws {
+        let db = try TestDatabase.create()
+        let profile = try db.read { try ProfileQueries.fetchCurrentProfile($0) }
+        XCTAssertNil(profile)
+    }
+
+    func testInsertAndFetchProfile() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(
+                db,
+                slackUserID: "U123",
+                role: "Engineering Manager",
+                team: "Platform",
+                reports: #"["U456","U789"]"#,
+                manager: "U000",
+                onboardingDone: true
+            )
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertNotNil(profile)
+        XCTAssertEqual(profile?.slackUserID, "U123")
+        XCTAssertEqual(profile?.role, "Engineering Manager")
+        XCTAssertEqual(profile?.team, "Platform")
+        XCTAssertEqual(profile?.decodedReports, ["U456", "U789"])
+        XCTAssertEqual(profile?.manager, "U000")
+        XCTAssertTrue(profile?.onboardingDone ?? false)
+    }
+
+    func testFetchCurrentProfile() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertWorkspace(db, id: "T001", name: "Test")
+            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U123' WHERE id = 'T001'")
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC")
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchCurrentProfile($0) }
+        XCTAssertNotNil(profile)
+        XCTAssertEqual(profile?.role, "IC")
+    }
+
+    func testUpsertProfileUpdate() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC", team: "Backend")
+        }
+
+        // Read, modify, upsert
+        let original = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }!
+        var updated = original
+        updated.role = "Tech Lead"
+        updated.team = "Platform"
+
+        try db.write { db in
+            try ProfileQueries.upsertProfile(db, profile: updated)
+        }
+
+        let result = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertEqual(result?.role, "Tech Lead")
+        XCTAssertEqual(result?.team, "Platform")
+    }
+
+    func testUpdateField() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC")
+            try ProfileQueries.updateField(db, slackUserID: "U123", field: "role", value: "EM")
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertEqual(profile?.role, "EM")
+    }
+
+    func testUpdateFieldRejectsInvalidField() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123")
+            // Should be silently ignored — "id" is not in allowed fields
+            try ProfileQueries.updateField(db, slackUserID: "U123", field: "id", value: "999")
+        }
+        // No crash, id unchanged
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertNotNil(profile)
+    }
+
+    func testProfileJSONDecoders() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(
+                db,
+                slackUserID: "U123",
+                reports: #"["U1","U2"]"#,
+                peers: #"["U3"]"#,
+                starredChannels: #"["C1","C2","C3"]"#,
+                starredPeople: #"["U4"]"#,
+                painPoints: #"["lost decisions"]"#,
+                trackFocus: #"["blockers","deadlines"]"#
+            )
+        }
+        let p = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }!
+        XCTAssertEqual(p.decodedReports, ["U1", "U2"])
+        XCTAssertEqual(p.decodedPeers, ["U3"])
+        XCTAssertEqual(p.decodedStarredChannels, ["C1", "C2", "C3"])
+        XCTAssertEqual(p.decodedStarredPeople, ["U4"])
+        XCTAssertEqual(p.decodedPainPoints, ["lost decisions"])
+        XCTAssertEqual(p.decodedTrackFocus, ["blockers", "deadlines"])
+    }
+}

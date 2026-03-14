@@ -75,6 +75,7 @@ type Pipeline struct {
 	// caches populated during a run
 	channelNames map[string]string
 	userNames    map[string]string
+	profile      *db.UserProfile // loaded once per Run, nil if not available
 }
 
 // New creates a new digest pipeline.
@@ -342,7 +343,7 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 
 	dateStr := dayStart.Format("2006-01-02")
 	tmpl, pv := p.getPrompt(prompts.DigestDaily, dailyRollupPrompt)
-	prompt := fmt.Sprintf(tmpl, dateStr, p.languageInstruction(), sb.String())
+	prompt := fmt.Sprintf(tmpl, dateStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -398,7 +399,7 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 	fromStr := weekStart.Format("2006-01-02")
 	toStr := now.Format("2006-01-02")
 	tmpl, pv := p.getPrompt(prompts.DigestWeekly, weeklyTrendsPrompt)
-	prompt := fmt.Sprintf(tmpl, now.Format("2006-01-02"), fromStr, toStr, p.languageInstruction(), sb.String())
+	prompt := fmt.Sprintf(tmpl, now.Format("2006-01-02"), fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -462,7 +463,7 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 	fromStr := from.Format("2006-01-02")
 	toStr := to.Format("2006-01-02")
 	tmpl, _ := p.getPrompt(prompts.DigestPeriod, periodSummaryPrompt)
-	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.languageInstruction(), sb.String())
+	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -491,7 +492,7 @@ func (p *Pipeline) generateChannelDigest(ctx context.Context, channelName string
 	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02 15:04")
 
 	tmpl, pv := p.getPrompt(prompts.DigestChannel, channelDigestPrompt)
-	prompt := fmt.Sprintf(tmpl, channelName, fromStr, toStr, p.languageInstruction(), formatted)
+	prompt := fmt.Sprintf(tmpl, channelName, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), formatted)
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -563,6 +564,13 @@ func (p *Pipeline) loadCaches() {
 	p.channelNames = make(map[string]string)
 	p.userNames = make(map[string]string)
 
+	// Load user profile for personalized digests.
+	if userID, err := p.db.GetCurrentUserID(); err == nil && userID != "" {
+		if profile, err := p.db.GetUserProfile(userID); err == nil {
+			p.profile = profile
+		}
+	}
+
 	users, err := p.db.GetUsers(db.UserFilter{})
 	if err != nil {
 		p.logger.Printf("warning: failed to load user names: %v", err)
@@ -597,6 +605,33 @@ func (p *Pipeline) loadCaches() {
 			p.channelNames[ch.ID] = name
 		}
 	}
+}
+
+// formatProfileContext builds the profile context section for digest prompts.
+// Returns personalization hints so the AI focuses on what matters to the user.
+func (p *Pipeline) formatProfileContext() string {
+	if p.profile == nil || p.profile.CustomPromptContext == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== USER PROFILE CONTEXT ===\n")
+	sb.WriteString(sanitizePromptValue(p.profile.CustomPromptContext))
+	sb.WriteString("\n\nPERSONALIZATION RULES:\n")
+	sb.WriteString("- Prioritize decisions and action items relevant to this user's role and responsibilities\n")
+	sb.WriteString("- Highlight topics that fall within the user's area of focus\n")
+
+	if p.profile.StarredChannels != "" && p.profile.StarredChannels != "[]" {
+		sb.WriteString(fmt.Sprintf("\nSTARRED CHANNELS: %s — provide more detail for these channels, lower threshold for including topics\n", sanitizePromptValue(p.profile.StarredChannels)))
+	}
+	if p.profile.StarredPeople != "" && p.profile.StarredPeople != "[]" {
+		sb.WriteString(fmt.Sprintf("\nSTARRED PEOPLE: %s — highlight decisions and actions by these people\n", sanitizePromptValue(p.profile.StarredPeople)))
+	}
+	if p.profile.Reports != "" && p.profile.Reports != "[]" {
+		sb.WriteString(fmt.Sprintf("\nMY REPORTS: %s — flag action items assigned to these people\n", sanitizePromptValue(p.profile.Reports)))
+	}
+
+	return sb.String()
 }
 
 func (p *Pipeline) languageInstruction() string {

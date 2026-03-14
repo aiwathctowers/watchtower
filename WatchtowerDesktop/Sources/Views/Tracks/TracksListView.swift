@@ -1,8 +1,8 @@
 import SwiftUI
 
-struct ActionItemsListView: View {
+struct TracksListView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: ActionItemsViewModel?
+    @State private var viewModel: TracksViewModel?
     @State private var selectedItemID: Int?
 
     var body: some View {
@@ -12,7 +12,7 @@ struct ActionItemsListView: View {
 
                 if let id = selectedItemID, let item = vm.itemByID(id) {
                     Divider()
-                    ActionItemDetailView(item: item, viewModel: vm, onClose: { selectedItemID = nil })
+                    TrackDetailView(item: item, viewModel: vm, onClose: { selectedItemID = nil })
                         .id(id)
                         .frame(minWidth: 400, idealWidth: 500)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -25,23 +25,33 @@ struct ActionItemsListView: View {
         .animation(.easeInOut(duration: 0.25), value: selectedItemID)
         .onAppear {
             if viewModel == nil, let db = appState.databaseManager {
-                viewModel = ActionItemsViewModel(dbManager: db)
+                viewModel = TracksViewModel(dbManager: db)
             }
             syncFilterAndLoad()
         }
-        .onChange(of: appState.actionStatusFilter) {
+        .onChange(of: appState.isDBAvailable) {
+            if viewModel == nil, let db = appState.databaseManager {
+                viewModel = TracksViewModel(dbManager: db)
+                syncFilterAndLoad()
+            }
+        }
+        .onChange(of: appState.trackStatusFilter) {
+            syncFilterAndLoad()
+        }
+        .onChange(of: appState.trackOwnershipFilter) {
             syncFilterAndLoad()
         }
     }
 
     private func syncFilterAndLoad() {
-        viewModel?.statusFilter = appState.actionStatusFilter
+        viewModel?.statusFilter = appState.trackStatusFilter
+        viewModel?.ownershipFilter = appState.trackOwnershipFilter
         viewModel?.load()
     }
 
     // MARK: - List Panel
 
-    private func listPanel(_ vm: ActionItemsViewModel) -> some View {
+    private func listPanel(_ vm: TracksViewModel) -> some View {
         VStack(spacing: 0) {
             // Toolbar
             HStack {
@@ -57,6 +67,15 @@ struct ActionItemsListView: View {
 
                 Spacer()
 
+                // Ownership filter
+                Picker("Ownership", selection: Bindable(vm).ownershipFilter) {
+                    Text("All").tag(String?.none)
+                    Label("Mine", systemImage: "person.fill").tag(String?.some("mine"))
+                    Label("Delegated", systemImage: "arrow.right.circle.fill").tag(String?.some("delegated"))
+                    Label("Watching", systemImage: "eye.fill").tag(String?.some("watching"))
+                }
+                .frame(maxWidth: 140)
+
                 // Priority filter
                 Picker("Priority", selection: Bindable(vm).priorityFilter) {
                     Text("All").tag(String?.none)
@@ -67,6 +86,10 @@ struct ActionItemsListView: View {
                 .frame(maxWidth: 140)
             }
             .padding()
+            .onChange(of: vm.ownershipFilter) {
+                appState.trackOwnershipFilter = vm.ownershipFilter
+                vm.load()
+            }
             .onChange(of: vm.priorityFilter) { vm.load() }
 
             Divider()
@@ -79,10 +102,10 @@ struct ActionItemsListView: View {
                     Image(systemName: "checkmark.circle")
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
-                    Text("No action items")
+                    Text("No tracks")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text("Action items are extracted from your Slack messages by AI")
+                    Text("Tracks are extracted from your Slack messages by AI")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -103,20 +126,20 @@ struct ActionItemsListView: View {
     }
 
     private var statusTitle: String {
-        switch appState.actionStatusFilter {
+        switch appState.trackStatusFilter {
         case nil: "Inbox"
         case "inbox": "Inbox"
         case "active": "Active"
         case "done": "Done"
         case "dismissed": "Dismissed"
         case "snoozed": "Snoozed"
-        case "all": "All Actions"
-        default: "Actions"
+        case "all": "All Tracks"
+        default: "Tracks"
         }
     }
 
-    private func itemRow(_ item: ActionItem, vm: ActionItemsViewModel) -> some View {
-        ActionItemRow(item: item, viewModel: vm)
+    private func itemRow(_ item: Track, vm: TracksViewModel) -> some View {
+        TrackRow(item: item, viewModel: vm)
             .contentShape(Rectangle())
             .onTapGesture { selectedItemID = item.id }
             .padding(.horizontal, 12)
@@ -143,9 +166,9 @@ struct ActionItemsListView: View {
     }
 }
 
-struct ActionItemRow: View {
-    let item: ActionItem
-    let viewModel: ActionItemsViewModel
+struct TrackRow: View {
+    let item: Track
+    let viewModel: TracksViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -155,6 +178,21 @@ struct ActionItemRow: View {
                     Image(systemName: "bell.badge.fill")
                         .foregroundStyle(.orange)
                         .font(.caption)
+                }
+                if item.isDelegated {
+                    Text("Delegated")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.indigo, in: Capsule())
+                } else if item.isWatching {
+                    Text("Watching")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.teal, in: Capsule())
                 }
                 if !item.sourceChannelName.isEmpty {
                     Text("#\(item.sourceChannelName)")

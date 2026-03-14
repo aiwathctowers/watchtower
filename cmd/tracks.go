@@ -6,14 +6,15 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
-	"watchtower/internal/actionitems"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	watchtowerslack "watchtower/internal/slack"
+	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
 
 	"github.com/dustin/go-humanize"
@@ -21,79 +22,102 @@ import (
 )
 
 var (
-	actionsFlagStatus          string
-	actionsFlagPriority        string
-	actionsFlagChannel         string
-	actionsGenFlagSince        int
-	actionsGenFlagProgressJSON bool
-	actionsSnoozeFlagUntil     string
-	actionsSnoozeFlagHours     int
+	tracksFlagStatus          string
+	tracksFlagPriority        string
+	tracksFlagChannel         string
+	tracksFlagOwnership       string
+	tracksGenFlagSince        int
+	tracksGenFlagProgressJSON bool
+	tracksSnoozeFlagUntil     string
+	tracksSnoozeFlagHours     int
 )
 
-var actionsCmd = &cobra.Command{
-	Use:   "actions",
-	Short: "Show action items assigned to you across all channels",
-	Long:  "Displays AI-extracted action items directed at the current Slack user. Items are generated automatically in daemon mode or manually via 'actions generate'.",
-	RunE:  runActions,
+var tracksCmd = &cobra.Command{
+	Use:   "tracks",
+	Short: "Show tracks assigned to you across all channels",
+	Long:  "Displays AI-extracted tracks directed at the current Slack user. Tracks are generated automatically in daemon mode or manually via 'tracks generate'.",
+	RunE:  runTracks,
 }
 
-var actionsGenerateCmd = &cobra.Command{
+var tracksGenerateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Extract action items from existing synced messages",
-	Long:  "Runs the action items pipeline on already-synced messages to find tasks directed at you.",
-	RunE:  runActionsGenerate,
+	Short: "Extract tracks from existing synced messages",
+	Long:  "Runs the tracks pipeline on already-synced messages to find tasks directed at you.",
+	RunE:  runTracksGenerate,
 }
 
-var actionsAcceptCmd = &cobra.Command{
+var tracksAcceptCmd = &cobra.Command{
 	Use:   "accept <id>",
 	Short: "Accept an inbox item — moves it to active",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runActionsAccept,
+	RunE:  runTracksAccept,
 }
 
-var actionsDoneCmd = &cobra.Command{
+var tracksDoneCmd = &cobra.Command{
 	Use:   "done <id>",
-	Short: "Mark an action item as done",
+	Short: "Mark a track as done",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runActionsStatusChange("done"),
+	RunE:  runTracksStatusChange("done"),
 }
 
-var actionsDismissCmd = &cobra.Command{
+var tracksDismissCmd = &cobra.Command{
 	Use:   "dismiss <id>",
-	Short: "Dismiss an action item",
+	Short: "Dismiss a track",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runActionsStatusChange("dismissed"),
+	RunE:  runTracksStatusChange("dismissed"),
 }
 
-var actionsSnoozCmd = &cobra.Command{
+var tracksSnoozeCmd = &cobra.Command{
 	Use:   "snooze <id>",
-	Short: "Snooze an action item until a specific time",
-	Long: `Snooze an action item. It will return to its previous status (inbox or active) when the time arrives.
+	Short: "Snooze a track until a specific time",
+	Long: `Snooze a track. It will return to its previous status (inbox or active) when the time arrives.
 
 Presets: --until tomorrow, --until next-week, --until monday
 Date:    --until 2026-03-15
 Hours:   --hours 4`,
 	Args: cobra.ExactArgs(1),
-	RunE: runActionsSnooze,
+	RunE: runTracksSnooze,
+}
+
+// actionsCmd is a hidden deprecated alias for tracksCmd.
+var actionsCmd = &cobra.Command{
+	Use:        "actions",
+	Short:      "Deprecated: use 'watchtower tracks' instead",
+	Hidden:     true,
+	Deprecated: "use 'watchtower tracks' instead",
+	RunE:       runTracks,
 }
 
 func init() {
+	rootCmd.AddCommand(tracksCmd)
 	rootCmd.AddCommand(actionsCmd)
-	actionsCmd.AddCommand(actionsGenerateCmd)
-	actionsCmd.AddCommand(actionsAcceptCmd)
-	actionsCmd.AddCommand(actionsDoneCmd)
-	actionsCmd.AddCommand(actionsDismissCmd)
-	actionsCmd.AddCommand(actionsSnoozCmd)
-	actionsCmd.Flags().StringVar(&actionsFlagStatus, "status", "", "filter by status (inbox, active, done, dismissed, snoozed, all)")
-	actionsCmd.Flags().StringVar(&actionsFlagPriority, "priority", "", "filter by priority (high, medium, low)")
-	actionsCmd.Flags().StringVar(&actionsFlagChannel, "channel", "", "filter by channel name")
-	actionsGenerateCmd.Flags().IntVar(&actionsGenFlagSince, "since", 1, "look back N days for messages")
-	actionsGenerateCmd.Flags().BoolVar(&actionsGenFlagProgressJSON, "progress-json", false, "output progress as JSON lines")
-	actionsSnoozCmd.Flags().StringVar(&actionsSnoozeFlagUntil, "until", "", "when to unsnooze (tomorrow, next-week, monday, or YYYY-MM-DD)")
-	actionsSnoozCmd.Flags().IntVar(&actionsSnoozeFlagHours, "hours", 0, "snooze for N hours")
+	tracksCmd.AddCommand(tracksGenerateCmd)
+	tracksCmd.AddCommand(tracksAcceptCmd)
+	tracksCmd.AddCommand(tracksDoneCmd)
+	tracksCmd.AddCommand(tracksDismissCmd)
+	tracksCmd.AddCommand(tracksSnoozeCmd)
+	// Register same subcommands under the deprecated alias.
+	actionsSnoozeCmd := &cobra.Command{Use: "snooze", Hidden: true, Deprecated: "use 'watchtower tracks snooze'", Args: cobra.ExactArgs(1), RunE: runTracksSnooze}
+	actionsSnoozeCmd.Flags().StringVar(&tracksSnoozeFlagUntil, "until", "", "when to unsnooze (tomorrow, next-week, monday, or YYYY-MM-DD)")
+	actionsSnoozeCmd.Flags().IntVar(&tracksSnoozeFlagHours, "hours", 0, "snooze for N hours")
+	actionsCmd.AddCommand(
+		&cobra.Command{Use: "generate", Hidden: true, Deprecated: "use 'watchtower tracks generate'", RunE: runTracksGenerate},
+		&cobra.Command{Use: "accept", Hidden: true, Deprecated: "use 'watchtower tracks accept'", Args: cobra.ExactArgs(1), RunE: runTracksAccept},
+		&cobra.Command{Use: "done", Hidden: true, Deprecated: "use 'watchtower tracks done'", Args: cobra.ExactArgs(1), RunE: runTracksStatusChange("done")},
+		&cobra.Command{Use: "dismiss", Hidden: true, Deprecated: "use 'watchtower tracks dismiss'", Args: cobra.ExactArgs(1), RunE: runTracksStatusChange("dismissed")},
+		actionsSnoozeCmd,
+	)
+	tracksCmd.Flags().StringVar(&tracksFlagStatus, "status", "", "filter by status (inbox, active, done, dismissed, snoozed, all)")
+	tracksCmd.Flags().StringVar(&tracksFlagPriority, "priority", "", "filter by priority (high, medium, low)")
+	tracksCmd.Flags().StringVar(&tracksFlagChannel, "channel", "", "filter by channel name")
+	tracksCmd.Flags().StringVar(&tracksFlagOwnership, "ownership", "", "filter by ownership (mine, delegated, watching)")
+	tracksGenerateCmd.Flags().IntVar(&tracksGenFlagSince, "since", 1, "look back N days for messages")
+	tracksGenerateCmd.Flags().BoolVar(&tracksGenFlagProgressJSON, "progress-json", false, "output progress as JSON lines")
+	tracksSnoozeCmd.Flags().StringVar(&tracksSnoozeFlagUntil, "until", "", "when to unsnooze (tomorrow, next-week, monday, or YYYY-MM-DD)")
+	tracksSnoozeCmd.Flags().IntVar(&tracksSnoozeFlagHours, "hours", 0, "snooze for N hours")
 }
 
-func runActions(cmd *cobra.Command, args []string) error {
+func runTracks(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(flagConfig)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -124,66 +148,73 @@ func runActions(cmd *cobra.Command, args []string) error {
 
 	// Validate flag values
 	validStatuses := map[string]bool{"inbox": true, "active": true, "done": true, "dismissed": true, "snoozed": true, "all": true, "": true}
-	if !validStatuses[actionsFlagStatus] {
-		return fmt.Errorf("invalid --status %q: must be one of inbox, active, done, dismissed, snoozed, all", actionsFlagStatus)
+	if !validStatuses[tracksFlagStatus] {
+		return fmt.Errorf("invalid --status %q: must be one of inbox, active, done, dismissed, snoozed, all", tracksFlagStatus)
 	}
 	validPriorities := map[string]bool{"high": true, "medium": true, "low": true, "": true}
-	if !validPriorities[actionsFlagPriority] {
-		return fmt.Errorf("invalid --priority %q: must be one of high, medium, low", actionsFlagPriority)
+	if !validPriorities[tracksFlagPriority] {
+		return fmt.Errorf("invalid --priority %q: must be one of high, medium, low", tracksFlagPriority)
+	}
+	validOwnerships := map[string]bool{"mine": true, "delegated": true, "watching": true, "": true}
+	if !validOwnerships[tracksFlagOwnership] {
+		return fmt.Errorf("invalid --ownership %q: must be one of mine, delegated, watching", tracksFlagOwnership)
 	}
 
-	if actionsFlagChannel != "" {
-		ch, err := database.GetChannelByName(actionsFlagChannel)
+	channelIDFilter := ""
+	if tracksFlagChannel != "" {
+		ch, err := database.GetChannelByName(tracksFlagChannel)
 		if err != nil {
 			return fmt.Errorf("looking up channel: %w", err)
 		}
 		if ch == nil {
-			return fmt.Errorf("channel #%s not found", actionsFlagChannel)
+			return fmt.Errorf("channel #%s not found", tracksFlagChannel)
 		}
-		actionsFlagChannel = ch.ID // reuse var for channel ID
+		channelIDFilter = ch.ID
 	}
 
 	// Default: show inbox + active. With --status flag: show that specific status.
-	var items []db.ActionItem
-	if actionsFlagStatus == "" {
+	var items []db.Track
+	if tracksFlagStatus == "" {
 		// Fetch inbox and active separately so we can group them.
 		for _, st := range []string{"inbox", "active"} {
-			f := db.ActionItemFilter{
+			f := db.TrackFilter{
 				AssigneeUserID: userID,
 				Status:         st,
-				Priority:       actionsFlagPriority,
-				ChannelID:      actionsFlagChannel,
+				Priority:       tracksFlagPriority,
+				ChannelID:      channelIDFilter,
+				Ownership:      tracksFlagOwnership,
 			}
-			batch, err := database.GetActionItems(f)
+			batch, err := database.GetTracks(f)
 			if err != nil {
-				return fmt.Errorf("querying action items: %w", err)
+				return fmt.Errorf("querying tracks: %w", err)
 			}
 			items = append(items, batch...)
 		}
 	} else {
-		f := db.ActionItemFilter{
+		f := db.TrackFilter{
 			AssigneeUserID: userID,
-			Priority:       actionsFlagPriority,
-			ChannelID:      actionsFlagChannel,
+			Priority:       tracksFlagPriority,
+			ChannelID:      channelIDFilter,
+			Ownership:      tracksFlagOwnership,
 		}
-		if actionsFlagStatus != "all" {
-			f.Status = actionsFlagStatus
+		if tracksFlagStatus != "all" {
+			f.Status = tracksFlagStatus
 		}
 		var err error
-		items, err = database.GetActionItems(f)
+		items, err = database.GetTracks(f)
 		if err != nil {
-			return fmt.Errorf("querying action items: %w", err)
+			return fmt.Errorf("querying tracks: %w", err)
 		}
 	}
 
 	if len(items) == 0 {
-		fmt.Fprintln(out, "No action items found. Run 'watchtower actions generate' to extract them from synced messages.")
+		fmt.Fprintln(out, "No tracks found. Run 'watchtower tracks generate' to extract them from synced messages.")
 		return nil
 	}
 
 	var buf strings.Builder
 	// Split into inbox and active for grouped display
-	var inbox, active, other []db.ActionItem
+	var inbox, active, other []db.Track
 	for _, item := range items {
 		switch item.Status {
 		case "inbox":
@@ -197,22 +228,22 @@ func runActions(cmd *cobra.Command, args []string) error {
 
 	if len(inbox) > 0 {
 		fmt.Fprintf(&buf, "## Inbox (%d)\n\n", len(inbox))
-		printActionItems(&buf, inbox, database)
+		printTracks(&buf, inbox, database)
 	}
 	if len(active) > 0 {
 		fmt.Fprintf(&buf, "## Active (%d)\n\n", len(active))
-		printActionItems(&buf, active, database)
+		printTracks(&buf, active, database)
 	}
 	if len(other) > 0 {
 		fmt.Fprintf(&buf, "## Other (%d)\n\n", len(other))
-		printActionItems(&buf, other, database)
+		printTracks(&buf, other, database)
 	}
 
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
 	return nil
 }
 
-func printActionItems(w io.Writer, items []db.ActionItem, database *db.DB) {
+func printTracks(w io.Writer, items []db.Track, database *db.DB) {
 	priorityIcon := map[string]string{
 		"high":   "🔴",
 		"medium": "🟡",
@@ -230,6 +261,21 @@ func printActionItems(w io.Writer, items []db.ActionItem, database *db.DB) {
 		"discussion":      "discuss",
 	}
 
+	// Pre-fetch channel names to avoid N+1 queries.
+	channelNameMap := make(map[string]string)
+	for _, item := range items {
+		if item.SourceChannelName == "" && item.ChannelID != "" {
+			channelNameMap[item.ChannelID] = "" // mark for lookup
+		}
+	}
+	if len(channelNameMap) > 0 {
+		for chID := range channelNameMap {
+			if ch, err := database.GetChannelByID(chID); err == nil && ch != nil {
+				channelNameMap[chID] = ch.Name
+			}
+		}
+	}
+
 	for _, item := range items {
 		icon := priorityIcon[item.Priority]
 		if icon == "" {
@@ -243,9 +289,7 @@ func printActionItems(w io.Writer, items []db.ActionItem, database *db.DB) {
 
 		channelName := item.SourceChannelName
 		if channelName == "" && item.ChannelID != "" {
-			if ch, err := database.GetChannelByID(item.ChannelID); err == nil && ch != nil {
-				channelName = ch.Name
-			}
+			channelName = channelNameMap[item.ChannelID]
 		}
 
 		status := ""
@@ -258,7 +302,14 @@ func printActionItems(w io.Writer, items []db.ActionItem, database *db.DB) {
 			catBadge = fmt.Sprintf(" `%s`", label)
 		}
 
-		fmt.Fprintf(w, "%s #%d **%s**%s%s%s\n", icon, item.ID, item.Text, catBadge, status, updateBadge)
+		ownershipBadge := ""
+		if item.Ownership == "delegated" {
+			ownershipBadge = " 📋"
+		} else if item.Ownership == "watching" {
+			ownershipBadge = " 👁"
+		}
+
+		fmt.Fprintf(w, "%s #%d **%s**%s%s%s%s\n", icon, item.ID, item.Text, catBadge, ownershipBadge, status, updateBadge)
 
 		// Meta line: channel, requester, tags
 		var meta []string
@@ -305,75 +356,107 @@ func printActionItems(w io.Writer, items []db.ActionItem, database *db.DB) {
 	}
 }
 
-func runActionsStatusChange(newStatus string) func(cmd *cobra.Command, args []string) error {
+func runTracksStatusChange(newStatus string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		id, err := parseActionItemID(args[0])
+		id, err := parseTrackID(args[0])
 		if err != nil {
 			return err
 		}
 
-		database, err := openActionItemsDB()
+		database, err := openTracksDB()
 		if err != nil {
 			return err
 		}
 		defer database.Close()
 
-		if err := database.UpdateActionItemStatus(id, newStatus); err != nil {
+		if err := verifyTrackOwnership(database, id); err != nil {
 			return err
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Action item #%d marked as %s\n", id, newStatus)
+		if err := database.UpdateTrackStatus(id, newStatus); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Track #%d marked as %s\n", id, newStatus)
 		return nil
 	}
 }
 
-func runActionsAccept(cmd *cobra.Command, args []string) error {
-	id, err := parseActionItemID(args[0])
+func runTracksAccept(cmd *cobra.Command, args []string) error {
+	id, err := parseTrackID(args[0])
 	if err != nil {
 		return err
 	}
 
-	database, err := openActionItemsDB()
+	database, err := openTracksDB()
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 
-	if err := database.AcceptActionItem(id); err != nil {
+	if err := verifyTrackOwnership(database, id); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Action item #%d accepted (inbox → active)\n", id)
+	if err := database.AcceptTrack(id); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Track #%d accepted (inbox → active)\n", id)
 	return nil
 }
 
-func runActionsSnooze(cmd *cobra.Command, args []string) error {
-	id, err := parseActionItemID(args[0])
+func runTracksSnooze(cmd *cobra.Command, args []string) error {
+	id, err := parseTrackID(args[0])
 	if err != nil {
 		return err
 	}
 
-	until, err := parseSnoozeUntil(actionsSnoozeFlagUntil, actionsSnoozeFlagHours)
+	until, err := parseSnoozeUntil(tracksSnoozeFlagUntil, tracksSnoozeFlagHours)
 	if err != nil {
 		return err
 	}
 
-	database, err := openActionItemsDB()
+	database, err := openTracksDB()
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 
-	if err := database.SnoozeActionItem(id, float64(until.Unix())); err != nil {
+	if err := verifyTrackOwnership(database, id); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Action item #%d snoozed until %s\n", id, until.Format("2006-01-02 15:04"))
+	if err := database.SnoozeTrack(id, float64(until.Unix())); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Track #%d snoozed until %s\n", id, until.Format("2006-01-02 15:04"))
+	return nil
+}
+
+// verifyTrackOwnership checks that the track belongs to the current user.
+func verifyTrackOwnership(database *db.DB, trackID int) error {
+	currentUserID, err := database.GetCurrentUserID()
+	if err != nil {
+		return fmt.Errorf("getting current user: %w", err)
+	}
+	assignee, err := database.GetTrackAssignee(trackID)
+	if err != nil {
+		return fmt.Errorf("track #%d not found: %w", trackID, err)
+	}
+	if currentUserID != "" && assignee != currentUserID {
+		return fmt.Errorf("track #%d belongs to a different user", trackID)
+	}
 	return nil
 }
 
 // parseSnoozeUntil parses --until and --hours flags into a concrete time.
 func parseSnoozeUntil(until string, hours int) (time.Time, error) {
+	if hours > 0 && until != "" {
+		return time.Time{}, fmt.Errorf("specify either --until or --hours, not both")
+	}
+
 	now := time.Now()
 
 	if hours > 0 {
@@ -389,7 +472,7 @@ func parseSnoozeUntil(until string, hours int) (time.Time, error) {
 		t := now.AddDate(0, 0, 1)
 		return time.Date(t.Year(), t.Month(), t.Day(), 9, 0, 0, 0, t.Location()), nil
 	case "next-week":
-		daysUntilMonday := (8 - int(now.Weekday())) % 7
+		daysUntilMonday := (int(time.Monday) - int(now.Weekday()) + 7) % 7
 		if daysUntilMonday == 0 {
 			daysUntilMonday = 7
 		}
@@ -410,7 +493,11 @@ func parseSnoozeUntil(until string, hours int) (time.Time, error) {
 		if err != nil {
 			return time.Time{}, fmt.Errorf("invalid --until value %q: use tomorrow, next-week, a weekday name, or YYYY-MM-DD", until)
 		}
-		return time.Date(t.Year(), t.Month(), t.Day(), 9, 0, 0, 0, t.Location()), nil
+		snooze := time.Date(t.Year(), t.Month(), t.Day(), 9, 0, 0, 0, t.Location())
+		if !snooze.After(now) {
+			return time.Time{}, fmt.Errorf("snooze date %s is in the past", until)
+		}
+		return snooze, nil
 	}
 }
 
@@ -434,15 +521,18 @@ func dayOfWeek(name string) time.Weekday {
 	return time.Monday // fallback
 }
 
-func parseActionItemID(s string) (int, error) {
-	var id int
-	if _, err := fmt.Sscan(s, &id); err != nil {
-		return 0, fmt.Errorf("invalid action item ID %q: %w", s, err)
+func parseTrackID(s string) (int, error) {
+	id, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid track ID %q: %w", s, err)
+	}
+	if id <= 0 {
+		return 0, fmt.Errorf("track ID must be a positive integer, got %d", id)
 	}
 	return id, nil
 }
 
-func openActionItemsDB() (*db.DB, error) {
+func openTracksDB() (*db.DB, error) {
 	cfg, err := config.Load(flagConfig)
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
@@ -456,7 +546,7 @@ func openActionItemsDB() (*db.DB, error) {
 	return db.Open(cfg.DBPath())
 }
 
-func runActionsGenerate(cmd *cobra.Command, args []string) error {
+func runTracksGenerate(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(flagConfig)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -487,8 +577,11 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	days := actionsGenFlagSince
-	if days <= 0 {
+	days := tracksGenFlagSince
+	if days < 0 {
+		return fmt.Errorf("--since must be a positive number of days, got %d", days)
+	}
+	if days == 0 {
 		days = 1
 	}
 
@@ -498,7 +591,7 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
-	pipe := actionitems.New(database, cfg, gen, logger)
+	pipe := tracks.New(database, cfg, gen, logger)
 
 	if days > 3650 {
 		days = 3650 // clamp to prevent time.Duration overflow
@@ -508,7 +601,7 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 	to := float64(now.Unix())
 	from := float64(now.Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
-	if actionsGenFlagProgressJSON {
+	if tracksGenFlagProgressJSON {
 		type pj struct {
 			Pipeline     string  `json:"pipeline"`
 			Done         int     `json:"done"`
@@ -524,11 +617,11 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
 
 		pipe.OnProgress = func(done, total int, status string) {
-			emit(pj{Pipeline: "actions", Done: done, Total: total, Status: status})
+			emit(pj{Pipeline: "tracks", Done: done, Total: total, Status: status})
 		}
 		n, err := pipe.RunForWindow(cmd.Context(), userID, from, to)
 		inTok, outTok, cost := pipe.AccumulatedUsage()
-		final := pj{Pipeline: "actions", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost}
+		final := pj{Pipeline: "tracks", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost}
 		if err != nil {
 			final.Error = err.Error()
 		}
@@ -536,7 +629,7 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	spinner := ui.NewSpinner(out, fmt.Sprintf("Extracting action items for the last %d day(s) using %s...", days, cfg.Digest.Model))
+	spinner := ui.NewSpinner(out, fmt.Sprintf("Extracting tracks for the last %d day(s) using %s...", days, cfg.Digest.Model))
 	pipe.OnProgress = func(done, total int, status string) {
 		spinner.UpdateProgress(done, total, status)
 	}
@@ -544,13 +637,13 @@ func runActionsGenerate(cmd *cobra.Command, args []string) error {
 	n, err := pipe.RunForWindow(cmd.Context(), userID, from, to)
 	if err != nil {
 		spinner.Stop("failed")
-		return fmt.Errorf("action items pipeline: %w", err)
+		return fmt.Errorf("tracks pipeline: %w", err)
 	}
 
 	if n == 0 {
-		spinner.Stop("No action items found")
+		spinner.Stop("No tracks found")
 	} else {
-		spinner.Stop(fmt.Sprintf("Found %d action item(s). Run 'watchtower actions' to view them.", n))
+		spinner.Stop(fmt.Sprintf("Found %d track(s). Run 'watchtower tracks' to view them.", n))
 	}
 
 	return nil
@@ -576,7 +669,9 @@ func resolveCurrentUser(cmd *cobra.Command, cfg *config.Config, database *db.DB)
 	if err != nil {
 		return "", fmt.Errorf("identifying current user (auth.test): %w", err)
 	}
-	// Cache for future use
-	_ = database.SetCurrentUserID(authResp.UserID)
+	// Cache for future use.
+	if err := database.SetCurrentUserID(authResp.UserID); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not cache current user ID: %v\n", err)
+	}
 	return authResp.UserID, nil
 }

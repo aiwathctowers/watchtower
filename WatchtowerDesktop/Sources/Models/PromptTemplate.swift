@@ -2,7 +2,7 @@ import GRDB
 import Foundation
 
 struct PromptTemplate: FetchableRecord, Decodable, Identifiable, Equatable {
-    let id: String    // "digest.channel", "actionitems.extract", etc.
+    let id: String    // "digest.channel", "tracks.extract", etc.
     let template: String
     let version: Int
     let language: String

@@ -20,7 +20,7 @@ func messageMux(channelMessages map[string][]map[string]any) *http.ServeMux {
 	mux := baseMux()
 
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		channelID := r.Form.Get("channel")
 		cursor := r.Form.Get("cursor")
 
@@ -184,7 +184,7 @@ func TestSyncMessagesIncrementalSync(t *testing.T) {
 
 	mux := baseMux()
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		callCount.Add(1)
 		channelID := r.Form.Get("channel")
 
@@ -321,7 +321,7 @@ func TestSyncMessagesWithThreadTS(t *testing.T) {
 func TestSyncMessagesNonFatalErrorSkipsChannel(t *testing.T) {
 	mux := baseMux()
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		channelID := r.Form.Get("channel")
 		w.Header().Set("Content-Type", "application/json")
 
@@ -677,7 +677,7 @@ func TestSyncMessagesCursorResume(t *testing.T) {
 
 	mux := baseMux()
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		cursor := r.Form.Get("cursor")
 		requestedCursors = append(requestedCursors, cursor)
 

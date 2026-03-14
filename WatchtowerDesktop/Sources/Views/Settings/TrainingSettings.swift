@@ -326,8 +326,8 @@ struct TrainingSettings: View {
             "digest.daily": "Daily Rollup",
             "digest.weekly": "Weekly Summary",
             "digest.period": "Period Summary",
-            "actionitems.extract": "Action Items Extract",
-            "actionitems.update": "Action Items Update",
+            "tracks.extract": "Tracks Extract",
+            "tracks.update": "Tracks Update",
             "analysis.user": "User Analysis",
             "analysis.period": "Period Analysis",
         ]
@@ -337,7 +337,7 @@ struct TrainingSettings: View {
     private func feedbackTypeLabel(_ type: String) -> String {
         switch type {
         case "digest": return "Digests"
-        case "action_item": return "Actions"
+        case "track": return "Tracks"
         case "decision": return "Decisions"
         default: return type.capitalized
         }

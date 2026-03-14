@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 19"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 21"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -830,8 +830,106 @@ func (db *DB) migrate() error {
 		version = 19
 	}
 
+	if version < 20 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v20 tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS user_profile (
+			id                    INTEGER PRIMARY KEY,
+			slack_user_id         TEXT NOT NULL UNIQUE,
+			role                  TEXT NOT NULL DEFAULT '',
+			team                  TEXT NOT NULL DEFAULT '',
+			responsibilities      TEXT NOT NULL DEFAULT '[]',
+			reports               TEXT NOT NULL DEFAULT '[]',
+			peers                 TEXT NOT NULL DEFAULT '[]',
+			manager               TEXT NOT NULL DEFAULT '',
+			starred_channels      TEXT NOT NULL DEFAULT '[]',
+			starred_people        TEXT NOT NULL DEFAULT '[]',
+			pain_points           TEXT NOT NULL DEFAULT '[]',
+			track_focus           TEXT NOT NULL DEFAULT '[]',
+			onboarding_done       INTEGER NOT NULL DEFAULT 0,
+			custom_prompt_context TEXT NOT NULL DEFAULT '',
+			created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v20 create user_profile: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 20"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v20: %w", err)
+		}
+		version = 20
+	}
+
+	if version < 21 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v21 tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Check if ownership column already exists (fresh install from schema.sql).
+		hasOwnership := hasColumn(tx, "tracks", "ownership")
+
+		if !hasOwnership {
+			for _, stmt := range []string{
+				`ALTER TABLE tracks ADD COLUMN ownership TEXT NOT NULL DEFAULT 'mine' CHECK(ownership IN ('mine', 'delegated', 'watching'))`,
+				`ALTER TABLE tracks ADD COLUMN ball_on TEXT NOT NULL DEFAULT ''`,
+				`ALTER TABLE tracks ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''`,
+			} {
+				if _, err := tx.Exec(stmt); err != nil {
+					return fmt.Errorf("migration v21 alter tracks: %w", err)
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 21"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v21: %w", err)
+		}
+		version = 21
+	}
+
 	_ = version // silence unused variable if this is the last migration
 	return nil
+}
+
+// hasColumn checks whether a table has a specific column via PRAGMA table_info.
+// table must be a valid identifier (alphanumeric + underscore only).
+func hasColumn(querier interface {
+	Query(string, ...any) (*sql.Rows, error)
+}, table, column string) bool {
+	// Validate table name to prevent SQL injection — PRAGMA doesn't support parameterized table names.
+	for _, r := range table {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	rows, err := querier.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err == nil {
+			if name == column {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // UserVersion returns the current schema version.

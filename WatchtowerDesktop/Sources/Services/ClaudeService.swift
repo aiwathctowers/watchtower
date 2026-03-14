@@ -215,9 +215,9 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
     }
 }
 
-// MARK: - Action Item Generation from Digest
+// MARK: - Track Generation from Digest
 
-struct GeneratedActionItem: Decodable {
+struct GeneratedTrack: Decodable {
     let text: String
     let context: String
     let priority: String
@@ -281,13 +281,13 @@ struct GeneratedSubItem: Codable {
 }
 
 extension ClaudeService {
-    /// Generate a structured action item from a digest using Claude CLI.
-    /// Returns the parsed action item and the raw response for token tracking.
-    func generateActionItem(from digest: Digest, userNote: String?, channelName: String?) async throws -> GeneratedActionItem {
+    /// Generate a structured track from a digest using Claude CLI.
+    /// Returns the parsed track and the raw response for token tracking.
+    func generateTrack(from digest: Digest, userNote: String?, channelName: String?) async throws -> GeneratedTrack {
         let digestInfo = buildDigestPrompt(digest, channelName: channelName, userNote: userNote)
 
         var fullText = ""
-        for try await event in stream(prompt: digestInfo, systemPrompt: actionItemFromDigestSystemPrompt, sessionID: nil, dbPath: nil) {
+        for try await event in stream(prompt: digestInfo, systemPrompt: trackFromDigestSystemPrompt, sessionID: nil, dbPath: nil) {
             switch event {
             case .text(let delta):
                 fullText += delta
@@ -305,7 +305,7 @@ extension ClaudeService {
         guard let data = jsonString.data(using: .utf8) else {
             throw ClaudeError.exitCode(-1, "Empty response from Claude")
         }
-        return try JSONDecoder().decode(GeneratedActionItem.self, from: data)
+        return try JSONDecoder().decode(GeneratedTrack.self, from: data)
     }
 
     /// H7 fix: sanitize AI-generated and user-controlled values before embedding in prompts.
@@ -324,7 +324,7 @@ extension ClaudeService {
 
     private func buildDigestPrompt(_ digest: Digest, channelName: String?, userNote: String?) -> String {
         var parts: [String] = []
-        parts.append("Create an action item from the following digest.")
+        parts.append("Create a track from the following digest.")
         if let note = userNote, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             parts.append("\nUser's instructions: \(sanitizePromptValue(note))")
         }
@@ -341,8 +341,8 @@ extension ClaudeService {
         if !digest.decisions.isEmpty && digest.decisions != "[]" {
             parts.append("Decisions: \(sanitizePromptValue(digest.decisions))")
         }
-        if !digest.actionItems.isEmpty && digest.actionItems != "[]" {
-            parts.append("Action Items mentioned in digest: \(sanitizePromptValue(digest.actionItems))")
+        if !digest.tracksJSON.isEmpty && digest.tracksJSON != "[]" {
+            parts.append("Tracks mentioned in digest: \(sanitizePromptValue(digest.tracksJSON))")
         }
         return parts.joined(separator: "\n")
     }
@@ -362,15 +362,15 @@ extension ClaudeService {
         return s
     }
 
-    private var actionItemFromDigestSystemPrompt: String {
+    private var trackFromDigestSystemPrompt: String {
         """
-        You are an assistant that creates structured action items from Slack workspace digests.
+        You are an assistant that creates structured tracks from Slack workspace digests.
 
-        The user will provide a digest (summary, topics, decisions, existing action items) and optionally their own instructions.
+        The user will provide a digest (summary, topics, decisions, existing tracks) and optionally their own instructions.
 
-        Your task: analyze the digest and create ONE comprehensive, high-quality action item that captures the most important actionable work from this digest.
+        Your task: analyze the digest and create ONE comprehensive, high-quality track that captures the most important actionable work from this digest.
 
-        If the user provides instructions, follow them to focus the action item on what they need.
+        If the user provides instructions, follow them to focus the track on what they need.
 
         Return ONLY a JSON object (no markdown fences, no explanation):
 

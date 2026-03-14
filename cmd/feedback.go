@@ -14,15 +14,15 @@ var feedbackFlagComment string
 
 var feedbackCmd = &cobra.Command{
 	Use:   "feedback <good|bad> <type> <id>",
-	Short: "Rate AI-generated content (digests, actions, decisions)",
+	Short: "Rate AI-generated content (digests, tracks, decisions)",
 	Long: `Provide feedback on AI-generated content to improve prompt quality.
 
-Types: digest, action_item, decision
+Types: digest, track, decision
 Rating: good (+1) or bad (-1)
 
 Examples:
   watchtower feedback good digest 42
-  watchtower feedback bad action_item 7
+  watchtower feedback bad track 7
   watchtower feedback bad decision 42:0 -m "not a real decision"`,
 	Args: cobra.ExactArgs(3),
 	RunE: runFeedback,
@@ -55,9 +55,9 @@ func runFeedback(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid rating %q — use 'good' or 'bad'", ratingStr)
 	}
 
-	validTypes := map[string]bool{"digest": true, "action_item": true, "decision": true}
+	validTypes := map[string]bool{"digest": true, "track": true, "decision": true, "user_analysis": true}
 	if !validTypes[entityType] {
-		return fmt.Errorf("invalid type %q — use digest, action_item, or decision", entityType)
+		return fmt.Errorf("invalid type %q — use digest, track, decision, or user_analysis", entityType)
 	}
 
 	cfg, err := config.Load(flagConfig)

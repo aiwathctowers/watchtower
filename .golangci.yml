@@ -49,13 +49,10 @@ linters:
         - (*database/sql.Stmt).Close
         - (*net/http.Server).Close
         - (net.Listener).Close
-        - os.Setenv
-        - os.Remove
-        - (*bytes.Buffer).WriteString
-        - (*net/http.Request).ParseForm
         - (*encoding/json.Encoder).Encode
         - (net/http.ResponseWriter).Write
         - (*watchtower/internal/db.DB).RemoveWatch
+        - os.Remove
 
     exhaustive:
       default-signifies-exhaustive: true
@@ -68,7 +65,7 @@ linters:
         - G301 # directory permissions > 0750 — expected for user dirs
         - G302 # file permissions > 0600 — expected for lock files
         - G304 # file path from variable — expected in CLI tools
-        - G306 # WriteFile permissions — test files only
+        - G306 # WriteFile permissions — test scripts must be executable
         - G101 # hardcoded credentials — test tokens only
         - G120 # form parsing without limits — test servers only
         - G702 # command injection via taint — CLI tool builds commands from config

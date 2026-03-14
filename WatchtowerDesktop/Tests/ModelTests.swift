@@ -62,19 +62,19 @@ final class ModelTests: XCTestCase {
         XCTAssertNil(d.importance)
     }
 
-    // MARK: - DigestActionItem (inline JSON from digest)
+    // MARK: - DigestTrack (inline JSON from digest)
 
-    func testDigestActionItemJSONDecoding() throws {
+    func testDigestTrackJSONDecoding() throws {
         let json = #"{"text":"Write tests","assignee":"Bob","status":"pending"}"#
-        let a = try JSONDecoder().decode(DigestActionItem.self, from: json.data(using: .utf8)!)
+        let a = try JSONDecoder().decode(DigestTrack.self, from: json.data(using: .utf8)!)
         XCTAssertEqual(a.text, "Write tests")
         XCTAssertEqual(a.assignee, "Bob")
         XCTAssertEqual(a.status, "pending")
     }
 
-    func testDigestActionItemMinimal() throws {
+    func testDigestTrackMinimal() throws {
         let json = #"{"text":"TBD"}"#
-        let a = try JSONDecoder().decode(DigestActionItem.self, from: json.data(using: .utf8)!)
+        let a = try JSONDecoder().decode(DigestTrack.self, from: json.data(using: .utf8)!)
         XCTAssertEqual(a.text, "TBD")
         XCTAssertNil(a.assignee)
     }
@@ -124,14 +124,14 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(digest.parsedTopics, ["API design", "Testing"])
     }
 
-    func testDigestParsedActionItems() throws {
+    func testDigestParsedTracks() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try TestDatabase.insertDigest(db, actionItems: #"[{"text":"Write docs","assignee":"Bob"}]"#)
+            try TestDatabase.insertDigest(db, tracksJSON: #"[{"text":"Write docs","assignee":"Bob"}]"#)
         }
         let digest = try db.read { try DigestQueries.fetchAll($0).first! }
-        XCTAssertEqual(digest.parsedActionItems.count, 1)
-        XCTAssertEqual(digest.parsedActionItems[0].text, "Write docs")
+        XCTAssertEqual(digest.parsedTracks.count, 1)
+        XCTAssertEqual(digest.parsedTracks[0].text, "Write docs")
     }
 
     // MARK: - UserAnalysis
@@ -236,6 +236,59 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(channel.type, "public")
         XCTAssertTrue(channel.isMember)
         XCTAssertEqual(channel.numMembers, 42)
+    }
+
+    // MARK: - UserProfile
+
+    func testUserProfileFromDB() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(
+                db,
+                slackUserID: "U123",
+                role: "EM",
+                team: "Platform",
+                reports: #"["U1","U2"]"#,
+                manager: "U000"
+            )
+        }
+        let profile = try db.read { db in
+            try UserProfile.fetchOne(db, sql: "SELECT * FROM user_profile LIMIT 1")!
+        }
+        XCTAssertEqual(profile.slackUserID, "U123")
+        XCTAssertEqual(profile.role, "EM")
+        XCTAssertEqual(profile.team, "Platform")
+        XCTAssertEqual(profile.decodedReports, ["U1", "U2"])
+        XCTAssertEqual(profile.manager, "U000")
+    }
+
+    func testUserProfileDefaults() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U_MIN")
+        }
+        let p = try db.read { db in
+            try UserProfile.fetchOne(db, sql: "SELECT * FROM user_profile LIMIT 1")!
+        }
+        XCTAssertEqual(p.role, "")
+        XCTAssertEqual(p.decodedReports, [])
+        XCTAssertEqual(p.decodedPeers, [])
+        XCTAssertEqual(p.decodedStarredChannels, [])
+        XCTAssertFalse(p.onboardingDone)
+    }
+
+    func testUserProfileInitWithValues() {
+        let p = UserProfile(
+            slackUserID: "U123",
+            role: "IC",
+            reports: #"["U1"]"#,
+            starredChannels: #"["C1","C2"]"#
+        )
+        XCTAssertEqual(p.slackUserID, "U123")
+        XCTAssertEqual(p.role, "IC")
+        XCTAssertEqual(p.decodedReports, ["U1"])
+        XCTAssertEqual(p.decodedStarredChannels, ["C1", "C2"])
+        XCTAssertEqual(p.decodedPeers, [])
     }
 
     // MARK: - Helpers

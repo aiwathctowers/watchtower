@@ -124,6 +124,108 @@ final class DatabaseManager: Sendable {
             && name.unicodeScalars.allSatisfy { allowed.contains($0) }
             && !name.hasPrefix(".")
     }
+
+    // MARK: - Starred Items Management
+
+    /// Add a channel to the user's starred channels list
+    func addStarredChannel(_ channelID: String, for userID: String) throws {
+        try dbPool.write { db in
+            let result: String? = try String.fetchOne(db, sql: "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+
+            var channels: [String] = []
+            if let json = result, !json.isEmpty {
+                if let data = json.data(using: .utf8) {
+                    channels = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+                }
+            }
+
+            if !channels.contains(channelID) {
+                channels.append(channelID)
+            }
+
+            let json = try JSONEncoder().encode(channels)
+            let jsonStr = String(data: json, encoding: .utf8) ?? "[]"
+
+            try db.execute(
+                sql: "UPDATE user_profile SET starred_channels = ?, updated_at = ? WHERE slack_user_id = ?",
+                arguments: [jsonStr, ISO8601DateFormatter().string(from: Date()), userID]
+            )
+        }
+    }
+
+    /// Remove a channel from the user's starred channels list
+    func removeStarredChannel(_ channelID: String, for userID: String) throws {
+        try dbPool.write { db in
+            let result: String? = try String.fetchOne(db, sql: "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+
+            var channels: [String] = []
+            if let json = result, !json.isEmpty {
+                if let data = json.data(using: .utf8) {
+                    channels = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+                }
+            }
+
+            channels.removeAll { $0 == channelID }
+
+            let json = try JSONEncoder().encode(channels)
+            let jsonStr = String(data: json, encoding: .utf8) ?? "[]"
+
+            try db.execute(
+                sql: "UPDATE user_profile SET starred_channels = ?, updated_at = ? WHERE slack_user_id = ?",
+                arguments: [jsonStr, ISO8601DateFormatter().string(from: Date()), userID]
+            )
+        }
+    }
+
+    /// Add a person to the user's starred people list
+    func addStarredPerson(_ personUserID: String, for userID: String) throws {
+        try dbPool.write { db in
+            let result: String? = try String.fetchOne(db, sql: "SELECT starred_people FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+
+            var people: [String] = []
+            if let json = result, !json.isEmpty {
+                if let data = json.data(using: .utf8) {
+                    people = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+                }
+            }
+
+            if !people.contains(personUserID) {
+                people.append(personUserID)
+            }
+
+            let json = try JSONEncoder().encode(people)
+            let jsonStr = String(data: json, encoding: .utf8) ?? "[]"
+
+            try db.execute(
+                sql: "UPDATE user_profile SET starred_people = ?, updated_at = ? WHERE slack_user_id = ?",
+                arguments: [jsonStr, ISO8601DateFormatter().string(from: Date()), userID]
+            )
+        }
+    }
+
+    /// Remove a person from the user's starred people list
+    func removeStarredPerson(_ personUserID: String, for userID: String) throws {
+        try dbPool.write { db in
+            let result: String? = try String.fetchOne(db, sql: "SELECT starred_people FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+
+            var people: [String] = []
+            if let json = result, !json.isEmpty {
+                if let data = json.data(using: .utf8) {
+                    people = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+                }
+            }
+
+            people.removeAll { $0 == personUserID }
+
+            let json = try JSONEncoder().encode(people)
+            let jsonStr = String(data: json, encoding: .utf8) ?? "[]"
+
+            try db.execute(
+                sql: "UPDATE user_profile SET starred_people = ?, updated_at = ? WHERE slack_user_id = ?",
+                arguments: [jsonStr, ISO8601DateFormatter().string(from: Date()), userID]
+            )
+        }
+    }
 }
 
 enum WatchtowerDatabaseError: LocalizedError {

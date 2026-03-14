@@ -360,4 +360,34 @@ final class DigestViewModel {
         let tsForURL = "p" + messageTS.replacingOccurrences(of: ".", with: "")
         return URL(string: "https://\(domain).slack.com/archives/\(channelID)/\(tsForURL)")
     }
+
+    // MARK: - Starred Channels Management
+
+    /// Toggle a channel's starred status
+    func toggleStarredChannel(_ channelID: String, for userID: String) {
+        Task {
+            do {
+                // Check if already starred
+                let isStarred = try await dbManager.dbPool.read { db in
+                    let profile = try ProfileQueries.fetchProfile(db, slackUserID: userID)
+                    return profile?.decodedStarredChannels.contains(channelID) ?? false
+                }
+
+                if isStarred {
+                    try dbManager.removeStarredChannel(channelID, for: userID)
+                } else {
+                    try dbManager.addStarredChannel(channelID, for: userID)
+                }
+            } catch {
+                errorMessage = "Failed to update starred channel: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Check if a channel is starred
+    func isChannelStarred(_ channelID: String, for userID: String) -> Bool {
+        // This would need profile to be loaded in this view model
+        // For now, return false as a placeholder
+        return false
+    }
 }

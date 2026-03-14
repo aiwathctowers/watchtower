@@ -387,3 +387,87 @@ func TestStoreDigest(t *testing.T) {
 	assert.Len(t, decisions, 1)
 	assert.Equal(t, "decided X", decisions[0].Text)
 }
+
+// capturingGenerator captures the prompt passed to Generate for inspection.
+type capturingGenerator struct {
+	response       string
+	capturedPrompt string
+	calls          int
+}
+
+func (m *capturingGenerator) Generate(_ context.Context, _, prompt string) (string, *Usage, error) {
+	m.capturedPrompt = prompt
+	m.calls++
+	return m.response, &Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, nil
+}
+
+func TestProfileContextInjectedIntoDigestPrompt(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	// Insert enough messages.
+	for i := 0; i < 6; i++ {
+		ts := fmt.Sprintf("%d.000000", 1000000000+i*10)
+		require.NoError(t, database.UpsertMessage(db.Message{
+			ChannelID: "C1", TS: ts, UserID: "U001",
+			Text: fmt.Sprintf("test message %d", i),
+		}))
+	}
+
+	// Create profile with custom context.
+	require.NoError(t, database.UpsertUserProfile(db.UserProfile{
+		SlackUserID:         "U001",
+		CustomPromptContext: "You are helping a Platform EM. Reports: alice, bob.",
+		Reports:             `["U002"]`,
+		StarredChannels:     `["C1"]`,
+		StarredPeople:       `["U010"]`,
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"summary":"test","topics":[],"decisions":[],"action_items":[],"key_messages":[]}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	pipe.SinceOverride = 999999990
+	_, _, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+
+	// Profile context should appear in the channel digest prompt.
+	assert.Contains(t, gen.capturedPrompt, "USER PROFILE CONTEXT")
+	assert.Contains(t, gen.capturedPrompt, "Platform EM")
+	assert.Contains(t, gen.capturedPrompt, "STARRED CHANNELS")
+	assert.Contains(t, gen.capturedPrompt, "MY REPORTS")
+}
+
+func TestNoProfileContextWhenProfileEmpty(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	for i := 0; i < 6; i++ {
+		ts := fmt.Sprintf("%d.000000", 1000000000+i*10)
+		require.NoError(t, database.UpsertMessage(db.Message{
+			ChannelID: "C1", TS: ts, UserID: "U001",
+			Text: fmt.Sprintf("test message %d", i),
+		}))
+	}
+
+	gen := &capturingGenerator{
+		response: `{"summary":"test","topics":[],"decisions":[],"action_items":[],"key_messages":[]}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	pipe.SinceOverride = 999999990
+	_, _, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+
+	// No profile context should appear.
+	assert.NotContains(t, gen.capturedPrompt, "USER PROFILE CONTEXT")
+}

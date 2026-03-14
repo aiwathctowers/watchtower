@@ -452,7 +452,7 @@ struct DigestListView: View {
                         .foregroundStyle(.orange)
                 }
 
-                let actionCount = digest.parsedActionItems.count
+                let actionCount = digest.parsedTracks.count
                 if actionCount > 0 {
                     Label("\(actionCount)", systemImage: "checkmark.circle")
                         .font(.caption2)
@@ -517,11 +517,11 @@ struct DigestListView: View {
                 }
             }
 
-            // Action items
-            let actions = digest.parsedActionItems
+            // Tracks
+            let actions = digest.parsedTracks
             if !actions.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Action Items", systemImage: "checkmark.circle")
+                    Label("Tracks", systemImage: "checkmark.circle")
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundStyle(.green)

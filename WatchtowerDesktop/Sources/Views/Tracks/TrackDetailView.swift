@@ -1,14 +1,14 @@
 import SwiftUI
 
-struct ActionItemDetailView: View {
-    let item: ActionItem
-    let viewModel: ActionItemsViewModel
+struct TrackDetailView: View {
+    let item: Track
+    let viewModel: TracksViewModel
     var onClose: (() -> Void)? = nil
     @Environment(AppState.self) private var appState
-    @State private var history: [ActionItemHistoryEntry] = []
-    @State private var chatVM: ActionItemChatViewModel?
+    @State private var history: [TrackHistoryEntry] = []
+    @State private var chatVM: TrackChatViewModel?
     @State private var showSnoozePopover = false
-    @State private var snoozeDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+    @State private var snoozeDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
 
     var body: some View {
         VSplitView {
@@ -34,7 +34,7 @@ struct ActionItemDetailView: View {
             // Bottom: embedded chat
             if let chatVM {
                 Divider()
-                ActionItemChatSection(chatVM: chatVM)
+                TrackChatSection(chatVM: chatVM)
                     .frame(minHeight: 200, idealHeight: 300)
             }
         }
@@ -44,23 +44,15 @@ struct ActionItemDetailView: View {
             }
             history = viewModel.fetchHistory(for: item.id)
             if let db = appState.databaseManager {
-                chatVM = ActionItemChatViewModel(
+                chatVM = TrackChatViewModel(
                     item: item,
                     viewModel: viewModel,
                     dbManager: db
                 )
             }
         }
-        .onChange(of: item.id) {
-            history = viewModel.fetchHistory(for: item.id)
-            if let db = appState.databaseManager {
-                chatVM = ActionItemChatViewModel(
-                    item: item,
-                    viewModel: viewModel,
-                    dbManager: db
-                )
-            }
-        }
+        // Note: .onChange(of: item.id) is not needed because .id(id) on the parent
+        // causes SwiftUI to destroy and recreate this view when id changes.
     }
 
     // MARK: - Header
@@ -397,27 +389,31 @@ struct ActionItemDetailView: View {
 
     // MARK: - Actions
 
+    private func refreshHistory() {
+        history = viewModel.fetchHistory(for: item.id)
+    }
+
     private var actionsSection: some View {
         HStack(spacing: 8) {
             if item.isInbox {
-                Button("Accept") { viewModel.accept(item) }
+                Button("Accept") { viewModel.accept(item); refreshHistory() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                Button("Dismiss") { viewModel.dismiss(item) }
+                Button("Dismiss") { viewModel.dismiss(item); refreshHistory() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 snoozeButton
             } else if item.isActive {
-                Button("Done") { viewModel.markDone(item) }
+                Button("Done") { viewModel.markDone(item); refreshHistory() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .tint(.green)
-                Button("Dismiss") { viewModel.dismiss(item) }
+                Button("Dismiss") { viewModel.dismiss(item); refreshHistory() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 snoozeButton
             } else {
-                Button("Move to Inbox") { viewModel.reopen(item) }
+                Button("Move to Inbox") { viewModel.reopen(item); refreshHistory() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
@@ -435,7 +431,7 @@ struct ActionItemDetailView: View {
 
             if let dbManager = appState.databaseManager {
                 FeedbackButtons(
-                    entityType: "action_item",
+                    entityType: "track",
                     entityID: String(item.id),
                     dbManager: dbManager
                 )
@@ -456,15 +452,15 @@ struct ActionItemDetailView: View {
                     }
                     .buttonStyle(.borderless)
                     Button("Tomorrow 9:00") {
-                        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-                        let at9 = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!
+                        guard let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()),
+                          let at9 = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) else { return }
                         viewModel.snooze(item, until: at9)
                         showSnoozePopover = false
                     }
                     .buttonStyle(.borderless)
                     Button("Next week") {
-                        let monday = Calendar.current.nextDate(after: Date(), matching: DateComponents(weekday: 2), matchingPolicy: .nextTime)!
-                        let at9 = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: monday)!
+                        guard let monday = Calendar.current.nextDate(after: Date(), matching: DateComponents(weekday: 2), matchingPolicy: .nextTime),
+                              let at9 = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: monday) else { return }
                         viewModel.snooze(item, until: at9)
                         showSnoozePopover = false
                     }

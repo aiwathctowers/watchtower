@@ -5,7 +5,7 @@ import GRDB
 
 @MainActor
 @Observable
-final class ActionItemChatViewModel {
+final class TrackChatViewModel {
     var messages: [ChatMessage] = []
     var isStreaming = false
     var inputText = ""
@@ -13,41 +13,49 @@ final class ActionItemChatViewModel {
 
     private var conversationID: Int64?
     private var sessionID: String?
-    private let claudeService: ClaudeService
+    private let claudeService: any ClaudeServiceProtocol
     private let dbManager: DatabaseManager
-    private let item: ActionItem
-    private let viewModel: ActionItemsViewModel
+    private var item: Track
+    private weak var viewModel: TracksViewModel?
     private var streamTask: Task<Void, Never>?
 
-    init(item: ActionItem, viewModel: ActionItemsViewModel, dbManager: DatabaseManager) {
+    init(item: Track, viewModel: TracksViewModel, dbManager: DatabaseManager, claudeService: (any ClaudeServiceProtocol)? = nil) {
         self.item = item
         self.viewModel = viewModel
         self.dbManager = dbManager
-        self.claudeService = ClaudeService()
+        self.claudeService = claudeService ?? ClaudeService()
 
         loadOrCreateConversation()
     }
 
     private func loadOrCreateConversation() {
         do {
-            let (conv, records) = try dbManager.dbPool.write { db -> (ChatConversation, [ChatMessageRecord]) in
-                if let existing = try ChatConversationQueries.fetchByContext(db, type: "action_item", id: String(item.id)) {
-                    let msgs = try ChatMessageQueries.fetchByConversation(db, conversationID: existing.id)
-                    return (existing, msgs)
+            // Try read-only first to avoid unnecessary write locks.
+            if let existing = try dbManager.dbPool.read({ db in
+                try ChatConversationQueries.fetchByContext(db, type: "track", id: String(item.id))
+            }) {
+                let records = try dbManager.dbPool.read { db in
+                    try ChatMessageQueries.fetchByConversation(db, conversationID: existing.id)
                 }
-                let conv = try ChatConversationQueries.create(
+                conversationID = existing.id
+                sessionID = existing.sessionID
+                messages = records.map { $0.toChatMessage() }
+                return
+            }
+            // No existing conversation — create one.
+            let conv = try dbManager.dbPool.write { db in
+                try ChatConversationQueries.create(
                     db,
-                    title: "Action: \(String(item.text.prefix(60)))",
-                    contextType: "action_item",
+                    title: "Track: \(String(item.text.prefix(60)))",
+                    contextType: "track",
                     contextID: String(item.id)
                 )
-                return (conv, [])
             }
             conversationID = conv.id
             sessionID = conv.sessionID
-            messages = records.map { $0.toChatMessage() }
+            messages = []
         } catch {
-            // silently ignore
+            errorMessage = "Failed to load conversation: \(error.localizedDescription)"
         }
     }
 
@@ -72,17 +80,18 @@ final class ActionItemChatViewModel {
         let dbPath = dbManager.dbPool.path
         let dbPool = dbManager.dbPool
 
-        streamTask = Task { [weak self] in
-            guard let self else { return }
+        let capturedItem = item
+        let capturedClaudeService = claudeService
 
+        streamTask = Task { [weak self] in
             let systemPrompt: String? = if currentSessionID == nil {
-                Self.buildSystemPrompt(item: self.item, dbPool: dbPool)
+                Self.buildSystemPrompt(item: capturedItem, dbPool: dbPool)
             } else {
                 nil
             }
 
             do {
-                let stream = claudeService.stream(
+                let stream = capturedClaudeService.stream(
                     prompt: text,
                     systemPrompt: systemPrompt,
                     sessionID: currentSessionID,
@@ -91,6 +100,7 @@ final class ActionItemChatViewModel {
                 )
                 var sawTurnComplete = false
                 for try await event in stream {
+                    guard let self else { return }
                     switch event {
                     case .text(let chunk):
                         if let idx = self.messages.indices.last {
@@ -118,9 +128,10 @@ final class ActionItemChatViewModel {
                 }
             } catch {
                 if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
+                    self?.errorMessage = error.localizedDescription
                 }
             }
+            guard let self else { return }
             if let idx = self.messages.indices.last {
                 self.messages[idx].isStreaming = false
                 // Persist assistant message
@@ -132,8 +143,9 @@ final class ActionItemChatViewModel {
             }
             self.isStreaming = false
 
-            // Refresh the action item after Claude may have updated it
-            self.viewModel.load()
+            // Refresh the track from DB after Claude may have updated it
+            self.reloadItem()
+            self.viewModel?.load()
         }
     }
 
@@ -162,13 +174,25 @@ final class ActionItemChatViewModel {
         }
     }
 
+    private func reloadItem() {
+        do {
+            if let updated = try dbManager.dbPool.read({ db in
+                try TrackQueries.fetchByID(db, id: item.id)
+            }) {
+                item = updated
+            }
+        } catch {
+            // Non-fatal: keep stale item
+        }
+    }
+
     private func persistSessionID(conversationID: Int64, sessionID: String) {
         _ = try? dbManager.dbPool.write { db in
             try ChatConversationQueries.updateSessionID(db, id: conversationID, sessionID: sessionID)
         }
     }
 
-    nonisolated static func buildSystemPrompt(item: ActionItem, dbPool: DatabasePool) -> String {
+    nonisolated static func buildSystemPrompt(item: Track, dbPool: DatabasePool) -> String {
         let schema = (try? dbPool.read { db in try ChatViewModel.fetchSchema(db) }) ?? ""
         let dbPath = dbPool.path
 
@@ -177,9 +201,9 @@ final class ActionItemChatViewModel {
         }) ?? "unknown"
 
         return """
-        You are Watchtower, an AI assistant helping the user manage a specific action item from their Slack workspace.
+        You are Watchtower, an AI assistant helping the user manage a specific track from their Slack workspace.
 
-        === CURRENT ACTION ITEM ===
+        === CURRENT TRACK ===
         ID: \(item.id)
         Text: \(item.text)
         Status: \(item.status)
@@ -191,12 +215,12 @@ final class ActionItemChatViewModel {
 
         === CAPABILITIES ===
         You can query the database to find related messages, threads, and people involved.
-        You can also UPDATE this action item by running CLI commands via Bash:
+        You can also UPDATE this track by running CLI commands via Bash:
 
-        - Accept (inbox→active): watchtower actions accept \(item.id)
-        - Mark done:              watchtower actions done \(item.id)
-        - Dismiss:                watchtower actions dismiss \(item.id)
-        - Snooze:                 watchtower actions snooze \(item.id) --until tomorrow
+        - Accept (inbox→active): watchtower tracks accept \(item.id)
+        - Mark done:              watchtower tracks done \(item.id)
+        - Dismiss:                watchtower tracks dismiss \(item.id)
+        - Snooze:                 watchtower tracks snooze \(item.id) --until tomorrow
 
         When the user asks to change the status, run the appropriate command.
 
@@ -205,10 +229,10 @@ final class ActionItemChatViewModel {
         \(schema)
 
         === QUERY TIPS ===
-        - Find the original message: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = '\(item.channelID)' AND m.ts = '\(item.sourceMessageTS)'
-        - Find thread context: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = '\(item.channelID)' AND m.thread_ts = '\(item.sourceMessageTS)' ORDER BY m.ts_unix ASC
+        - Find the original message: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.ts = ?  (bind: '\(item.channelID.replacingOccurrences(of: "'", with: "''"))', '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))')
+        - Find thread context: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.thread_ts = ? ORDER BY m.ts_unix ASC  (bind same values)
         - Find who else discussed this: Look for messages in the same channel around the same time
-        - Permalink format: https://\(domain).slack.com/archives/{channel_id}/p{ts_without_dots}
+        - Permalink format: https://\(domain.replacingOccurrences(of: "'", with: "")).slack.com/archives/{channel_id}/p{ts_without_dots}
 
         === RESPONSE STYLE ===
         - Be concise and direct
@@ -221,8 +245,8 @@ final class ActionItemChatViewModel {
 
 // MARK: - View
 
-struct ActionItemChatSection: View {
-    @Bindable var chatVM: ActionItemChatViewModel
+struct TrackChatSection: View {
+    @Bindable var chatVM: TrackChatViewModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -248,7 +272,7 @@ struct ActionItemChatSection: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if chatVM.messages.isEmpty {
-                        Text("Ask about this action item, who's involved, related discussions, or ask to update it.")
+                        Text("Ask about this track, who's involved, related discussions, or ask to update it.")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding()
@@ -265,7 +289,7 @@ struct ActionItemChatSection: View {
 
             // Input
             HStack(spacing: 8) {
-                TextField("Ask about this action item...", text: $chatVM.inputText)
+                TextField("Ask about this track...", text: $chatVM.inputText)
                     .textFieldStyle(.plain)
                     .font(.subheadline)
                     .onSubmit {

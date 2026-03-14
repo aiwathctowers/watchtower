@@ -76,6 +76,7 @@ type Pipeline struct {
 	// caches populated during a run
 	channelNames map[string]string
 	userNames    map[string]string
+	profile      *db.UserProfile // loaded once per Run, nil if not available
 }
 
 // New creates a new analysis pipeline.
@@ -254,7 +255,7 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 	}
 
 	tmpl, _ := p.getPrompt(prompts.AnalysisUser, singleUserPrompt)
-	prompt := fmt.Sprintf(tmpl, p.userName(stats.UserID), fromStr, toStr, langInstr, userBlock)
+	prompt := fmt.Sprintf(tmpl, p.userName(stats.UserID), fromStr, toStr, p.formatProfileContext(), langInstr, userBlock)
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -347,6 +348,13 @@ func (p *Pipeline) loadCaches() {
 	p.channelNames = make(map[string]string)
 	p.userNames = make(map[string]string)
 
+	// Load user profile for personalized analysis.
+	if userID, err := p.db.GetCurrentUserID(); err == nil && userID != "" {
+		if profile, err := p.db.GetUserProfile(userID); err == nil {
+			p.profile = profile
+		}
+	}
+
 	users, err := p.db.GetUsers(db.UserFilter{})
 	if err != nil {
 		p.logger.Printf("warning: failed to load user names: %v", err)
@@ -368,6 +376,35 @@ func (p *Pipeline) loadCaches() {
 			p.channelNames[ch.ID] = ch.Name
 		}
 	}
+}
+
+// formatProfileContext builds the profile context section for analysis prompts.
+// Provides relationship context so the AI can tailor analysis to the user's perspective.
+func (p *Pipeline) formatProfileContext() string {
+	if p.profile == nil || p.profile.CustomPromptContext == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== VIEWER PROFILE CONTEXT ===\n")
+	sb.WriteString(sanitize(p.profile.CustomPromptContext))
+	sb.WriteString("\n\nANALYSIS PERSONALIZATION:\n")
+	sb.WriteString("- Tailor analysis to the viewer's management perspective and responsibilities\n")
+
+	if p.profile.Reports != "" && p.profile.Reports != "[]" {
+		sb.WriteString(fmt.Sprintf("\nVIEWER'S REPORTS: %s — analyze these users with extra depth on accountability, blockers, and delivery\n", sanitize(p.profile.Reports)))
+	}
+	if p.profile.Peers != "" && p.profile.Peers != "[]" {
+		sb.WriteString(fmt.Sprintf("\nVIEWER'S PEERS: %s — focus on collaboration quality and cross-team dynamics\n", sanitize(p.profile.Peers)))
+	}
+	if p.profile.Manager != "" {
+		sb.WriteString(fmt.Sprintf("\nVIEWER'S MANAGER: %s — note alignment and communication with leadership\n", sanitize(p.profile.Manager)))
+	}
+	if p.profile.StarredPeople != "" && p.profile.StarredPeople != "[]" {
+		sb.WriteString(fmt.Sprintf("\nSTARRED PEOPLE: %s — provide more detailed analysis for these people\n", sanitize(p.profile.StarredPeople)))
+	}
+
+	return sb.String()
 }
 
 func (p *Pipeline) languageInstruction() string {
@@ -440,7 +477,7 @@ func (p *Pipeline) generatePeriodSummary(ctx context.Context, from, to float64) 
 	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02")
 	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02")
 	tmpl, _ := p.getPrompt(prompts.AnalysisPeriod, periodSummaryPrompt)
-	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.languageInstruction(), sb.String())
+	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -479,9 +516,9 @@ func sanitize(text string) string {
 	// Strip newlines to prevent prompt structure injection via display names.
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\r", " ")
-	if !strings.Contains(text, "===") && !strings.Contains(text, "---") {
-		return text
-	}
+	// Strip backticks to prevent markdown code fence injection.
+	text = strings.ReplaceAll(text, "```", "` ` `")
+	// Strip section markers that could alter prompt structure.
 	text = strings.ReplaceAll(text, "===", "= = =")
 	text = strings.ReplaceAll(text, "---", "- - -")
 	return text

@@ -147,7 +147,7 @@ struct UsageSettings: View {
             "digests": "Digests",
             "people": "People Analytics",
             "summaries": "Period Summaries",
-            "actions": "Action Items",
+            "tracks": "Tracks",
         ]
 
         return map

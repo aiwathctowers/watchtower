@@ -42,6 +42,8 @@ var Descriptions = map[string]string{
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
 
+%s
+
 Analyze the messages below and return ONLY a JSON object (no markdown fences, no explanation) with this exact structure:
 
 {
@@ -78,6 +80,8 @@ Rules:
 
 const defaultDigestDaily = `You are creating a daily summary of Slack activity for %s.
 
+%s
+
 Below are per-channel digests from today, including their extracted decisions. Create a cross-channel rollup.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
@@ -107,6 +111,8 @@ Rules:
 
 const defaultDigestWeekly = `You are analyzing a week of Slack workspace activity for %s (%s to %s).
 
+%s
+
 Below are daily summaries for the week. Create a weekly trends analysis.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
@@ -132,6 +138,8 @@ Rules:
 %s`
 
 const defaultDigestPeriod = `You are creating a summary of Slack workspace activity for the period %s to %s.
+
+%s
 
 Below are individual digests (channel-level and daily rollups) from that period. Create a comprehensive summary.
 
@@ -168,6 +176,8 @@ DEDUPLICATION: Review the EXISTING TRACKS section below. If a message relates to
 
 COMPLETION DETECTION: If you see messages confirming that an existing track has been COMPLETED (e.g., "done", "deployed", "opened access", "fixed", "released", status updates showing the task is finished), return the track with "existing_id" set to that track's ID and "status_hint": "done". This is critical — do NOT ignore completion signals just because they are not new tracks.
 
+%[12]s
+
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
@@ -196,7 +206,10 @@ Return ONLY a JSON object (no markdown fences, no explanation):
       ],
       "sub_items": [
         {"text": "specific sub-task or checklist item", "status": "open"}
-      ]
+      ],
+      "ownership": "mine",
+      "ball_on": "U123",
+      "owner_user_id": "U456"
     }
   ]
 }
@@ -244,6 +257,13 @@ Rules:
 - sub_items: break down the track into concrete sub-tasks or checklist items. Each sub-item has "text" (what to do) and "status" ("open" or "done"). If a sub-task was clearly completed in the conversation, set status to "done". Aim for 2-5 sub-items per track. Leave empty array [] if the track is atomic and doesn't need breakdown.
 - existing_id: if the track matches an existing track from the EXISTING TRACKS section below, set this to the track's numeric ID. The AI should UPDATE the existing track (merge new info into context, update priority/due_date if changed). Set to null for genuinely new tracks not covered by any existing track. Prefer updating over creating duplicates.
 - status_hint: set to "done" if messages clearly confirm the existing track has been completed (someone did the work, deployed, confirmed, etc.). Set to "active" or leave empty ("") for tracks still in progress. This field is ONLY used with existing_id — for new tracks, leave it empty.
+- ownership: MUST be one of "mine", "delegated", "watching":
+  * "mine" — the task/request is directed at the user, the ball is on them, they need to act
+  * "delegated" — the task involves the user's direct report as the responsible person; the user oversees it
+  * "watching" — the task/decision affects the user's area but they are not the primary actor; important to stay informed
+  * Default to "mine" if unsure — better to surface than miss
+- ball_on: the user_id of the person who needs to act NEXT on this track. If the user asked a question and is waiting for a reply, ball_on is the other person's user_id. If someone asked the user something, ball_on is the user's own user_id. Leave empty string "" if unclear.
+- owner_user_id: the user_id of the person who "owns" the track. For "mine" tracks, this is the current user. For "delegated" tracks, this is the direct report's user_id. For "watching" tracks, this can be whoever is responsible. Leave empty string "" if same as the current user.
 - If no tracks are found, return {"items": []}
 - Return valid JSON only, no other text
 
@@ -262,6 +282,8 @@ Track: %[1]s
 Previous context: %[2]s
 Channel: #%[3]s
 
+%[6]s
+
 %[4]s
 
 New messages since last check (thread replies and channel messages):
@@ -277,7 +299,8 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 {
   "has_update": true,
   "updated_context": "brief summary of what changed or progressed",
-  "status_hint": "done"
+  "status_hint": "done",
+  "ball_on": "U123"
 }
 
 Rules:
@@ -288,9 +311,12 @@ Rules:
   * "done" — the track appears to be completed based on the messages
   * "active" — there is progress but the track is not yet done
   * "unchanged" — use when has_update is false
+- ball_on: the user_id of the person who needs to act next based on the new messages. If someone replied and the ball moved to another person, update this. Leave empty string "" if the ball hasn't moved or if unclear.
 - Return valid JSON only, no other text`
 
 const defaultAnalysisUser = `You are analyzing Slack communication patterns for @%s over a 7-day window (%s to %s).
+
+%s
 
 Below are the user's computed statistics and ALL their messages from this period. Perform a deep analysis of their communication patterns, effectiveness, and areas of concern.
 
@@ -360,6 +386,8 @@ Rules:
 %s`
 
 const defaultAnalysisPeriod = `You are creating a team communication summary for the period %s to %s.
+
+%s
 
 Below are individual analyses for all team members. Create a high-level summary that a manager can quickly scan to understand what needs attention.
 

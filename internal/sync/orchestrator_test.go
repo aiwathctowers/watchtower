@@ -161,7 +161,7 @@ func baseMux() *http.ServeMux {
 	})
 
 	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		userID := r.FormValue("user")
 		w.Header().Set("Content-Type", "application/json")
 
@@ -596,7 +596,7 @@ func integrationMux(channelMessages map[string][]map[string]any, threadReplies m
 	mux := baseMux()
 
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		channelID := r.FormValue("channel")
 		msgs, ok := channelMessages[channelID]
 		if !ok {
@@ -612,7 +612,7 @@ func integrationMux(channelMessages map[string][]map[string]any, threadReplies m
 	})
 
 	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm() //nolint:errcheck
 		channelID := r.FormValue("channel")
 		threadTS := r.FormValue("ts")
 		key := channelID + "|" + threadTS

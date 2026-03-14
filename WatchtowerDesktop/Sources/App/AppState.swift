@@ -9,6 +9,9 @@ final class AppState {
     var errorMessage: String?
     var isDBAvailable: Bool { databaseManager != nil }
 
+    /// Whether the user needs to complete the onboarding chat flow.
+    var needsOnboarding: Bool = false
+
     /// Cache for custom workspace emoji images.
     let emojiImageCache = EmojiImageCache()
     /// Map of custom emoji name → image URL, loaded from DB.
@@ -18,8 +21,11 @@ final class AppState {
     private(set) var chatViewModel: ChatViewModel?
     private(set) var chatHistoryViewModel: ChatHistoryViewModel?
 
-    /// Action items status filter (nil = inbox+active).
-    var actionStatusFilter: String?
+    /// Tracks status filter (nil = inbox+active).
+    var trackStatusFilter: String?
+
+    /// Tracks ownership filter (nil = all ownerships).
+    var trackOwnershipFilter: String?
 
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
@@ -30,7 +36,7 @@ final class AppState {
     /// Manages app updates from GitHub Releases.
     let updateService = UpdateService()
 
-    /// Manages background pipeline tasks (digests, action items) started after onboarding sync.
+    /// Manages background pipeline tasks (digests, tracks) started after onboarding sync.
     let backgroundTaskManager = BackgroundTaskManager()
 
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
@@ -67,6 +73,7 @@ final class AppState {
                 }.value
                 databaseManager = manager
                 errorMessage = nil
+                needsOnboarding = await checkNeedsOnboarding(dbPool: manager.dbPool)
                 loadCustomEmoji(from: manager)
                 startDigestWatcher(dbPool: manager.dbPool)
             } catch {
@@ -78,6 +85,30 @@ final class AppState {
         Task {
             await updateService.checkIfNeeded()
         }
+    }
+
+    /// Check if onboarding chat is needed (profile missing or onboarding_done == false).
+    private func checkNeedsOnboarding(dbPool: DatabasePool) async -> Bool {
+        do {
+            return try await dbPool.read { db in
+                guard let profile = try ProfileQueries.fetchCurrentProfile(db) else {
+                    return true
+                }
+                return !profile.onboardingDone
+            }
+        } catch {
+            return false // On error, don't block — skip onboarding
+        }
+    }
+
+    /// Called when onboarding flow completes successfully.
+    func completeOnboarding() {
+        needsOnboarding = false
+    }
+
+    /// Re-triggers the onboarding flow (from Settings).
+    func startOnboarding() {
+        needsOnboarding = true
     }
 
     private func startDigestWatcher(dbPool: DatabasePool) {

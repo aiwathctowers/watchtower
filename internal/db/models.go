@@ -152,8 +152,8 @@ type CustomEmoji struct {
 	AliasFor string // Target emoji name if this is an alias
 }
 
-// ActionItem represents an AI-extracted action item for a user.
-type ActionItem struct {
+// Track represents an AI-extracted track for a user.
+type Track struct {
 	ID                int
 	ChannelID         string
 	AssigneeUserID    string
@@ -189,6 +189,9 @@ type ActionItem struct {
 	RelatedDigestIDs  string  // JSON array of related digest IDs
 	SubItems          string  // JSON array of sub-tasks with statuses
 	PromptVersion     int     // version of prompt used for generation
+	Ownership         string  // "mine", "delegated", "watching"
+	BallOn            string  // user_id of the person who needs to act next
+	OwnerUserID       string  // owner of the track (for delegated = report's user_id)
 }
 
 // Digest represents an AI-generated summary of channel activity.
@@ -213,7 +216,7 @@ type Digest struct {
 }
 
 // DigestDecisionRow represents a single decision extracted from a digest,
-// used by the action items pipeline to provide decision context.
+// used by the tracks pipeline to provide decision context.
 type DigestDecisionRow struct {
 	DigestID    int
 	ChannelName string
@@ -224,7 +227,7 @@ type DigestDecisionRow struct {
 // Feedback represents a user rating on AI-generated content.
 type Feedback struct {
 	ID         int
-	EntityType string // "digest", "action_item", "decision"
+	EntityType string // "digest", "track", "decision", "user_analysis"
 	EntityID   string // entity-specific ID
 	Rating     int    // +1 = good, -1 = bad
 	Comment    string
@@ -242,9 +245,29 @@ type ImportanceCorrection struct {
 	CreatedAt          string
 }
 
+// UserProfile stores the current user's role, team, relationships, and personalization data.
+type UserProfile struct {
+	ID                  int
+	SlackUserID         string
+	Role                string
+	Team                string
+	Responsibilities    string // JSON array of strings
+	Reports             string // JSON array of Slack user_ids
+	Peers               string // JSON array of Slack user_ids
+	Manager             string // Slack user_id
+	StarredChannels     string // JSON array of channel_ids
+	StarredPeople       string // JSON array of Slack user_ids
+	PainPoints          string // JSON array from onboarding
+	TrackFocus          string // JSON array of focus areas
+	OnboardingDone      bool
+	CustomPromptContext string
+	CreatedAt           string
+	UpdatedAt           string
+}
+
 // Prompt represents an editable AI prompt template.
 type Prompt struct {
-	ID        string // "digest.channel", "actionitems.extract", "analysis.user", etc.
+	ID        string // "digest.channel", "tracks.extract", "analysis.user", etc.
 	Template  string
 	Version   int
 	Language  string // "" = auto-detect, "en", "ru", etc.

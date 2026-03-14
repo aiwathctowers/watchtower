@@ -261,3 +261,60 @@ func TestComputeUserStats(t *testing.T) {
 	assert.Equal(t, 2, stats.ChannelsActive)
 	assert.True(t, stats.AvgMessageLength > 0)
 }
+
+// capturingGenerator captures the prompt passed to Generate for inspection.
+type capturingGenerator struct {
+	response       string
+	capturedPrompt string
+	calls          atomic.Int32
+}
+
+func (m *capturingGenerator) Generate(_ context.Context, _, prompt string) (string, *digest.Usage, error) {
+	m.capturedPrompt = prompt
+	m.calls.Add(1)
+	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, nil
+}
+
+func TestProfileContextInjectedIntoAnalysisPrompt(t *testing.T) {
+	database := testDB(t)
+	now := time.Now()
+	from := float64(now.AddDate(0, 0, -7).Unix())
+	to := float64(now.Unix())
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	seedUser(t, database, "U001", "alice")
+	seedUser(t, database, "U002", "bob")
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	// Insert messages for U002 to analyze.
+	for i := range 10 {
+		ts := fmt.Sprintf("%d.%06d", now.Add(-time.Duration(i)*time.Hour).Unix(), i)
+		seedMessage(t, database, "C1", ts, "U002", fmt.Sprintf("message %d from bob", i))
+	}
+
+	// Create profile with custom context.
+	require.NoError(t, database.UpsertUserProfile(db.UserProfile{
+		SlackUserID:         "U001",
+		CustomPromptContext: "You are helping a Platform EM. Reports: bob.",
+		Reports:             `["U002"]`,
+		StarredPeople:       `["U002"]`,
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"summary":"test","communication_style":"executor","decision_role":"contributor","style_details":"test details paragraph","red_flags":[],"highlights":[],"recommendations":[],"concerns":[],"accomplishments":[]}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	pipe.ForceRegenerate = true
+	pipe.Workers = 1
+	n, err := pipe.RunForWindow(context.Background(), from, to)
+	require.NoError(t, err)
+	assert.True(t, n > 0)
+
+	// Profile context should appear in the user analysis prompt.
+	assert.Contains(t, gen.capturedPrompt, "VIEWER PROFILE CONTEXT")
+	assert.Contains(t, gen.capturedPrompt, "Platform EM")
+	assert.Contains(t, gen.capturedPrompt, "VIEWER'S REPORTS")
+	assert.Contains(t, gen.capturedPrompt, "STARRED PEOPLE")
+}

@@ -240,8 +240,8 @@ CREATE TABLE IF NOT EXISTS custom_emojis (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
--- Action items extracted by AI for the current user (cross-channel)
-CREATE TABLE IF NOT EXISTS action_items (
+-- Tracks extracted by AI for the current user (cross-channel)
+CREATE TABLE IF NOT EXISTS tracks (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id          TEXT NOT NULL,
     assignee_user_id    TEXT NOT NULL,           -- users.id of the assigned user
@@ -265,29 +265,32 @@ CREATE TABLE IF NOT EXISTS action_items (
     last_checked_ts     TEXT NOT NULL DEFAULT '',     -- Slack ts of last checked reply
     snooze_until        REAL,                        -- Unix timestamp when snooze expires
     pre_snooze_status   TEXT NOT NULL DEFAULT '',     -- status to restore after snooze
-    participants        TEXT NOT NULL DEFAULT '',     -- JSON: participants with stances
-    source_refs         TEXT NOT NULL DEFAULT '',     -- JSON: key source message references
+    participants        TEXT NOT NULL DEFAULT '[]',    -- JSON: participants with stances
+    source_refs         TEXT NOT NULL DEFAULT '[]',   -- JSON: key source message references
     requester_name      TEXT NOT NULL DEFAULT '',     -- who made the request (@username)
     requester_user_id   TEXT NOT NULL DEFAULT '',     -- Slack user_id of the requester
     category            TEXT NOT NULL DEFAULT '',     -- code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
     blocking            TEXT NOT NULL DEFAULT '',     -- who/what is blocked if not done
-    tags                TEXT NOT NULL DEFAULT '',     -- JSON array of project/topic tags
+    tags                TEXT NOT NULL DEFAULT '[]',   -- JSON array of project/topic tags
     decision_summary    TEXT NOT NULL DEFAULT '',     -- how the group arrived at the decision
-    decision_options    TEXT NOT NULL DEFAULT '',     -- JSON array of options if decision pending
-    related_digest_ids  TEXT NOT NULL DEFAULT '',     -- JSON array of related digest IDs
-    sub_items           TEXT NOT NULL DEFAULT '',     -- JSON array of sub-tasks with statuses
-    prompt_version      INTEGER NOT NULL DEFAULT 0   -- version of prompt used for generation
+    decision_options    TEXT NOT NULL DEFAULT '[]',   -- JSON array of options if decision pending
+    related_digest_ids  TEXT NOT NULL DEFAULT '[]',   -- JSON array of related digest IDs
+    sub_items           TEXT NOT NULL DEFAULT '[]',   -- JSON array of sub-tasks with statuses
+    prompt_version      INTEGER NOT NULL DEFAULT 0,  -- version of prompt used for generation
+    ownership           TEXT NOT NULL DEFAULT 'mine' CHECK(ownership IN ('mine', 'delegated', 'watching')),
+    ball_on             TEXT NOT NULL DEFAULT '',     -- user_id of the person who needs to act next
+    owner_user_id       TEXT NOT NULL DEFAULT ''      -- owner of the track (for delegated = report's user_id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_action_items_dedup ON action_items(channel_id, assignee_user_id, source_message_ts, text);
-CREATE INDEX IF NOT EXISTS idx_action_items_assignee ON action_items(assignee_user_id);
-CREATE INDEX IF NOT EXISTS idx_action_items_status ON action_items(status);
-CREATE INDEX IF NOT EXISTS idx_action_items_period ON action_items(period_from, period_to);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_dedup ON tracks(channel_id, assignee_user_id, source_message_ts, text);
+CREATE INDEX IF NOT EXISTS idx_tracks_assignee ON tracks(assignee_user_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(status);
+CREATE INDEX IF NOT EXISTS idx_tracks_period ON tracks(period_from, period_to);
 
 -- Feedback on AI-generated content (thumbs up/down)
 CREATE TABLE IF NOT EXISTS feedback (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'action_item', 'decision')),
-    entity_id   TEXT NOT NULL,       -- digest.id, action_items.id, or "digest_id:decision_idx"
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis')),
+    entity_id   TEXT NOT NULL,       -- digest.id, tracks.id, or "digest_id:decision_idx"
     rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),  -- -1 = bad, +1 = good
     comment     TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -297,7 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(entity_type, rating);
 
 -- Editable AI prompt templates with versioning
 CREATE TABLE IF NOT EXISTS prompts (
-    id         TEXT PRIMARY KEY,  -- 'digest.channel', 'digest.daily', 'actionitems.extract', etc.
+    id         TEXT PRIMARY KEY,  -- 'digest.channel', 'digest.daily', 'tracks.extract', etc.
     template   TEXT NOT NULL,
     version    INTEGER NOT NULL DEFAULT 1,
     language   TEXT NOT NULL DEFAULT '',  -- '' = auto-detect, 'en', 'ru', etc.
@@ -316,17 +319,17 @@ CREATE TABLE IF NOT EXISTS prompt_history (
 CREATE INDEX IF NOT EXISTS idx_prompt_history_prompt ON prompt_history(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
 
--- Action item change history
-CREATE TABLE IF NOT EXISTS action_item_history (
+-- Track change history
+CREATE TABLE IF NOT EXISTS track_history (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    action_item_id  INTEGER NOT NULL REFERENCES action_items(id) ON DELETE CASCADE,
+    track_id        INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     event           TEXT NOT NULL,       -- 'created', 'priority_changed', 'context_updated', 'status_changed', 'due_date_changed', 'reopened'
     field           TEXT NOT NULL DEFAULT '',
     old_value       TEXT NOT NULL DEFAULT '',
     new_value       TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-CREATE INDEX IF NOT EXISTS idx_action_item_history_item ON action_item_history(action_item_id);
+CREATE INDEX IF NOT EXISTS idx_track_history_track ON track_history(track_id);
 
 -- Decision importance corrections (training signal for prompt tuning)
 CREATE TABLE IF NOT EXISTS decision_importance_corrections (
@@ -340,3 +343,23 @@ CREATE TABLE IF NOT EXISTS decision_importance_corrections (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dic_dedup ON decision_importance_corrections(digest_id, decision_idx);
 CREATE INDEX IF NOT EXISTS idx_dic_created ON decision_importance_corrections(created_at);
+
+-- User profile for personalization (role, team, reports, starred items)
+CREATE TABLE IF NOT EXISTS user_profile (
+    id                    INTEGER PRIMARY KEY,
+    slack_user_id         TEXT NOT NULL UNIQUE,
+    role                  TEXT NOT NULL DEFAULT '',
+    team                  TEXT NOT NULL DEFAULT '',
+    responsibilities      TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
+    reports               TEXT NOT NULL DEFAULT '[]',    -- JSON array of Slack user_ids
+    peers                 TEXT NOT NULL DEFAULT '[]',    -- JSON array of Slack user_ids
+    manager               TEXT NOT NULL DEFAULT '',      -- Slack user_id
+    starred_channels      TEXT NOT NULL DEFAULT '[]',    -- JSON array of channel_ids
+    starred_people        TEXT NOT NULL DEFAULT '[]',    -- JSON array of Slack user_ids
+    pain_points           TEXT NOT NULL DEFAULT '[]',    -- JSON array from onboarding
+    track_focus           TEXT NOT NULL DEFAULT '[]',    -- JSON array of focus areas
+    onboarding_done       INTEGER NOT NULL DEFAULT 0,
+    custom_prompt_context TEXT NOT NULL DEFAULT '',
+    created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
