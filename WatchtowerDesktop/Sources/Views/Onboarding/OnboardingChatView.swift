@@ -31,7 +31,7 @@ struct OnboardingChatView: View {
             // Chat messages + inline quick-reply buttons
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(viewModel.messages) { msg in
                             MessageBubble(message: msg)
                                 .id(msg.id)
@@ -61,17 +61,23 @@ struct OnboardingChatView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                         }
+
+                        Spacer()
+                            .id("bottom")
                     }
                     .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: viewModel.messages.count) {
-                    if let last = viewModel.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                    withAnimation {
+                        proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
                 .onChange(of: viewModel.quickReplies.isEmpty) {
                     if !viewModel.quickReplies.isEmpty {
-                        proxy.scrollTo("quick-replies", anchor: .bottom)
+                        withAnimation {
+                            proxy.scrollTo("quick-replies", anchor: .bottom)
+                        }
                     }
                 }
             }
