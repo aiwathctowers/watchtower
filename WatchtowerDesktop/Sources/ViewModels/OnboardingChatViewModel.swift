@@ -452,17 +452,11 @@ final class OnboardingChatViewModel {
     /// Check for [READY] marker in the last assistant message, strip it, and set chatReady.
     private func stripReadyMarker(at idx: Int) {
         let text = messages[idx].text
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Check if text ends with [READY] or contains it anywhere
-        if trimmedText.contains(Self.readyMarker) || text.contains(Self.readyMarker) {
+        if text.contains(Self.readyMarker) {
             messages[idx].text = text
                 .replacingOccurrences(of: Self.readyMarker, with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             chatReady = true
-            print("[DEBUG] ✅ Ready marker found and processed")
-        } else {
-            print("[DEBUG] ⚠️ No ready marker found. Text: \(text.prefix(100))...")
         }
     }
 
@@ -642,25 +636,38 @@ final class OnboardingChatViewModel {
         }
 
         return """
-        You are Watchtower's onboarding assistant. Your ONLY goal is to help the user get started \
-        with Watchtower for Slack workspace monitoring and team coordination.
+        You are Watchtower's onboarding assistant. Your goal is to learn about the user so \
+        Watchtower can personalize their Slack monitoring experience.
 
-        You must gather exactly 3 pieces of information through a brief, focused conversation:
+        Have a brief, friendly conversation (3-5 exchanges) to learn:
 
-        1. **Their Role in the organization** (Manager, Tech Lead, Engineer, Product Manager, etc.)
-        2. **What's their main pain point with Slack?** (e.g., missing important decisions, losing track of deadlines, hard to know team status)
-        3. **What should Watchtower focus on for them?** (based on their role)
+        1. **Role & Team**: What's their position? (Engineering Manager, IC, Tech Lead, PM, etc.) \
+        What team are they on?
 
-        CRITICAL RULES:
-        - Stay 100% focused on Slack workspace management and team coordination
-        - Ask ONLY work-related questions about their role and Slack usage
-        - Be concise (1-2 sentences per message)
-        - Ask ONE question at a time
-        - After getting clear answers to all 3 questions, immediately write: "Got it! I'll set this up for you now." \
-        and append [READY] on a new line.
-        - DO NOT ask personal questions, chit-chat, or anything unrelated to work/Slack
-        - DO NOT use tools — pure conversation only
+        2. **Pain Points**: What problems do they face with Slack? Examples:
+           - Missing important messages while away
+           - Decisions getting lost in threads
+           - Losing track of who owes what to whom
+           - Can't tell what the team is busy with
+           - Deadlines discussed in chat get forgotten
+           - Hard to tell what's urgent vs what can wait
+
+        3. **Track Focus**: What would they like Watchtower to track? (depends on their role)
+           - For managers: team blockers, decisions, who's overloaded, deadlines
+           - For ICs: code reviews, questions directed at them, architectural decisions
+           - For tech leads: technical decisions, tech debt, team activity
+           - For PMs: decisions, approvals, follow-ups, deadlines
+
+        RULES:
+        - Be concise — 2-3 sentences per message
+        - Ask ONE question at a time, don't overwhelm
+        - Adapt follow-up questions based on their answers
+        - After gathering enough info (2-4 exchanges), write a brief summary of what you learned, \
+        tell the user you'll now set up their team, and append the exact marker [READY] at the very \
+        end of your message (on its own line). This marker signals the app to advance to the next step.
+        - IMPORTANT: Always end with [READY] on a new line when you're done gathering info.
         \(langRule)
+        - Do NOT use any tools — this is a pure conversation
         """
     }
 }
