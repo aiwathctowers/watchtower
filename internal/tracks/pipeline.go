@@ -170,7 +170,19 @@ func (p *Pipeline) Run(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	from, to := DayWindow(time.Now())
+	now := time.Now()
+	from, to := DayWindow(now)
+
+	// On first run (no tracks exist for this user), expand window to cover
+	// the full initial_history_days so all synced messages get processed.
+	if hasTracks, err := p.db.HasTracksForUser(currentUserID); err == nil && !hasTracks {
+		days := p.cfg.Sync.InitialHistoryDays
+		if days <= 0 {
+			days = config.DefaultInitialHistDays
+		}
+		from = float64(now.Add(-time.Duration(days) * 24 * time.Hour).Unix())
+		p.logger.Printf("tracks: first run — expanding window to %d days", days)
+	}
 
 	return p.RunForWindow(ctx, currentUserID, from, to)
 }
@@ -198,8 +210,16 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 
 	if len(channelMsgs) == 0 {
 		p.progress(0, 0, "No messages in window")
+		p.logger.Printf("tracks: no messages found in window [%.0f, %.0f] — check sync status", from, to)
 		return 0, nil
 	}
+
+	// Log channel/message breakdown for diagnostics.
+	totalMsgCount := 0
+	for _, msgs := range channelMsgs {
+		totalMsgCount += len(msgs)
+	}
+	p.logger.Printf("tracks: found %d messages across %d channels in window", totalMsgCount, len(channelMsgs))
 
 	// Delete stale inbox tracks from this window before inserting new ones.
 	if _, err := p.db.DeleteTracksForWindow(userID, from, to); err != nil {
@@ -212,7 +232,7 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 		workers = total
 	}
 
-	p.progress(0, total, fmt.Sprintf("Scanning %d channels for @%s (%d workers)...", total, userName, workers))
+	p.progress(0, total, fmt.Sprintf("Scanning %d channels (%d messages) for @%s (%d workers)...", total, totalMsgCount, userName, workers))
 	p.logger.Printf("tracks: scanning %d channels with %d workers", total, workers)
 
 	type task struct {
@@ -493,7 +513,8 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 	profileSection := p.formatProfileContext()
 
 	tmpl, promptVersion := p.getPrompt(prompts.TracksExtract)
-	prompt := fmt.Sprintf(tmpl, userName, userID, channelName, channelID, fromStr, toStr, p.languageInstruction(), existingSection, decisionsSection, crossChannelSection, formatted, profileSection)
+	roleRules := p.formatRoleRules()
+	prompt := fmt.Sprintf(tmpl, userName, userID, channelName, channelID, fromStr, toStr, p.languageInstruction(), existingSection, decisionsSection, crossChannelSection, formatted, profileSection, roleRules)
 
 	raw, usage, err := p.generator.Generate(ctx, "", prompt)
 	if err != nil {
@@ -512,6 +533,7 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 	}
 
 	if len(result.Items) == 0 {
+		p.logger.Printf("tracks: #%s → 0 items from %d messages", channelName, len(msgs))
 		return 0, nil
 	}
 
@@ -875,6 +897,67 @@ func (p *Pipeline) formatProfileContext() string {
 			sb.WriteString("NORMAL priority categories: decision_needed\n")
 		}
 		sb.WriteString("When a track falls into a HIGH priority category, prefer priority: \"high\" or \"medium\" over \"low\".\n")
+	}
+
+	return sb.String()
+}
+
+// formatRoleRules generates role-specific extraction rules.
+// For manager roles, this broadens extraction criteria beyond "clear actionable requests"
+// to include strategic discussions, delegated tasks, and decisions in their area.
+// For IC roles, returns empty string (default strict rules apply).
+func (p *Pipeline) formatRoleRules() string {
+	p.cacheMu.RLock()
+	profile := p.profile
+	p.cacheMu.RUnlock()
+
+	if profile == nil {
+		return ""
+	}
+
+	role := strings.ToLower(profile.Role)
+	if role == "" {
+		return ""
+	}
+
+	isManager := role == "top_management" || role == "direction_owner" || role == "middle_management" ||
+		strings.Contains(role, "manager") || strings.Contains(role, "director") ||
+		strings.Contains(role, "vp") || strings.Contains(role, "head") ||
+		strings.Contains(role, "cto") || strings.Contains(role, "ceo")
+
+	isLead := strings.Contains(role, "lead") || strings.Contains(role, "tl") ||
+		strings.Contains(role, "principal") || strings.Contains(role, "staff")
+
+	if !isManager && !isLead {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n=== ROLE-SPECIFIC RULES (override strict extraction for this role) ===\n")
+	sb.WriteString("The rules above are designed for individual contributors. For YOUR role, EXPAND the extraction:\n\n")
+
+	if isManager {
+		sb.WriteString("ALSO extract tracks for:\n")
+		sb.WriteString("- DECISIONS in your area: any discussion where a choice is being made or was made that affects your team/domain, even if you're not mentioned by name. Category: \"decision_needed\"\n")
+		sb.WriteString("- DELEGATED TASKS: tasks assigned to or being worked on by your reports — you need visibility. Category: \"task\" or \"follow_up\", ownership: \"delegated\"\n")
+		sb.WriteString("- BLOCKERS & ESCALATIONS: anything blocking your team members, requests for help, delays, conflicts. Category: \"follow_up\", priority: \"high\"\n")
+		sb.WriteString("- STATUS UPDATES that reveal problems: if someone reports something is late, broken, or at risk. Category: \"follow_up\"\n")
+		sb.WriteString("- CROSS-TEAM COORDINATION: requests or discussions involving other teams that affect your area. Category: \"follow_up\" or \"approval\"\n")
+		sb.WriteString("- STRATEGIC DISCUSSIONS: architectural decisions, process changes, tool evaluations, resource allocation. Category: \"decision_needed\" or \"discussion\"\n")
+		sb.WriteString("\nFor these manager-specific tracks:\n")
+		sb.WriteString("- Lower the threshold: include items even if the user is not explicitly mentioned\n")
+		sb.WriteString("- Use ownership \"watching\" for discussions where the user is not the primary actor but needs awareness\n")
+		sb.WriteString("- Use ownership \"delegated\" when a report is the responsible person\n")
+		sb.WriteString("- Prefer creating a track over skipping — better to surface too much than miss something important\n")
+	} else if isLead {
+		sb.WriteString("ALSO extract tracks for:\n")
+		sb.WriteString("- TECHNICAL DECISIONS: architectural choices, tech stack decisions, design tradeoffs. Category: \"decision_needed\"\n")
+		sb.WriteString("- CODE QUALITY SIGNALS: discussions about tech debt, performance issues, refactoring needs. Category: \"discussion\"\n")
+		sb.WriteString("- TEAM COORDINATION: cross-team technical dependencies, integration work. Category: \"follow_up\"\n")
+		sb.WriteString("- MENTORING OPPORTUNITIES: junior team members asking questions in your area of expertise. Category: \"info_request\"\n")
+		sb.WriteString("\nFor these lead-specific tracks:\n")
+		sb.WriteString("- Include technical discussions where your expertise is relevant, even without direct mention\n")
+		sb.WriteString("- Use ownership \"watching\" for cross-team decisions that may affect your codebase\n")
 	}
 
 	return sb.String()

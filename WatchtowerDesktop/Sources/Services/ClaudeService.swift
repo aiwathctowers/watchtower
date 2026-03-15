@@ -93,7 +93,9 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
 
         if let sessionID {
             args += ["--resume", sessionID]
-        } else if let systemPrompt {
+        }
+
+        if let systemPrompt {
             args += ["--system-prompt", systemPrompt]
         }
 

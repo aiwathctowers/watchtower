@@ -11,6 +11,7 @@ import GRDB
 /// 5. Mark onboarding_done = 1
 struct OnboardingChatFlow: View {
     @Environment(AppState.self) private var appState
+    @State private var configService: ConfigService?
 
     enum Phase {
         case chat
@@ -67,8 +68,14 @@ struct OnboardingChatFlow: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             guard let db = appState.databaseManager else { return }
+            // Load config to get user's language preference
+            let configSvc = ConfigService()
+            self.configService = configSvc
+            let language = configSvc.digestLanguage ?? "English"
+
             let vm = OnboardingChatViewModel(
                 claudeService: ClaudeService(),
+                language: language,
                 dbManager: db
             )
             viewModel = vm

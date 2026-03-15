@@ -6,6 +6,7 @@ struct LogsSettings: View {
     @State private var isLoading = false
     @State private var autoScroll = true
     @State private var lineCount: Int = 0
+    @State private var showingMore = false
 
     private let workspaceDir = Self.resolveWorkspaceDir()
 
@@ -66,11 +67,18 @@ struct LogsSettings: View {
                 .help("Reload")
 
                 Button {
+                    openInEditor()
+                } label: {
+                    Image(systemName: "doc.richtext")
+                }
+                .help("Open in Default Editor")
+
+                Button {
                     revealInFinder()
                 } label: {
                     Image(systemName: "folder")
                 }
-                .help("Reveal in Finder")
+                .help("Open Log Folder")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -161,7 +169,7 @@ struct LogsSettings: View {
                             str = String(str[str.index(after: newline)...])
                         }
                         let allLines = str.components(separatedBy: "\n")
-                        let tailLines = Array(allLines.suffix(2000))
+                        let tailLines = Array(allLines.suffix(500))
                         lines = tailLines.count
                         content = "... (showing last \(lines) lines of ~\(ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)) file)\n\n"
                             + tailLines.joined(separator: "\n")
@@ -198,6 +206,13 @@ struct LogsSettings: View {
             NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
         } else if let dir = workspaceDir {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir)
+        }
+    }
+
+    private func openInEditor() {
+        if let path = logPath(for: selectedLog) {
+            let url = URL(fileURLWithPath: path)
+            NSWorkspace.shared.open(url)
         }
     }
 

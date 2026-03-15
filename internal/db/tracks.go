@@ -631,6 +631,19 @@ func (db *DB) MarkTrackUpdateRead(id int) error {
 	return tx.Commit()
 }
 
+// HasTracksForUser returns true if at least one track exists for the given user.
+func (db *DB) HasTracksForUser(userID string) (bool, error) {
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM tracks WHERE assignee_user_id = ? LIMIT 1`, userID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // GetTracksForUpdateCheck returns active/inbox tracks that have a source_message_ts.
 // Used by the update tracking pipeline to check for new thread activity.
 func (db *DB) GetTracksForUpdateCheck() ([]Track, error) {

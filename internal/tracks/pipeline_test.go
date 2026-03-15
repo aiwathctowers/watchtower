@@ -999,3 +999,90 @@ func TestCategoryWeightingByRole(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatRoleRulesManager(t *testing.T) {
+	p := &Pipeline{}
+
+	managerRoles := []string{"top_management", "direction_owner", "middle_management", "Engineering Manager", "CTO", "VP Engineering", "Head of Backend"}
+	for _, role := range managerRoles {
+		t.Run(role, func(t *testing.T) {
+			p.profile = &db.UserProfile{Role: role}
+			rules := p.formatRoleRules()
+			assert.Contains(t, rules, "ROLE-SPECIFIC RULES")
+			assert.Contains(t, rules, "DECISIONS in your area")
+			assert.Contains(t, rules, "DELEGATED TASKS")
+			assert.Contains(t, rules, "BLOCKERS & ESCALATIONS")
+			assert.Contains(t, rules, "STRATEGIC DISCUSSIONS")
+			assert.Contains(t, rules, "better to surface too much")
+		})
+	}
+}
+
+func TestFormatRoleRulesLead(t *testing.T) {
+	p := &Pipeline{}
+
+	leadRoles := []string{"Tech Lead", "Staff Engineer", "Principal Engineer"}
+	for _, role := range leadRoles {
+		t.Run(role, func(t *testing.T) {
+			p.profile = &db.UserProfile{Role: role}
+			rules := p.formatRoleRules()
+			assert.Contains(t, rules, "ROLE-SPECIFIC RULES")
+			assert.Contains(t, rules, "TECHNICAL DECISIONS")
+			assert.Contains(t, rules, "CODE QUALITY SIGNALS")
+			assert.NotContains(t, rules, "DELEGATED TASKS")
+		})
+	}
+}
+
+func TestFormatRoleRulesIC(t *testing.T) {
+	p := &Pipeline{}
+
+	icRoles := []string{"ic", "Software Engineer", "senior_ic", ""}
+	for _, role := range icRoles {
+		t.Run("role="+role, func(t *testing.T) {
+			p.profile = &db.UserProfile{Role: role}
+			rules := p.formatRoleRules()
+			assert.Empty(t, rules, "IC roles should not get role-specific rules")
+		})
+	}
+}
+
+func TestFormatRoleRulesNoProfile(t *testing.T) {
+	p := &Pipeline{}
+	rules := p.formatRoleRules()
+	assert.Empty(t, rules)
+}
+
+func TestRoleRulesInExtractPrompt(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000050.000000", UserID: "U001",
+		Text: "test message",
+	}))
+
+	// Create profile with manager role.
+	require.NoError(t, database.UpsertUserProfile(db.UserProfile{
+		SlackUserID:         "U001",
+		Role:                "middle_management",
+		CustomPromptContext: "EM responsible for Platform team.",
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"items": []}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	_, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+
+	captured := gen.getCapturedPrompt()
+	assert.Contains(t, captured, "ROLE-SPECIFIC RULES")
+	assert.Contains(t, captured, "DECISIONS in your area")
+	assert.Contains(t, captured, "DELEGATED TASKS")
+}

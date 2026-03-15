@@ -54,14 +54,23 @@ struct UsageSettings: View {
                 Section("By Feature") {
                     let bySource = groupBySource(usage.rows)
                     ForEach(bySource, id: \.source) { entry in
-                        LabeledContent(entry.label) {
-                            HStack(spacing: 8) {
-                                Text("\(entry.calls) calls")
-                                    .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(entry.label)
+                                Spacer()
                                 Text(formatCost(entry.cost))
                                     .monospacedDigit()
+                                    .fontWeight(.medium)
                             }
+                            HStack(spacing: 12) {
+                                Label("\(entry.calls) calls", systemImage: "arrow.up.arrow.down")
+                                Label("\(formatTokens(entry.input)) in", systemImage: "arrow.down")
+                                Label("\(formatTokens(entry.output)) out", systemImage: "arrow.up")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 2)
                     }
                 }
             } else if isLoading {
@@ -133,14 +142,16 @@ struct UsageSettings: View {
         let source: String
         let label: String
         let calls: Int
+        let input: Int
+        let output: Int
         let cost: Double
     }
 
     private func groupBySource(_ rows: [TokenUsageRow]) -> [SourceEntry] {
-        var map: [String: (calls: Int, cost: Double)] = [:]
+        var map: [String: (calls: Int, input: Int, output: Int, cost: Double)] = [:]
         for row in rows {
-            let existing = map[row.source, default: (0, 0)]
-            map[row.source] = (existing.calls + row.calls, existing.cost + row.costUSD)
+            let existing = map[row.source, default: (0, 0, 0, 0)]
+            map[row.source] = (existing.calls + row.calls, existing.input + row.inputTokens, existing.output + row.outputTokens, existing.cost + row.costUSD)
         }
 
         let labels: [String: String] = [
@@ -151,7 +162,7 @@ struct UsageSettings: View {
         ]
 
         return map
-            .map { SourceEntry(source: $0.key, label: labels[$0.key] ?? $0.key, calls: $0.value.calls, cost: $0.value.cost) }
+            .map { SourceEntry(source: $0.key, label: labels[$0.key] ?? $0.key, calls: $0.value.calls, input: $0.value.input, output: $0.value.output, cost: $0.value.cost) }
             .sorted { $0.cost > $1.cost }
     }
 }
