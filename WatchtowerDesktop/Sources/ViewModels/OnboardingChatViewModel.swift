@@ -247,11 +247,8 @@ final class OnboardingChatViewModel {
         streamTask = Task { [weak self] in
             guard let self else { return }
 
-            let systemPrompt: String? = if currentSessionID == nil {
-                Self.onboardingSystemPrompt(language: self.language)
-            } else {
-                nil
-            }
+            // Always use onboarding system prompt throughout the conversation
+            let systemPrompt = Self.onboardingSystemPrompt(language: self.language)
 
             do {
                 let stream = claudeService.stream(
