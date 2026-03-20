@@ -5,6 +5,7 @@ struct ChatInput: View {
     @Binding var text: String
     let isStreaming: Bool
     let onSend: () -> Void
+    var onStop: (() -> Void)? = nil
     var placeholder: String = "Ask about your workspace..."
     @State private var inputHeight: CGFloat = 22
 
@@ -41,14 +42,18 @@ struct ChatInput: View {
             )
 
             Button {
-                onSend()
+                if isStreaming {
+                    onStop?()
+                } else {
+                    onSend()
+                }
             } label: {
                 Image(systemName: isStreaming ? "stop.circle.fill" : "arrow.up.circle.fill")
                     .font(.system(size: 24))
-                    .foregroundStyle(canSend || isStreaming ? Color.accentColor : Color(.tertiaryLabelColor))
+                    .foregroundStyle(buttonActive ? Color.accentColor : Color(.tertiaryLabelColor))
             }
             .buttonStyle(.borderless)
-            .disabled(!canSend && !isStreaming)
+            .disabled(!buttonActive)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -56,6 +61,10 @@ struct ChatInput: View {
 
     private var canSend: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var buttonActive: Bool {
+        isStreaming ? onStop != nil : canSend
     }
 }
 

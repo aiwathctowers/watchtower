@@ -4,11 +4,26 @@ enum Constants {
     static let configPath = NSString("~/.config/watchtower/config.yaml").expandingTildeInPath
     static let databasePath = NSString("~/.local/share/watchtower").expandingTildeInPath
     static let bundleID = "com.watchtower.desktop"
+    static let configDir = NSString("~/.config/watchtower").expandingTildeInPath
+
+    /// Safe working directory for subprocesses — avoids TCC prompts for ~/Music, ~/Downloads etc.
+    /// Uses ~/.config/watchtower (already ours, not TCC-protected).
+    nonisolated static func processWorkingDirectory() -> URL {
+        let dir = configDir
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: dir) {
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+        return URL(fileURLWithPath: dir)
+    }
 
     /// App version — reads from Info.plist (set at build time), falls back to hardcoded default.
     static let appVersion: String = {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
     }()
+
+    /// UserDefaults key for tracking whether initial pipelines have completed.
+    static let pipelinesCompletedKey = "pipelines_completed"
 
     enum NotificationCategory {
         static let decision = "DECISION"
@@ -103,7 +118,9 @@ enum Constants {
                 let shell = env["SHELL"] ?? "/bin/zsh"
                 let pathProc = Process()
                 pathProc.executableURL = URL(fileURLWithPath: shell)
-                pathProc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+                let configDir = NSString("~/.config/watchtower").expandingTildeInPath
+                try? FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
+                pathProc.currentDirectoryURL = URL(fileURLWithPath: configDir)
                 pathProc.arguments = ["-lc", "echo $PATH"]
                 let pathPipe = Pipe()
                 pathProc.standardOutput = pathPipe

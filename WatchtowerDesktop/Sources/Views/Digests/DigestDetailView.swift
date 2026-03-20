@@ -75,9 +75,18 @@ struct DigestDetailView: View {
                     .background(typeColor.opacity(0.12), in: Capsule())
 
                 if let name = channelName {
-                    Text("#\(name)")
-                        .font(.title3)
-                        .fontWeight(.semibold)
+                    if let url = viewModel.slackChannelURL(channelID: digest.channelID) {
+                        Link(destination: url) {
+                            Text("#\(name)")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderless)
+                    } else {
+                        Text("#\(name)")
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                    }
                 } else {
                     Text("Cross-channel")
                         .font(.title3)
@@ -116,14 +125,7 @@ struct DigestDetailView: View {
 
             // Action buttons
             HStack(spacing: 12) {
-                if !digest.channelID.isEmpty,
-                   let url = viewModel.slackChannelURL(channelID: digest.channelID) {
-                    Link(destination: url) {
-                        Label("Open in Slack", systemImage: "arrow.up.right.square")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                }
+                // Channel link moved to header title
 
                 Button {
                     showCreateTrack = true

@@ -1,12 +1,13 @@
 import Foundation
 
-/// Manages background pipeline tasks (digests, tracks) after onboarding sync.
+/// Manages background pipeline tasks (digests, tracks, people, guide) after onboarding sync.
 @MainActor
 @Observable
 final class BackgroundTaskManager {
     enum TaskKind: String, CaseIterable, Identifiable {
         case digests
         case tracks
+        case people
 
         var id: String { rawValue }
 
@@ -14,6 +15,7 @@ final class BackgroundTaskManager {
             switch self {
             case .digests: "Generating Digests"
             case .tracks: "Generating Tracks"
+            case .people: "Generating People Cards"
             }
         }
 
@@ -21,6 +23,7 @@ final class BackgroundTaskManager {
             switch self {
             case .digests: "doc.text.magnifyingglass"
             case .tracks: "checklist"
+            case .people: "person.2.circle"
             }
         }
 
@@ -28,6 +31,7 @@ final class BackgroundTaskManager {
             switch self {
             case .digests: ["digest", "generate", "--progress-json"]
             case .tracks: ["tracks", "generate", "--progress-json"]
+            case .people: ["people", "generate", "--progress-json"]
             }
         }
     }
@@ -80,21 +84,29 @@ final class BackgroundTaskManager {
 
     private var runningProcess: Process?
 
-    /// Start all background pipelines sequentially (digests first, then tracks).
-    func startPipelines() {
-        // Initialize task states
+    /// Start all background pipelines: digests first, then tracks + people in parallel, then daemon.
+    func startPipelines(legacyPeople: Bool = false) {
+        // Initialize task states for active pipelines
         for kind in TaskKind.allCases {
             tasks[kind] = TaskState()
         }
 
         Task {
+            // Phase 1: digests (tracks depend on digest decisions)
             await runTask(.digests)
-            await runTask(.tracks)
 
-            // Start daemon after all pipelines complete
+            // Phase 2: tracks + people in parallel
+            async let tracksResult: Void = runTask(.tracks)
+            async let peopleResult: Void = runTask(.people)
+            _ = await (tracksResult, peopleResult)
+
+            // Phase 3: start daemon after all pipelines complete
             if let path = Constants.findCLIPath() {
                 await Self.runCLIFireAndForget(path: path, arguments: ["sync", "--daemon", "--detach"])
             }
+
+            // Mark pipelines as completed for restart detection
+            UserDefaults.standard.set(true, forKey: Constants.pipelinesCompletedKey)
         }
     }
 
@@ -214,7 +226,7 @@ final class BackgroundTaskManager {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
-            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            process.currentDirectoryURL = Constants.processWorkingDirectory()
             process.arguments = arguments
             process.environment = Constants.resolvedEnvironment()
             process.standardOutput = FileHandle.nullDevice

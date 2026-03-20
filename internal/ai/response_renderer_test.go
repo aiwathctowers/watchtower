@@ -72,14 +72,14 @@ func setupRendererDB(t *testing.T) (*db.DB, time.Time) {
 
 func TestNewResponseRenderer(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 	assert.NotNil(t, rr)
 	assert.Equal(t, "test-corp", rr.domain)
 }
 
 func TestExtractRefs_SingleRef(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := rr.extractRefs("Alice mentioned in #engineering 2025-02-26 14:30 that deployment was ready.")
 	require.Len(t, refs, 1)
@@ -94,7 +94,7 @@ func TestExtractRefs_SingleRef(t *testing.T) {
 
 func TestExtractRefs_MultipleRefs(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	text := "In #engineering 2025-02-26 14:30 Alice deployed. Also in #design-team 2025-02-26 14:25 mockups were shared."
 	refs := rr.extractRefs(text)
@@ -105,7 +105,7 @@ func TestExtractRefs_MultipleRefs(t *testing.T) {
 
 func TestExtractRefs_DuplicatesIgnored(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	text := "See #engineering 2025-02-26 14:30 and again #engineering 2025-02-26 14:30 for details."
 	refs := rr.extractRefs(text)
@@ -114,7 +114,7 @@ func TestExtractRefs_DuplicatesIgnored(t *testing.T) {
 
 func TestExtractRefs_NoRefs(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := rr.extractRefs("Just a plain response with no message references.")
 	assert.Nil(t, refs)
@@ -122,7 +122,7 @@ func TestExtractRefs_NoRefs(t *testing.T) {
 
 func TestExtractRefs_InvalidDate(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	// Invalid month 13 — time.Parse will reject it
 	refs := rr.extractRefs("See #engineering 2025-13-26 14:30 for details.")
@@ -131,7 +131,7 @@ func TestExtractRefs_InvalidDate(t *testing.T) {
 
 func TestExtractRefs_ChannelWithUnderscore(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := rr.extractRefs("Check #my_channel 2025-02-26 10:00 for context.")
 	require.Len(t, refs, 1)
@@ -140,7 +140,7 @@ func TestExtractRefs_ChannelWithUnderscore(t *testing.T) {
 
 func TestResolveRefs_Found(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{
@@ -152,13 +152,13 @@ func TestResolveRefs_Found(t *testing.T) {
 
 	resolved := rr.resolveRefs(refs)
 	require.Len(t, resolved, 1)
-	assert.Contains(t, resolved[0].permalink, "test-corp.slack.com")
-	assert.Contains(t, resolved[0].permalink, "C001")
+	assert.Contains(t, resolved[0].permalink, "slack://channel?team=T001")
+	assert.Contains(t, resolved[0].permalink, "id=C001")
 }
 
 func TestResolveRefs_ChannelNotFound(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{
@@ -174,7 +174,7 @@ func TestResolveRefs_ChannelNotFound(t *testing.T) {
 
 func TestResolveRefs_MessageNotFound(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	// Timestamp far from any message
 	refs := []messageRef{
@@ -191,7 +191,7 @@ func TestResolveRefs_MessageNotFound(t *testing.T) {
 
 func TestReplaceRefs(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{
@@ -209,7 +209,7 @@ func TestReplaceRefs(t *testing.T) {
 
 func TestReplaceRefs_NoPermalink(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{
@@ -226,7 +226,7 @@ func TestReplaceRefs_NoPermalink(t *testing.T) {
 
 func TestBuildSourcesSection_WithRefs(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{
@@ -250,7 +250,7 @@ func TestBuildSourcesSection_WithRefs(t *testing.T) {
 
 func TestBuildSourcesSection_NoResolved(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	refs := []messageRef{
 		{channelName: "engineering", permalink: ""},
@@ -261,7 +261,7 @@ func TestBuildSourcesSection_NoResolved(t *testing.T) {
 
 func TestBuildSourcesSection_Empty(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	sources := rr.buildSourcesSection(nil)
 	assert.Empty(t, sources)
@@ -269,7 +269,7 @@ func TestBuildSourcesSection_Empty(t *testing.T) {
 
 func TestRenderMarkdown(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	out, err := rr.renderMarkdown("**bold text** and _italic_")
 	require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestRenderMarkdown(t *testing.T) {
 
 func TestRender_FullPipeline(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	response := "Alice deployed in #engineering 2025-02-26 14:30. The new version is live."
 	out, err := rr.Render(response)
@@ -297,12 +297,12 @@ func TestRender_FullPipeline(t *testing.T) {
 	// Should have a Sources section with the resolved reference
 	assert.Contains(t, plain, "Sources:")
 	assert.Contains(t, plain, "#engineering 2025-02-26 14:30")
-	assert.Contains(t, plain, "test-corp.slack.com")
+	assert.Contains(t, plain, "slack://channel?team=T001")
 }
 
 func TestRender_NoRefs(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	response := "Everything looks good, no specific messages to reference."
 	out, err := rr.Render(response)
@@ -315,7 +315,7 @@ func TestRender_NoRefs(t *testing.T) {
 
 func TestRender_UnresolvableRef(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	response := "Check #nonexistent-channel 2025-02-26 14:30 for details."
 	out, err := rr.Render(response)
@@ -329,7 +329,7 @@ func TestRender_UnresolvableRef(t *testing.T) {
 
 func TestRender_MultipleRefsPartialResolve(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	response := "In #engineering 2025-02-26 14:30 and #nonexistent 2025-02-26 10:00 something happened."
 	out, err := rr.Render(response)
@@ -393,7 +393,7 @@ func TestRefPattern(t *testing.T) {
 
 func TestRender_EmptyResponse(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	out, err := rr.Render("")
 	require.NoError(t, err)
@@ -402,7 +402,7 @@ func TestRender_EmptyResponse(t *testing.T) {
 
 func TestRender_MarkdownPreserved(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	response := "## Summary\n\n- Item 1\n- Item 2\n\n**Important:** Check #engineering 2025-02-26 14:30."
 	out, err := rr.Render(response)
@@ -419,7 +419,7 @@ func TestRender_MarkdownPreserved(t *testing.T) {
 
 func TestExtractRefs_MultilineText(t *testing.T) {
 	database, _ := setupRendererDB(t)
-	rr := NewResponseRenderer(database, "test-corp")
+	rr := NewResponseRenderer(database, "test-corp", "T001")
 
 	text := strings.Join([]string{
 		"First paragraph mentioning #engineering 2025-02-26 14:30.",

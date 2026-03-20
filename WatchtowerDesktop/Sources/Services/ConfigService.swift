@@ -15,6 +15,7 @@ final class ConfigService {
     var digestMinMessages: Int?
     var digestLanguage: String?
     var aiModel: String?
+    var analysisLegacyMode: Bool = false
     var claudePath: String?
     var parseError: String?
 
@@ -52,6 +53,10 @@ final class ConfigService {
                 digestModel = digest["model"] as? String
                 digestMinMessages = digest["min_messages"] as? Int
                 digestLanguage = digest["language"] as? String
+            }
+
+            if let analysis = yaml["analysis"] as? [String: Any] {
+                analysisLegacyMode = (analysis["legacy_mode"] as? Bool) ?? false
             }
 
             if let ai = yaml["ai"] as? [String: Any] {

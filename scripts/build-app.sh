@@ -15,10 +15,27 @@ BUILD_DIR="$PROJECT_ROOT/build"
 APP_NAME="Watchtower"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 ENTITLEMENTS="$SCRIPT_DIR/Watchtower.entitlements"
-VERSION="${1:-0.2.0}"
-SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
-echo "==> Building Watchtower v$VERSION (arm64)"
+# Parse flags
+DEV_MODE=false
+VERSION=""
+for arg in "$@"; do
+    case "$arg" in
+        --dev) DEV_MODE=true ;;
+        *) VERSION="$arg" ;;
+    esac
+done
+VERSION="${VERSION:-0.2.0}"
+
+if $DEV_MODE; then
+    SIGN_IDENTITY="-"
+    NOTARIZE_PROFILE=""
+    echo "==> Building Watchtower v$VERSION (arm64) [DEV MODE — no signing/notarization]"
+else
+    SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+    NOTARIZE_PROFILE="${NOTARIZE_PROFILE:-}"
+    echo "==> Building Watchtower v$VERSION (arm64)"
+fi
 echo ""
 
 # Clean previous build
@@ -113,8 +130,10 @@ if [ -f "$DESKTOP_DIR/Resources/AppIcon.icns" ]; then
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP_BUNDLE/Contents/Info.plist"
 fi
 
-# Code sign (ad-hoc for local use, developer cert for distribution)
-if [ "$SIGN_IDENTITY" != "-" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+# Code sign
+if $DEV_MODE; then
+    echo "==> Skipping code signing (dev mode)"
+elif [ "$SIGN_IDENTITY" != "-" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
     echo "==> Code signing with: $SIGN_IDENTITY"
     codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/watchtower"
     codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
@@ -122,6 +141,16 @@ else
     echo "==> Ad-hoc code signing..."
     codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE/Contents/MacOS/watchtower"
     codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+fi
+
+# In dev mode, skip DMG/ZIP/notarization — just output the .app
+if $DEV_MODE; then
+    echo ""
+    echo "==> Done! (dev mode)"
+    echo "    App: $APP_BUNDLE"
+    echo ""
+    echo "    To run: open $APP_BUNDLE"
+    exit 0
 fi
 
 # Create DMG
@@ -149,10 +178,12 @@ if command -v create-dmg &>/dev/null; then
         --app-drop-link 450 185 \
         --no-internet-enable \
         "$DMG_PATH" \
-        "$DMG_STAGING" || {
-            # create-dmg returns 2 if icon positioning fails (non-fatal)
-            [ $? -eq 2 ] || exit 1
-        }
+        "$DMG_STAGING"
+    dmg_rc=$?
+    if [ "$dmg_rc" -ne 0 ] && [ "$dmg_rc" -ne 2 ]; then
+        echo "ERROR: create-dmg failed with exit code $dmg_rc"
+        exit 1
+    fi
 else
     # Fallback: hdiutil (always available on macOS)
     hdiutil create \
@@ -174,6 +205,69 @@ cd "$BUILD_DIR"
 ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_NAME"
 ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
 
+# Notarize if credentials are configured
+if [ "$SIGN_IDENTITY" != "-" ] && [ -n "$NOTARIZE_PROFILE" ]; then
+    echo "==> Notarizing ZIP..."
+    xcrun notarytool submit "$ZIP_NAME" \
+        --keychain-profile "$NOTARIZE_PROFILE" \
+        --wait
+
+    echo "==> Stapling app bundle..."
+    xcrun stapler staple "$APP_BUNDLE"
+
+    # Re-create DMG with stapled app
+    echo "==> Re-creating DMG with stapled app..."
+    rm -f "$DMG_PATH"
+    DMG_STAGING="$BUILD_DIR/dmg-staging"
+    rm -rf "$DMG_STAGING"
+    mkdir -p "$DMG_STAGING"
+    cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+    ln -s /Applications "$DMG_STAGING/Applications"
+
+    if command -v create-dmg &>/dev/null; then
+        create-dmg \
+            --volname "Watchtower" \
+            --volicon "$APP_BUNDLE/Contents/Resources/AppIcon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "$APP_NAME.app" 150 185 \
+            --icon "Applications" 450 185 \
+            --hide-extension "$APP_NAME.app" \
+            --app-drop-link 450 185 \
+            --no-internet-enable \
+            "$DMG_PATH" \
+            "$DMG_STAGING" || {
+                [ $? -eq 2 ] || exit 1
+            }
+    else
+        hdiutil create \
+            -volname "Watchtower" \
+            -srcfolder "$DMG_STAGING" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH"
+    fi
+    rm -rf "$DMG_STAGING"
+
+    echo "==> Stapling DMG..."
+    xcrun stapler staple "$DMG_PATH"
+
+    # Re-create ZIP with stapled app
+    echo "==> Re-creating ZIP with stapled app..."
+    rm -f "$ZIP_NAME"
+    ditto -c -k --keepParent "$APP_NAME.app" "$ZIP_NAME"
+
+    DMG_SIZE=$(du -h "$DMG_PATH" | cut -f1)
+    ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+else
+    if [ "$SIGN_IDENTITY" = "-" ]; then
+        echo "==> Skipping notarization (ad-hoc signing)"
+    else
+        echo "==> Skipping notarization (NOTARIZE_PROFILE not set)"
+    fi
+fi
+
 # Generate checksums
 echo "==> Generating checksums..."
 CHECKSUMS="$BUILD_DIR/checksums.txt"
@@ -185,6 +279,9 @@ echo "    App:  $APP_BUNDLE"
 echo "    DMG:  $DMG_PATH ($DMG_SIZE)"
 echo "    ZIP:  $BUILD_DIR/$ZIP_NAME ($ZIP_SIZE)  ← auto-update"
 echo "    SHA:  $CHECKSUMS"
+if [ -n "$NOTARIZE_PROFILE" ] && [ "$SIGN_IDENTITY" != "-" ]; then
+    echo "    Notarized & stapled ✓"
+fi
 echo ""
 echo "    Contents:"
 echo "      - WatchtowerDesktop (GUI app)"

@@ -20,6 +20,10 @@ const (
 	TracksUpdate   = "tracks.update"
 	AnalysisUser   = "analysis.user"
 	AnalysisPeriod = "analysis.period"
+	GuideUser      = "guide.user"
+	GuidePeriod    = "guide.period"
+	PeopleReduce   = "people.reduce"
+	PeopleTeam     = "people.team"
 )
 
 // Store loads, caches, and persists prompt templates.

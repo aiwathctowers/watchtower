@@ -26,17 +26,33 @@ type Usage struct {
 
 // Generator generates text responses from a system prompt and user message.
 // The default implementation calls Claude CLI; tests can substitute a mock.
+// sessionID may be empty for the first call; the returned sessionID should be
+// passed to subsequent calls to reuse the same Claude session.
 type Generator interface {
-	Generate(ctx context.Context, systemPrompt, userMessage string) (string, *Usage, error)
+	Generate(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, *Usage, string, error)
 }
 
 // DigestResult is the structured output from Claude for a digest.
 type DigestResult struct {
-	Summary     string       `json:"summary"`
-	Topics      []string     `json:"topics"`
-	Decisions   []Decision   `json:"decisions"`
-	ActionItems []ActionItem `json:"action_items"`
-	KeyMessages []string     `json:"key_messages"`
+	Summary       string          `json:"summary"`
+	Topics        []string        `json:"topics"`
+	Decisions     []Decision      `json:"decisions"`
+	ActionItems   []ActionItem    `json:"action_items"`
+	KeyMessages   []string        `json:"key_messages"`
+	PeopleSignals []PersonSignals `json:"people_signals"`
+}
+
+// PersonSignals holds signals for one person in a channel digest.
+type PersonSignals struct {
+	UserID  string   `json:"user_id"`
+	Signals []Signal `json:"signals"`
+}
+
+// Signal is a typed observation about a person in channel context.
+type Signal struct {
+	Type       string `json:"type"`
+	Detail     string `json:"detail"`
+	EvidenceTS string `json:"evidence_ts,omitempty"`
 }
 
 // Decision represents a decision extracted from messages.
@@ -52,6 +68,13 @@ type ActionItem struct {
 	Text     string `json:"text"`
 	Assignee string `json:"assignee"`
 	Status   string `json:"status"`
+}
+
+// ChainLinker runs the chains pipeline between channel digests and rollups.
+// Defined as an interface to avoid import cycles (chains imports digest).
+type ChainLinker interface {
+	Run(ctx context.Context) (int, error)
+	FormatActiveChainsForPrompt(ctx context.Context) (string, error)
 }
 
 // ProgressFunc is called during digest generation to report progress.
@@ -71,6 +94,15 @@ type Pipeline struct {
 
 	// OnProgress is called to report progress during digest generation.
 	OnProgress ProgressFunc
+
+	// ChainContext is injected by the daemon after chains pipeline runs.
+	// If non-empty, it's prepended to the daily/weekly rollup prompt to make
+	// rollups chain-aware (collapsing chained decisions instead of repeating them).
+	ChainContext string
+
+	// ChainLinker, if set, runs chains pipeline between channel digests and rollups.
+	// Used by `digest generate` to replicate the daemon's phased pipeline.
+	ChainLinker ChainLinker
 
 	// caches populated during a run
 	channelNames map[string]string
@@ -140,6 +172,12 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 
 	p.loadCaches()
 
+	// On first run, process day-by-day for better quality.
+	// Skip if SinceOverride is set (manual run with custom window).
+	if p.SinceOverride == 0 && p.isFirstRun() {
+		return p.runInitialDayByDay(ctx)
+	}
+
 	n, totalUsage, err := p.RunChannelDigests(ctx)
 	if err != nil {
 		return n, totalUsage, err
@@ -149,6 +187,8 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 		return n, totalUsage, ctx.Err()
 	}
 
+	p.runChainLinker(ctx)
+
 	if err := p.RunDailyRollup(ctx); err != nil {
 		p.logger.Printf("digest: daily rollup error: %v", err)
 	}
@@ -156,24 +196,180 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	return n, totalUsage, nil
 }
 
+// RunChannelDigestsOnly runs only channel-level digests (no rollups).
+// Used by daemon to split channel digests from rollups with chains in between.
+func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, error) {
+	if !p.cfg.Digest.Enabled {
+		return 0, nil, nil
+	}
+
+	if removed, err := p.db.DeduplicateDailyDigests(); err != nil {
+		p.logger.Printf("digest: warning: dedup cleanup failed: %v", err)
+	} else if removed > 0 {
+		p.logger.Printf("digest: cleaned up %d duplicate rollup digests", removed)
+	}
+
+	p.loadCaches()
+
+	if p.SinceOverride == 0 && p.isFirstRun() {
+		return p.runInitialDayByDay(ctx)
+	}
+
+	return p.RunChannelDigests(ctx)
+}
+
+// RunRollups runs daily and weekly rollups only (no channel digests).
+// runChainLinker runs the chains pipeline (if configured) and injects chain context for rollups.
+func (p *Pipeline) runChainLinker(ctx context.Context) {
+	if p.ChainLinker == nil || ctx.Err() != nil {
+		return
+	}
+	n, err := p.ChainLinker.Run(ctx)
+	if err != nil {
+		p.logger.Printf("digest: chains error: %v", err)
+	} else if n > 0 {
+		p.logger.Printf("digest: linked %d decision(s) to chains", n)
+	}
+	if chainCtx, err := p.ChainLinker.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
+		p.ChainContext = chainCtx
+	}
+}
+
+// Used by daemon after chains pipeline has linked decisions.
+func (p *Pipeline) RunRollups(ctx context.Context) error {
+	if !p.cfg.Digest.Enabled {
+		return nil
+	}
+
+	p.loadCaches()
+
+	if err := p.RunDailyRollup(ctx); err != nil {
+		return fmt.Errorf("daily rollup: %w", err)
+	}
+
+	return nil
+}
+
+// isFirstRun returns true if no channel digests exist yet.
+func (p *Pipeline) isFirstRun() bool {
+	digests, err := p.db.GetDigests(db.DigestFilter{Type: "channel", Limit: 1})
+	return err != nil || len(digests) == 0
+}
+
+// runInitialDayByDay processes the initial history window day-by-day,
+// generating channel digests + daily rollup for each day, then weekly trends.
+// This produces much better quality than one giant digest per channel.
+func (p *Pipeline) runInitialDayByDay(ctx context.Context) (int, *Usage, error) {
+	days := p.cfg.Sync.InitialHistoryDays
+	if days <= 0 {
+		days = config.DefaultInitialHistDays
+	}
+
+	now := time.Now()
+	totalGenerated := 0
+	totalUsage := &Usage{}
+
+	p.logger.Printf("digest: first run — processing %d days individually", days)
+
+	for d := days; d >= 1; d-- {
+		if ctx.Err() != nil {
+			return totalGenerated, totalUsage, ctx.Err()
+		}
+
+		dayDate := now.AddDate(0, 0, -d)
+		dayStart := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), 0, 0, 0, 0, time.UTC)
+		dayEnd := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day()+1, 0, 0, 0, 0, time.UTC)
+
+		fromUnix := float64(dayStart.Unix())
+		toUnix := float64(dayEnd.Unix())
+
+		if p.OnProgress != nil {
+			p.OnProgress(days-d, days, fmt.Sprintf("Day %d/%d (%s)...", days-d+1, days, dayStart.Format("2006-01-02")))
+		}
+
+		n, usage, err := p.runChannelDigestsForWindow(ctx, fromUnix, toUnix)
+		if err != nil {
+			p.logger.Printf("digest: day %s error: %v", dayStart.Format("2006-01-02"), err)
+			continue
+		}
+
+		totalGenerated += n
+		if usage != nil {
+			totalUsage.InputTokens += usage.InputTokens
+			totalUsage.OutputTokens += usage.OutputTokens
+			totalUsage.CostUSD += usage.CostUSD
+		}
+
+		if n > 0 {
+			if err := p.runDailyRollupForDate(ctx, dayStart); err != nil {
+				p.logger.Printf("digest: daily rollup for %s error: %v", dayStart.Format("2006-01-02"), err)
+			}
+		}
+	}
+
+	// Also process today (partial day).
+	if ctx.Err() == nil {
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		n, usage, err := p.runChannelDigestsForWindow(ctx, float64(todayStart.Unix()), float64(now.Unix()))
+		if err != nil {
+			p.logger.Printf("digest: today error: %v", err)
+		} else {
+			totalGenerated += n
+			if usage != nil {
+				totalUsage.InputTokens += usage.InputTokens
+				totalUsage.OutputTokens += usage.OutputTokens
+				totalUsage.CostUSD += usage.CostUSD
+			}
+			if n > 0 {
+				if err := p.RunDailyRollup(ctx); err != nil {
+					p.logger.Printf("digest: daily rollup error: %v", err)
+				}
+			}
+		}
+	}
+
+	// Link decisions to chains (once, across all days).
+	p.runChainLinker(ctx)
+
+	// Generate weekly trends from all daily rollups.
+	if ctx.Err() == nil {
+		if err := p.RunWeeklyTrends(ctx); err != nil {
+			p.logger.Printf("digest: weekly trends error: %v", err)
+		}
+	}
+
+	p.logger.Printf("digest: initial day-by-day complete: %d digests across %d days", totalGenerated, days)
+	return totalGenerated, totalUsage, nil
+}
+
 // RunChannelDigests generates digests for all channels with new messages
 // since the last digest run. Returns the count and accumulated token usage.
 // Channels are processed in parallel using digest.workers (default 5).
 func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
-	if p.OnProgress != nil {
-		p.OnProgress(0, 0, "Finding channels with new messages...")
-	}
-
 	sinceUnix := p.SinceOverride
 	if sinceUnix == 0 {
 		sinceUnix = p.lastDigestTime()
 	}
 	nowUnix := float64(time.Now().Unix())
+	return p.runChannelDigestsForWindow(ctx, sinceUnix, nowUnix)
+}
+
+// runChannelDigestsForWindow generates channel digests for a specific time window.
+func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, nowUnix float64) (int, *Usage, error) {
+	if p.OnProgress != nil {
+		p.OnProgress(0, 0, "Finding channels with new messages...")
+	}
+
+	p.logger.Printf("digest: window: since=%s now=%s",
+		time.Unix(int64(sinceUnix), 0).Format("2006-01-02 15:04"),
+		time.Unix(int64(nowUnix), 0).Format("2006-01-02 15:04"))
 
 	channels, err := p.db.ChannelsWithNewMessages(sinceUnix)
 	if err != nil {
 		return 0, nil, fmt.Errorf("finding channels with new messages: %w", err)
 	}
+
+	p.logger.Printf("digest: found %d channels with new messages", len(channels))
 
 	if len(channels) == 0 {
 		p.logger.Println("digest: no channels with new messages")
@@ -187,6 +383,8 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 		msgs        []db.Message
 	}
 	var tasks []channelTask
+	skippedBelowMin := 0
+	skippedNoVisible := 0
 	for _, channelID := range channels {
 		msgs, err := p.db.GetMessagesByTimeRange(channelID, sinceUnix, nowUnix)
 		if err != nil {
@@ -197,7 +395,19 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 			p.logger.Printf("digest: warning: #%s hit message limit (%d), digest may be based on partial data",
 				p.channelName(channelID), db.DefaultTimeRangeLimit)
 		}
-		if len(msgs) < p.cfg.Digest.MinMessages {
+		// Count only messages with visible text (skip empty/deleted).
+		visible := 0
+		for _, m := range msgs {
+			if m.Text != "" && !m.IsDeleted {
+				visible++
+			}
+		}
+		if visible < p.cfg.Digest.MinMessages {
+			if visible == 0 && len(msgs) >= p.cfg.Digest.MinMessages {
+				skippedNoVisible++
+			} else {
+				skippedBelowMin++
+			}
 			continue
 		}
 		tasks = append(tasks, channelTask{
@@ -206,6 +416,9 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 			msgs:        msgs,
 		})
 	}
+
+	p.logger.Printf("digest: %d channels pass min_messages=%d, %d skipped (below threshold), %d skipped (no visible text)",
+		len(tasks), p.cfg.Digest.MinMessages, skippedBelowMin, skippedNoVisible)
 
 	if len(tasks) == 0 {
 		p.logger.Println("digest: no channels above min_messages threshold")
@@ -333,13 +546,22 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 	now := time.Now().UTC()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return p.runDailyRollupForDate(ctx, dayStart)
+}
+
+// runDailyRollupForDate generates a daily rollup for the given date.
+func (p *Pipeline) runDailyRollupForDate(ctx context.Context, dayStart time.Time) error {
+	dayEnd := dayStart.Add(24*time.Hour - time.Second)
+	fromUnix := float64(dayStart.Unix())
+	toUnix := float64(dayEnd.Unix())
 
 	channelDigests, err := p.db.GetDigests(db.DigestFilter{
 		Type:     "channel",
-		FromUnix: float64(dayStart.Unix()),
+		FromUnix: fromUnix,
+		ToUnix:   toUnix,
 	})
 	if err != nil {
-		return fmt.Errorf("getting today's channel digests: %w", err)
+		return fmt.Errorf("getting channel digests for %s: %w", dayStart.Format("2006-01-02"), err)
 	}
 
 	if len(channelDigests) < 2 {
@@ -359,11 +581,18 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 		sb.WriteString("\n")
 	}
 
+	// Prepend chain context if available (decisions grouped into chains are shown
+	// as chain updates rather than repeated individually).
+	channelInput := sb.String()
+	if p.ChainContext != "" {
+		channelInput = p.ChainContext + "\n" + channelInput
+	}
+
 	dateStr := dayStart.Format("2006-01-02")
 	tmpl, pv := p.getPrompt(prompts.DigestDaily, dailyRollupPrompt)
-	prompt := fmt.Sprintf(tmpl, dateStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
+	prompt := fmt.Sprintf(tmpl, dateStr, p.formatProfileContext(), p.languageInstruction(), channelInput)
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.daily"), "", prompt, "")
 	if err != nil {
 		return fmt.Errorf("generating daily rollup: %w", err)
 	}
@@ -373,11 +602,6 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 		return fmt.Errorf("parsing daily rollup: %w", err)
 	}
 
-	fromUnix := float64(dayStart.Unix())
-	// Use end-of-day as period_to so multiple runs on the same day
-	// upsert into the same row instead of creating duplicates.
-	dayEnd := dayStart.Add(24*time.Hour - time.Second)
-	toUnix := float64(dayEnd.Unix())
 	totalMsgs := 0
 	for _, d := range channelDigests {
 		totalMsgs += d.MessageCount
@@ -419,7 +643,7 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 	tmpl, pv := p.getPrompt(prompts.DigestWeekly, weeklyTrendsPrompt)
 	prompt := fmt.Sprintf(tmpl, now.Format("2006-01-02"), fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.weekly"), "", prompt, "")
 	if err != nil {
 		return fmt.Errorf("generating weekly trends: %w", err)
 	}
@@ -483,7 +707,7 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 	tmpl, _ := p.getPrompt(prompts.DigestPeriod, periodSummaryPrompt)
 	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.period"), "", prompt, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating period summary: %w", err)
 	}
@@ -512,7 +736,7 @@ func (p *Pipeline) generateChannelDigest(ctx context.Context, channelName string
 	tmpl, pv := p.getPrompt(prompts.DigestChannel, channelDigestPrompt)
 	prompt := fmt.Sprintf(tmpl, channelName, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), formatted)
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.channel"), "", prompt, "")
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("claude call failed: %w", err)
 	}
@@ -525,6 +749,7 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 	topics, _ := json.Marshal(result.Topics)
 	decisions, _ := json.Marshal(result.Decisions)
 	actionItems, _ := json.Marshal(result.ActionItems)
+	peopleSignals, _ := json.Marshal(result.PeopleSignals)
 
 	d := db.Digest{
 		ChannelID:     channelID,
@@ -535,6 +760,7 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 		Topics:        string(topics),
 		Decisions:     string(decisions),
 		ActionItems:   string(actionItems),
+		PeopleSignals: string(peopleSignals),
 		MessageCount:  msgCount,
 		Model:         p.cfg.Digest.Model,
 		PromptVersion: promptVersion,
@@ -553,10 +779,18 @@ func (p *Pipeline) lastDigestTime() float64 {
 	// Find the latest channel digest period_to
 	digests, err := p.db.GetDigests(db.DigestFilter{Type: "channel", Limit: 1})
 	if err == nil && len(digests) > 0 {
+		t := time.Unix(int64(digests[0].PeriodTo), 0)
+		p.logger.Printf("digest: last digest time: %s", t.Format("2006-01-02 15:04"))
 		return digests[0].PeriodTo
 	}
-	// Default: 24 hours ago
-	return float64(time.Now().Add(-24 * time.Hour).Unix())
+	// First run: use initial_history_days from config (set during onboarding)
+	days := p.cfg.Sync.InitialHistoryDays
+	if days <= 0 {
+		days = config.DefaultInitialHistDays
+	}
+	since := float64(time.Now().AddDate(0, 0, -days).Unix())
+	p.logger.Printf("digest: first run — looking back %d days, since=%s (%.0f)", days, time.Unix(int64(since), 0).Format("2006-01-02 15:04"), since)
+	return since
 }
 
 func (p *Pipeline) formatMessages(msgs []db.Message) string {
@@ -573,7 +807,7 @@ func (p *Pipeline) formatMessages(msgs []db.Message) string {
 			text = strings.ReplaceAll(text, "===", "= = =")
 			text = strings.ReplaceAll(text, "---", "- - -")
 		}
-		fmt.Fprintf(&sb, "[%s] @%s: %s\n", ts, userName, text)
+		fmt.Fprintf(&sb, "[%s @%s (%s)] %s\n", ts, userName, m.UserID, text)
 	}
 	return sb.String()
 }

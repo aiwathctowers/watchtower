@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActivityFeed: View {
     let messages: [MessageWithContext]
+    var slackChannelURL: ((String) -> URL?)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -41,10 +42,20 @@ struct ActivityFeed: View {
                     ActivityRow(message: msg)
                 }
             } header: {
-                Text("#\(channelName)")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(Color.accentColor)
+                let channelID = grouped[channelName]?.first?.channelID ?? ""
+                if let url = slackChannelURL?(channelID) {
+                    Link(destination: url) {
+                        Text("#\(channelName)")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Text("#\(channelName)")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
+                }
             }
         }
     }

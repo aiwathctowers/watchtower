@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
@@ -243,16 +244,23 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	if days <= 0 {
 		days = 1
 	}
-	sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
 	logger := log.New(io.Discard, "", 0)
 	if flagVerbose {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
-	pipe.SinceOverride = sinceUnix
+	pipe.ChainLinker = chains.New(database, cfg, gen, logger)
+
+	// Only set SinceOverride when --since was explicitly passed.
+	// Without it, Run() uses isFirstRun() → runInitialDayByDay() for full history.
+	if cmd.Flags().Changed("since") {
+		sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
+		pipe.SinceOverride = sinceUnix
+	}
 
 	if digestGenFlagProgressJSON {
 		type pj struct {
@@ -273,6 +281,15 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			emit(pj{Pipeline: "digest", Done: done, Total: total, Status: status})
 		}
 		n, usage, err := pipe.Run(cmd.Context())
+
+		// Auto-mark digests as read based on Slack read cursors
+		// (important for onboarding where digest generate runs standalone).
+		if markDigests, _, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
+			logger.Printf("warning: auto-mark read failed: %v", markErr)
+		} else if markDigests > 0 {
+			logger.Printf("auto-marked %d digests as read (based on Slack read state)", markDigests)
+		}
+
 		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n}
 		if usage != nil {
 			final.InputTokens = usage.InputTokens
@@ -292,6 +309,13 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		spinner.Stop("failed")
 		return fmt.Errorf("digest pipeline: %w", err)
+	}
+
+	// Auto-mark digests as read based on Slack read cursors.
+	if markDigests, _, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
+		logger.Printf("warning: auto-mark read failed: %v", markErr)
+	} else if markDigests > 0 {
+		logger.Printf("auto-marked %d digests as read (based on Slack read state)", markDigests)
 	}
 
 	if n == 0 {
@@ -450,7 +474,8 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
 
 	result, usage, err := pipe.RunPeriodSummary(cmd.Context(), from, to)

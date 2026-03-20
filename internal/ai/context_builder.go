@@ -21,6 +21,7 @@ type ContextBuilder struct {
 	db     *db.DB
 	budget int    // total token budget
 	domain string // workspace domain for permalinks
+	teamID string // workspace team ID for deep links
 	now    time.Time
 
 	// Lookup caches to avoid repeated DB queries for the same entity
@@ -29,7 +30,7 @@ type ContextBuilder struct {
 }
 
 // NewContextBuilder creates a ContextBuilder.
-func NewContextBuilder(database *db.DB, contextBudget int, domain string) *ContextBuilder {
+func NewContextBuilder(database *db.DB, contextBudget int, domain, teamID string) *ContextBuilder {
 	if contextBudget <= 0 {
 		contextBudget = 150000
 	}
@@ -37,6 +38,7 @@ func NewContextBuilder(database *db.DB, contextBudget int, domain string) *Conte
 		db:               database,
 		budget:           contextBudget,
 		domain:           domain,
+		teamID:           teamID,
 		now:              time.Now(),
 		channelNameCache: make(map[string]string),
 		userCache:        make(map[string]*db.User),
@@ -643,8 +645,8 @@ func (cb *ContextBuilder) formatMessage(channelName string, msg db.Message) stri
 	line := fmt.Sprintf("#%s | %s | %s: %s", channelName, timeStr, userLabel, text)
 	if msg.Permalink != "" {
 		line += " [" + msg.Permalink + "]"
-	} else if cb.domain != "" {
-		line += " [" + watchtowerslack.GeneratePermalink(cb.domain, msg.ChannelID, msg.TS) + "]"
+	} else if cb.teamID != "" {
+		line += " [" + watchtowerslack.GenerateDeeplink(cb.teamID, msg.ChannelID, msg.TS) + "]"
 	}
 	return line + "\n"
 }

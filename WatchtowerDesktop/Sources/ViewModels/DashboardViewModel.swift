@@ -10,11 +10,17 @@ final class DashboardViewModel {
     var dbFileSize: Int64 = 0
     var isLoading = false
     var errorMessage: String?
+    private(set) var workspaceTeamID: String?
 
     private let dbManager: DatabaseManager
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    func slackChannelURL(channelID: String) -> URL? {
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)")
     }
 
     func load() async {
@@ -33,6 +39,7 @@ final class DashboardViewModel {
             workspace = ws
             stats = st
             recentActivity = activity
+            workspaceTeamID = ws?.id
             dbFileSize = dbManager.fileSize
             errorMessage = nil
         } catch {

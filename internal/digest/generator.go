@@ -8,11 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"watchtower/internal/claude"
-	"watchtower/internal/sessions"
 )
 
 // limitedWriter wraps a writer and stops writing after limit bytes.
@@ -43,19 +43,13 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 // ClaudeGenerator implements Generator by calling the Claude Code CLI.
 type ClaudeGenerator struct {
 	model      string
-	claudePath string                // optional override from config (claude_path)
-	pool       *sessions.SessionPool // optional session pool for reuse
+	claudePath string // optional override from config (claude_path)
 }
 
 // NewClaudeGenerator creates a generator that uses the Claude CLI.
 // claudePath is an optional explicit path to the claude binary; pass "" for auto-detection.
 func NewClaudeGenerator(model, claudePath string) *ClaudeGenerator {
-	return &ClaudeGenerator{model: model, claudePath: claudePath, pool: nil}
-}
-
-// NewClaudeGeneratorWithPool creates a generator with a session pool for session reuse.
-func NewClaudeGeneratorWithPool(model, claudePath string, pool *sessions.SessionPool) *ClaudeGenerator {
-	return &ClaudeGenerator{model: model, claudePath: claudePath, pool: pool}
+	return &ClaudeGenerator{model: model, claudePath: claudePath}
 }
 
 // cliUsage is the nested usage object in the Claude CLI response.
@@ -109,32 +103,20 @@ func parseCLIOutput(output []byte) (*cliResponse, error) {
 	return nil, fmt.Errorf("unexpected claude CLI output format: %.200s", string(trimmed))
 }
 
-// Generate calls Claude CLI with the given prompt and returns the response text
-// along with token usage statistics. If a session pool is available, reuses sessions
-// via --resume; otherwise creates new sessions with --system-prompt.
-func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessage string) (string, *Usage, error) {
-	// Acquire a session worker from the pool if available
-	var worker *sessions.Worker
-	if g.pool != nil {
-		w, err := g.pool.Acquire(ctx)
-		if err != nil {
-			// Fallback to --system-prompt if pool unavailable
-			return g.generateWithoutPool(ctx, systemPrompt, userMessage)
-		}
-		worker = w
-		defer g.pool.Release(worker)
-	}
-
+// Generate calls Claude CLI with the given prompt and returns the response text,
+// token usage statistics, and the session ID for reuse.
+// Each call creates a fresh session with --no-session-persistence to avoid
+// disk clutter. The sessionID parameter is accepted for interface compatibility
+// but ignored — session reuse via --resume is not supported by the current CLI.
+func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, *Usage, string, error) {
 	args := []string{
 		"-p", userMessage,
 		"--output-format", "json",
 		"--model", g.model,
+		"--no-session-persistence",
 	}
 
-	// Use --resume if we have a session from the pool; otherwise --system-prompt
-	if worker != nil && worker.SessionID != "" {
-		args = append(args, "--resume", worker.SessionID)
-	} else if systemPrompt != "" {
+	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
 	}
 
@@ -145,8 +127,17 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 		return cmd.Process.Signal(os.Interrupt)
 	}
 	cmd.WaitDelay = 5 * time.Second
-	// Run from a temp dir so the CLI doesn't load project-specific settings.
-	cmd.Dir = os.TempDir()
+	// Run from ~/.config/watchtower as a stable working directory.
+	configDir, _ := os.UserHomeDir()
+	if configDir != "" {
+		configDir = filepath.Join(configDir, ".config", "watchtower")
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			configDir = os.TempDir()
+		}
+		cmd.Dir = configDir
+	} else {
+		cmd.Dir = os.TempDir()
+	}
 	// Build a clean environment:
 	// - Enrich PATH so `#!/usr/bin/env node` resolves from macOS .app bundles.
 	// - Remove CLAUDECODE to avoid "nested session" detection when launched
@@ -171,7 +162,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 	if err != nil {
 		if execErr, ok := err.(*exec.Error); ok {
 			if execErr.Err == exec.ErrNotFound {
-				return "", nil, fmt.Errorf("claude CLI not found at %q (PATH=%s) — install Claude Code first", claudeBin, os.Getenv("PATH"))
+				return "", nil, "", fmt.Errorf("claude CLI not found at %q (PATH=%s) — install Claude Code first", claudeBin, os.Getenv("PATH"))
 			}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -185,117 +176,32 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 				stderrMsg = stdoutMsg
 			}
 			if stderrMsg != "" {
-				return "", nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderrMsg)
+				return "", nil, "", fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderrMsg)
 			}
-			return "", nil, fmt.Errorf("claude CLI failed with exit code %d", exitErr.ExitCode())
+			return "", nil, "", fmt.Errorf("claude CLI failed with exit code %d", exitErr.ExitCode())
 		}
-		return "", nil, fmt.Errorf("claude CLI error: %w", err)
+		return "", nil, "", fmt.Errorf("claude CLI error: %w", err)
 	}
 
 	resp, err := parseCLIOutput(output)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 
 	if resp.IsError {
-		return "", nil, fmt.Errorf("claude returned error: %s", resp.Result)
+		return "", nil, "", fmt.Errorf("claude returned error: %s", resp.Result)
 	}
 
 	if strings.TrimSpace(resp.Result) == "" {
-		return "", nil, fmt.Errorf("claude returned empty result (turns=%d, tokens=%d+%d)", resp.NumTurns, resp.Usage.InputTokens, resp.Usage.OutputTokens)
-	}
-
-	// Update worker's session ID if using a pool (for future reuse)
-	if worker != nil && resp.SessionID != "" {
-		worker.SessionID = resp.SessionID
+		return "", nil, "", fmt.Errorf("claude returned empty result (turns=%d, tokens=%d+%d)", resp.NumTurns, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	}
 
 	usage := &Usage{
-		InputTokens:  resp.Usage.InputTokens,
+		InputTokens:  resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
 		OutputTokens: resp.Usage.OutputTokens,
 		CostUSD:      resp.CostUSD,
 	}
 
-	return resp.Result, usage, nil
+	return resp.Result, usage, resp.SessionID, nil
 }
 
-// generateWithoutPool is the fallback implementation for when no pool is available.
-// It's identical to the original Generate logic (--system-prompt mode).
-func (g *ClaudeGenerator) generateWithoutPool(ctx context.Context, systemPrompt, userMessage string) (string, *Usage, error) {
-	args := []string{
-		"-p", userMessage,
-		"--output-format", "json",
-		"--model", g.model,
-	}
-	if systemPrompt != "" {
-		args = append(args, "--system-prompt", systemPrompt)
-	}
-
-	claudeBin := claude.FindBinary(g.claudePath)
-	cmd := exec.CommandContext(ctx, claudeBin, args...)
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(os.Interrupt)
-	}
-	cmd.WaitDelay = 5 * time.Second
-	cmd.Dir = os.TempDir()
-	richPATH := "PATH=" + claude.RichPATH()
-	var env []string
-	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "CLAUDECODE=") {
-			continue
-		}
-		if strings.HasPrefix(e, "PATH=") {
-			continue
-		}
-		env = append(env, e)
-	}
-	cmd.Env = append(env, richPATH)
-
-	var stderrBuf strings.Builder
-	cmd.Stderr = &limitedWriter{w: &stderrBuf, limit: 64 * 1024}
-
-	output, err := cmd.Output()
-	if err != nil {
-		if execErr, ok := err.(*exec.Error); ok {
-			if execErr.Err == exec.ErrNotFound {
-				return "", nil, fmt.Errorf("claude CLI not found at %q (PATH=%s) — install Claude Code first", claudeBin, os.Getenv("PATH"))
-			}
-		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderrMsg := strings.TrimSpace(stderrBuf.String())
-			if stderrMsg == "" {
-				stderrMsg = strings.TrimSpace(string(exitErr.Stderr))
-			}
-			stdoutMsg := strings.TrimSpace(string(output))
-			if stderrMsg == "" && stdoutMsg != "" {
-				stderrMsg = stdoutMsg
-			}
-			if stderrMsg != "" {
-				return "", nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderrMsg)
-			}
-			return "", nil, fmt.Errorf("claude CLI failed with exit code %d", exitErr.ExitCode())
-		}
-		return "", nil, fmt.Errorf("claude CLI error: %w", err)
-	}
-
-	resp, err := parseCLIOutput(output)
-	if err != nil {
-		return "", nil, err
-	}
-
-	if resp.IsError {
-		return "", nil, fmt.Errorf("claude returned error: %s", resp.Result)
-	}
-
-	if strings.TrimSpace(resp.Result) == "" {
-		return "", nil, fmt.Errorf("claude returned empty result (turns=%d, tokens=%d+%d)", resp.NumTurns, resp.Usage.InputTokens, resp.Usage.OutputTokens)
-	}
-
-	usage := &Usage{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
-		CostUSD:      resp.CostUSD,
-	}
-
-	return resp.Result, usage, nil
-}

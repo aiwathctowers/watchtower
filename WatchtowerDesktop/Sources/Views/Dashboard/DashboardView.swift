@@ -24,7 +24,10 @@ struct DashboardView: View {
                         StatsCard(title: "Digests", value: "\(vm.stats.digestCount)", icon: "doc.text")
                     }
 
-                    ActivityFeed(messages: vm.recentActivity)
+                    ActivityFeed(
+                        messages: vm.recentActivity,
+                        slackChannelURL: { vm.slackChannelURL(channelID: $0) }
+                    )
 
                     if let error = vm.errorMessage {
                         Text(error)

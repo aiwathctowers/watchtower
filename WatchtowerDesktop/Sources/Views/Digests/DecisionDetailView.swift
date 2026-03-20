@@ -23,9 +23,18 @@ struct DecisionDetailView: View {
                     }
 
                     if let name = entry.channelName {
-                        Text("#\(name)")
-                            .font(.title3)
-                            .fontWeight(.semibold)
+                        if let url = viewModel.slackChannelURL(channelID: entry.channelID) {
+                            Link(destination: url) {
+                                Text("#\(name)")
+                                    .font(.title3)
+                                    .fontWeight(.semibold)
+                            }
+                            .buttonStyle(.borderless)
+                        } else {
+                            Text("#\(name)")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                        }
                     } else {
                         Text("Cross-channel")
                             .font(.title3)
@@ -114,14 +123,6 @@ struct DecisionDetailView: View {
                 // Open channel in Slack + mark read
                 if !entry.channelID.isEmpty {
                     HStack(spacing: 12) {
-                        if let url = viewModel.slackChannelURL(channelID: entry.channelID) {
-                            Link(destination: url) {
-                                Label("Open channel in Slack", systemImage: "number")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                        }
-
                         Button {
                             markChannelRead()
                         } label: {

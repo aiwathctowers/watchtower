@@ -148,7 +148,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 		assert.Equal(t, IntentChannel, query.Intent)
 		assert.Contains(t, query.Channels, "general")
 
-		cb := NewContextBuilder(database, 150000, "my-company")
+		cb := NewContextBuilder(database, 150000, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -169,7 +169,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 		assert.Equal(t, IntentPerson, query.Intent)
 		assert.Contains(t, query.Users, "alice")
 
-		cb := NewContextBuilder(database, 150000, "my-company")
+		cb := NewContextBuilder(database, 150000, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -187,7 +187,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 		assert.Equal(t, IntentSearch, query.Intent)
 		assert.Contains(t, query.Topics, "deployment")
 
-		cb := NewContextBuilder(database, 150000, "my-company")
+		cb := NewContextBuilder(database, 150000, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -206,7 +206,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 
 		assert.Equal(t, IntentCatchup, query.Intent)
 
-		cb := NewContextBuilder(database, 150000, "my-company")
+		cb := NewContextBuilder(database, 150000, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -222,7 +222,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 			To:   refTime,
 		}
 
-		cb := NewContextBuilder(database, 500, "my-company")
+		cb := NewContextBuilder(database, 500, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -237,7 +237,7 @@ func TestIntegrationAIQueryPipeline(t *testing.T) {
 			To:   refTime,
 		}
 
-		cb := NewContextBuilder(database, 150000, "my-company")
+		cb := NewContextBuilder(database, 150000, "my-company", "T001")
 		ctx, err := cb.Build(query)
 		require.NoError(t, err)
 
@@ -257,7 +257,7 @@ func TestIntegrationAIPromptAssembly(t *testing.T) {
 		To:   refTime,
 	}
 
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
 	assert.Contains(t, systemPrompt, "Watchtower")
 	assert.Contains(t, systemPrompt, "my-company")
 	assert.Contains(t, systemPrompt, "sqlite3")
@@ -274,7 +274,7 @@ func TestIntegrationAIPromptAssembly(t *testing.T) {
 func TestIntegrationResponseRenderer(t *testing.T) {
 	database, refTime := setupIntegrationDB(t)
 
-	renderer := NewResponseRenderer(database, "my-company")
+	renderer := NewResponseRenderer(database, "my-company", "T001")
 
 	// Format a timestamp that matches a message in the test DB
 	msgTime := refTime.Add(-2 * time.Hour).UTC()
@@ -285,7 +285,7 @@ func TestIntegrationResponseRenderer(t *testing.T) {
 	require.NoError(t, err)
 
 	// The renderer should resolve the reference to a Slack permalink
-	assert.Contains(t, rendered, "my-company.slack.com")
+	assert.Contains(t, rendered, "slack://channel?team=T001")
 	assert.Contains(t, rendered, "Sources")
 }
 
@@ -320,7 +320,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	assert.Contains(t, query.Channels, "general")
 
 	// Step 3: Build prompts (DB path + schema in system prompt, no pre-loaded context)
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
 	timeHints := FormatTimeHints(query)
 	userMessage := AssembleUserMessage(question, timeHints)
 
@@ -345,7 +345,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	assert.Contains(t, response, "Bob")
 
 	// Step 5: Render the response
-	renderer := NewResponseRenderer(database, "my-company")
+	renderer := NewResponseRenderer(database, "my-company", "T001")
 	rendered, err := renderer.Render(response)
 	require.NoError(t, err)
 	assert.NotEmpty(t, rendered)
@@ -365,7 +365,7 @@ func TestIntegrationEndToEndStreaming(t *testing.T) {
 		To:   refTime,
 	}
 
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
 	timeHints := FormatTimeHints(query)
 	userMessage := AssembleUserMessage(question, timeHints)
 

@@ -47,28 +47,28 @@ Full-text search:
 Thread replies:
   SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = 'C123' AND m.thread_ts = '1234567890.123456' ORDER BY m.ts_unix ASC;
 
-Permalink format: https://%s.slack.com/archives/{channel_id}/p{ts_without_dots}
-  Example: ts "1740577800.000100" → p1740577800000100
+Deep link format: slack://channel?team=%s&id={channel_id}&message={ts}
+  Example: ts "1740577800.000100" → slack://channel?team=%s&id=C123&message=1740577800.000100
 
 === WORKFLOW ===
 1. Run a SQL query using the read_query MCP tool
 2. If results are empty or insufficient, broaden the query (wider time range, different search terms)
 3. Analyze the actual message content from query results
 4. Respond with insights, organized by channel or topic
-5. Include Slack permalinks for key messages
+5. Include Slack deep links for key messages
 
 === LINKING RULES ===
 ALWAYS include Slack links as descriptive markdown — never bare URLs.
 
-Channel link: [#channel-name](https://%s.slack.com/archives/{channel_id})
-  Example: [#engineering](https://%s.slack.com/archives/C0123EXAMPLE)
+Channel link: [#channel-name](slack://channel?team=%s&id={channel_id})
+  Example: [#engineering](slack://channel?team=%s&id=C0123EXAMPLE)
 
-Message link: [описательный текст](https://%s.slack.com/archives/{channel_id}/p{ts_no_dots})
-  To convert ts to permalink: remove the dot. "1740577800.000100" → "p1740577800000100"
+Message link: [описательный текст](slack://channel?team=%s&id={channel_id}&message={ts})
+  Use the raw ts value (with dot). Example: "1740577800.000100" → message=1740577800.000100
   Examples:
-    [сообщение про деплой](https://...slack.com/archives/C123/p1740577800000100)
-    [тред про отмену вывода](https://...slack.com/archives/C456/p1700000001000000)
-    [обсуждение в #general](https://...slack.com/archives/C789/p1740577800000100)
+    [сообщение про деплой](slack://channel?team=%s&id=C123&message=1740577800.000100)
+    [тред про отмену вывода](slack://channel?team=%s&id=C456&message=1700000001.000000)
+    [обсуждение в #general](slack://channel?team=%s&id=C789&message=1740577800.000100)
 
 Rules:
 - Every channel mention (#name) MUST be a link to that channel
@@ -89,15 +89,19 @@ var (
 )
 
 // BuildSystemPrompt generates the system prompt with database access context.
-func BuildSystemPrompt(workspaceName, domain, dbPath, schema string) string {
+func BuildSystemPrompt(workspaceName, domain, teamID, dbPath, schema string) string {
 	// Sanitize workspace name and domain to prevent prompt injection
 	safeName := safeNameRe.ReplaceAllString(workspaceName, "")
 	safeDomain := safeDomainRe.ReplaceAllString(domain, "")
+	safeTeamID := safeDomainRe.ReplaceAllString(teamID, "")
 	if safeName == "" {
 		safeName = "unknown"
 	}
 	if safeDomain == "" {
 		safeDomain = "unknown"
+	}
+	if safeTeamID == "" {
+		safeTeamID = "unknown"
 	}
 
 	// Sanitize dbPath for prompt injection and shell safety.
@@ -117,8 +121,10 @@ func BuildSystemPrompt(workspaceName, domain, dbPath, schema string) string {
 		safeName, safeDomain, now,
 		safeDBPath, safeDBPath,
 		schema,
-		safeDomain,
-		safeDomain, safeDomain, safeDomain,
+		safeTeamID, safeTeamID, // deep link format + example
+		safeTeamID, safeTeamID, // channel link + example
+		safeTeamID,             // message link
+		safeTeamID, safeTeamID, safeTeamID, // examples
 	)
 }
 

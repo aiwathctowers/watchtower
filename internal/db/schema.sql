@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS channels (
     is_member    INTEGER NOT NULL DEFAULT 0,
     dm_user_id   TEXT,
     num_members  INTEGER NOT NULL DEFAULT 0,
+    last_read    TEXT NOT NULL DEFAULT '',  -- Slack conversations.mark cursor (message ts)
     updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name);
@@ -166,6 +167,7 @@ CREATE TABLE IF NOT EXISTS digests (
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     read_at         TEXT,  -- NULL = unread, ISO8601 = when read (local-only)
     prompt_version  INTEGER NOT NULL DEFAULT 0,  -- version of prompt used for generation
+    people_signals  TEXT NOT NULL DEFAULT '[]',   -- JSON array of PersonSignals from MAP phase
     UNIQUE(channel_id, type, period_from, period_to)
 );
 CREATE INDEX IF NOT EXISTS idx_digests_channel ON digests(channel_id);
@@ -362,4 +364,172 @@ CREATE TABLE IF NOT EXISTS user_profile (
     custom_prompt_context TEXT NOT NULL DEFAULT '',
     created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- Chains: thematic threads grouping related decisions and tracks over time
+CREATE TABLE IF NOT EXISTS chains (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id   INTEGER REFERENCES chains(id) ON DELETE SET NULL,
+    title       TEXT NOT NULL,
+    slug        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'stale')),
+    summary     TEXT NOT NULL DEFAULT '',
+    channel_ids TEXT NOT NULL DEFAULT '[]',
+    first_seen  REAL NOT NULL,
+    last_seen   REAL NOT NULL,
+    item_count  INTEGER NOT NULL DEFAULT 0,
+    read_at     TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status);
+CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id);
+
+-- Chain refs: links chains to decisions (in digests), tracks, and digests themselves
+CREATE TABLE IF NOT EXISTS chain_refs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+    ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
+    digest_id     INTEGER NOT NULL DEFAULT 0,
+    decision_idx  INTEGER NOT NULL DEFAULT 0,
+    track_id      INTEGER NOT NULL DEFAULT 0,
+    channel_id    TEXT NOT NULL DEFAULT '',
+    timestamp     REAL NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id);
+CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id);
+CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id);
+
+-- User interaction edges (social graph) — computed per analysis window
+CREATE TABLE IF NOT EXISTS user_interactions (
+    user_a              TEXT NOT NULL,              -- current user ("me")
+    user_b              TEXT NOT NULL,              -- the other person
+    period_from         REAL NOT NULL,              -- analysis window start (Unix ts)
+    period_to           REAL NOT NULL,              -- analysis window end (Unix ts)
+    messages_to         INTEGER NOT NULL DEFAULT 0, -- A's messages in channels where B is active
+    messages_from       INTEGER NOT NULL DEFAULT 0, -- B's messages in channels where A is active
+    shared_channels     INTEGER NOT NULL DEFAULT 0, -- channels where both posted
+    thread_replies_to   INTEGER NOT NULL DEFAULT 0, -- A replied to B's threads
+    thread_replies_from INTEGER NOT NULL DEFAULT 0, -- B replied to A's threads
+    shared_channel_ids  TEXT NOT NULL DEFAULT '[]', -- JSON array of shared channel IDs
+    dm_messages_to      INTEGER NOT NULL DEFAULT 0, -- A's DM messages to B
+    dm_messages_from    INTEGER NOT NULL DEFAULT 0, -- B's DM messages to A
+    mentions_to         INTEGER NOT NULL DEFAULT 0, -- A @-mentioned B
+    mentions_from       INTEGER NOT NULL DEFAULT 0, -- B @-mentioned A
+    reactions_to        INTEGER NOT NULL DEFAULT 0, -- A reacted to B's messages
+    reactions_from      INTEGER NOT NULL DEFAULT 0, -- B reacted to A's messages
+    interaction_score   REAL NOT NULL DEFAULT 0,    -- weighted composite score
+    connection_type     TEXT NOT NULL DEFAULT '',    -- peer, i_depend, depends_on_me, weak
+    PRIMARY KEY (user_a, user_b, period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_user_interactions_a ON user_interactions(user_a, period_from, period_to);
+
+-- Communication guides (per-user, per-window coach-style insights)
+CREATE TABLE IF NOT EXISTS communication_guides (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id                 TEXT NOT NULL,
+    period_from             REAL NOT NULL,             -- Unix timestamp (window start)
+    period_to               REAL NOT NULL,             -- Unix timestamp (window end)
+    -- Computed stats (pure SQL, no AI)
+    message_count           INTEGER NOT NULL DEFAULT 0,
+    channels_active         INTEGER NOT NULL DEFAULT 0,
+    threads_initiated       INTEGER NOT NULL DEFAULT 0,
+    threads_replied         INTEGER NOT NULL DEFAULT 0,
+    avg_message_length      REAL NOT NULL DEFAULT 0,
+    active_hours_json       TEXT NOT NULL DEFAULT '{}',
+    volume_change_pct       REAL NOT NULL DEFAULT 0,
+    -- AI-generated guide (coach framing)
+    summary                 TEXT NOT NULL DEFAULT '',     -- how to communicate effectively with this person
+    communication_preferences TEXT NOT NULL DEFAULT '',   -- preferred style, format, timing
+    availability_patterns   TEXT NOT NULL DEFAULT '',     -- when they are most responsive
+    decision_process        TEXT NOT NULL DEFAULT '',     -- how they make/participate in decisions
+    situational_tactics     TEXT NOT NULL DEFAULT '[]',   -- JSON array: if X happens, do Y
+    effective_approaches    TEXT NOT NULL DEFAULT '[]',   -- JSON array: what works well
+    recommendations         TEXT NOT NULL DEFAULT '[]',   -- JSON array: actionable tips
+    relationship_context    TEXT NOT NULL DEFAULT '',     -- peer/report/manager/cross-team dynamics
+    -- Metadata
+    model                   TEXT NOT NULL DEFAULT '',
+    input_tokens            INTEGER NOT NULL DEFAULT 0,
+    output_tokens           INTEGER NOT NULL DEFAULT 0,
+    cost_usd                REAL NOT NULL DEFAULT 0,
+    prompt_version          INTEGER NOT NULL DEFAULT 0,
+    created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(user_id, period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_communication_guides_user ON communication_guides(user_id);
+CREATE INDEX IF NOT EXISTS idx_communication_guides_period ON communication_guides(period_from, period_to);
+
+-- Guide summaries (cross-user team communication health for a time window)
+CREATE TABLE IF NOT EXISTS guide_summaries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_from   REAL NOT NULL,
+    period_to     REAL NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',     -- team communication health overview
+    tips          TEXT NOT NULL DEFAULT '[]',   -- JSON array: team-level communication tips
+    model         TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    prompt_version INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(period_from, period_to)
+);
+
+-- Unified people cards (per-user, per-window — combines analysis + guide)
+CREATE TABLE IF NOT EXISTS people_cards (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL,
+    period_from         REAL NOT NULL,
+    period_to           REAL NOT NULL,
+    -- Computed stats (pure SQL, no AI)
+    message_count       INTEGER NOT NULL DEFAULT 0,
+    channels_active     INTEGER NOT NULL DEFAULT 0,
+    threads_initiated   INTEGER NOT NULL DEFAULT 0,
+    threads_replied     INTEGER NOT NULL DEFAULT 0,
+    avg_message_length  REAL NOT NULL DEFAULT 0,
+    active_hours_json   TEXT NOT NULL DEFAULT '{}',
+    volume_change_pct   REAL NOT NULL DEFAULT 0,
+    -- Analysis (from signals reduce)
+    summary             TEXT NOT NULL DEFAULT '',
+    communication_style TEXT NOT NULL DEFAULT '',
+    decision_role       TEXT NOT NULL DEFAULT '',
+    red_flags           TEXT NOT NULL DEFAULT '[]',
+    highlights          TEXT NOT NULL DEFAULT '[]',
+    accomplishments     TEXT NOT NULL DEFAULT '[]',
+    -- Guide (coaching framing)
+    how_to_communicate  TEXT NOT NULL DEFAULT '',
+    decision_style      TEXT NOT NULL DEFAULT '',
+    tactics             TEXT NOT NULL DEFAULT '[]',
+    -- Context
+    relationship_context TEXT NOT NULL DEFAULT '',
+    -- Metadata
+    model               TEXT NOT NULL DEFAULT '',
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    prompt_version      INTEGER NOT NULL DEFAULT 0,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(user_id, period_from, period_to)
+);
+CREATE INDEX IF NOT EXISTS idx_people_cards_user ON people_cards(user_id);
+CREATE INDEX IF NOT EXISTS idx_people_cards_period ON people_cards(period_from, period_to);
+
+-- People card summaries (cross-user team health for a time window)
+CREATE TABLE IF NOT EXISTS people_card_summaries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_from   REAL NOT NULL,
+    period_to     REAL NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',
+    attention     TEXT NOT NULL DEFAULT '[]',
+    tips          TEXT NOT NULL DEFAULT '[]',
+    model         TEXT NOT NULL DEFAULT '',
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    prompt_version INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(period_from, period_to)
 );

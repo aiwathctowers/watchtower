@@ -218,6 +218,7 @@ final class ChatViewModel {
                 let ws = try WorkspaceQueries.fetchWorkspace(db)
                 let name = ws?.name ?? "unknown"
                 let domain = ws?.domain ?? "unknown"
+                let teamID = ws?.id ?? "unknown"
                 let dbPath = dbPool.path
 
                 // Get schema from the database itself
@@ -271,8 +272,8 @@ final class ChatViewModel {
                 Thread replies:
                   SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = 'C123' AND m.thread_ts = '1234567890.123456' ORDER BY m.ts_unix ASC;
 
-                Permalink format: https://\(domain).slack.com/archives/{channel_id}/p{ts_without_dots}
-                  Example: ts "1740577800.000100" → p1740577800000100
+                Deep link format: slack://channel?team=\(teamID)&id={channel_id}&message={ts}
+                  Example: ts "1740577800.000100" → slack://channel?team=\(teamID)&id=C123&message=1740577800.000100
 
                 === IMPORTANT RESTRICTIONS ===
                 - You have NO internet access. Do NOT call any Slack API, WebFetch, or WebSearch tools.
@@ -288,9 +289,9 @@ final class ChatViewModel {
                 === LINKING RULES ===
                 ALWAYS include Slack links as descriptive markdown — never bare URLs.
 
-                Channel link: [#channel-name](https://\(domain).slack.com/archives/{channel_id})
-                Message link: [описательный текст](https://\(domain).slack.com/archives/{channel_id}/p{ts_no_dots})
-                  To convert ts to permalink: remove the dot. "1740577800.000100" → "p1740577800000100"
+                Channel link: [#channel-name](slack://channel?team=\(teamID)&id={channel_id})
+                Message link: [описательный текст](slack://channel?team=\(teamID)&id={channel_id}&message={ts})
+                  Use the raw ts value (with dot). Example: "1740577800.000100" → message=1740577800.000100
 
                 Rules:
                 - Every channel mention (#name) MUST be a link to that channel

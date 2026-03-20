@@ -9,13 +9,16 @@ OAUTH_ID    ?= $(WATCHTOWER_OAUTH_CLIENT_ID)
 OAUTH_SECRET?= $(WATCHTOWER_OAUTH_CLIENT_SECRET)
 LDFLAGS     := -ldflags "-X watchtower/cmd.Version=$(VERSION) -X watchtower/cmd.Commit=$(COMMIT) -X watchtower/cmd.BuildDate=$(BUILD_DATE) -X watchtower/internal/auth.DefaultClientID=$(OAUTH_ID) -X watchtower/internal/auth.DefaultClientSecret=$(OAUTH_SECRET)"
 
-.PHONY: build test lint install clean app dmg test-swift
+.PHONY: build test lint install clean app app-dev dmg test-swift
 
 build:
 	go build $(LDFLAGS) -o $(BINARY_NAME) .
 
 app dmg:
 	./scripts/build-app.sh $(VERSION)
+
+app-dev:
+	./scripts/build-app.sh --dev $(VERSION)
 
 test:
 	go test ./... -v

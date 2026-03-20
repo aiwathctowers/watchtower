@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildSystemPrompt_ContainsWorkspaceInfo(t *testing.T) {
-	prompt := BuildSystemPrompt("my-company", "my-company", "/path/to/db.sqlite", "CREATE TABLE test;")
+	prompt := BuildSystemPrompt("my-company", "my-company", "T001", "/path/to/db.sqlite", "CREATE TABLE test;")
 
 	assert.Contains(t, prompt, `"my-company"`)
 	assert.Contains(t, prompt, "my-company.slack.com")
@@ -19,7 +19,7 @@ func TestBuildSystemPrompt_ContainsWorkspaceInfo(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsDBAccess(t *testing.T) {
-	prompt := BuildSystemPrompt("test-ws", "test-ws", "/tmp/watchtower.db", "CREATE TABLE messages;")
+	prompt := BuildSystemPrompt("test-ws", "test-ws", "T001", "/tmp/watchtower.db", "CREATE TABLE messages;")
 
 	assert.Contains(t, prompt, "/tmp/watchtower.db")
 	assert.Contains(t, prompt, "sqlite3")
@@ -27,15 +27,15 @@ func TestBuildSystemPrompt_ContainsDBAccess(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_ContainsGuidelines(t *testing.T) {
-	prompt := BuildSystemPrompt("test-ws", "test-ws", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("test-ws", "test-ws", "T001", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "concise")
-	assert.Contains(t, prompt, "permalink")
+	assert.Contains(t, prompt, "deep link")
 	assert.Contains(t, prompt, "markdown")
 }
 
 func TestBuildSystemPrompt_ContainsQueryPatterns(t *testing.T) {
-	prompt := BuildSystemPrompt("test-ws", "test-ws", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("test-ws", "test-ws", "T001", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "QUERY PATTERNS")
 	assert.Contains(t, prompt, "messages_fts MATCH")
@@ -43,7 +43,7 @@ func TestBuildSystemPrompt_ContainsQueryPatterns(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_MustQueryDB(t *testing.T) {
-	prompt := BuildSystemPrompt("test-ws", "test-ws", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("test-ws", "test-ws", "T001", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "MUST query the database")
 	assert.Contains(t, prompt, "read_query")
@@ -51,7 +51,7 @@ func TestBuildSystemPrompt_MustQueryDB(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_SanitizesInputs(t *testing.T) {
-	prompt := BuildSystemPrompt("my company!", "my domain<>", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("my company!", "my domain<>", "T001", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "my company")
 	assert.Contains(t, prompt, "mydomain")
@@ -60,13 +60,13 @@ func TestBuildSystemPrompt_SanitizesInputs(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_PreservesUnicode(t *testing.T) {
-	prompt := BuildSystemPrompt("Société Générale", "societe", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("Société Générale", "societe", "T001", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "Société Générale")
 }
 
 func TestBuildSystemPrompt_EmptyInputsGetDefaults(t *testing.T) {
-	prompt := BuildSystemPrompt("", "", "/tmp/db", "schema")
+	prompt := BuildSystemPrompt("", "", "", "/tmp/db", "schema")
 
 	assert.Contains(t, prompt, "unknown")
 }

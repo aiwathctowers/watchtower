@@ -15,6 +15,6 @@ const (
 	DefaultDigestModel     = "claude-haiku-4-5-20251001"
 	DefaultDigestMinMsgs   = 5
 	DefaultDigestLang      = "English"
-	DefaultDigestWorkers   = 5
+	DefaultDigestWorkers   = 2
 	DefaultTracksInterval  = 1 * time.Hour
 )

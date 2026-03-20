@@ -461,6 +461,97 @@ enum TestDatabase {
     );
     CREATE INDEX IF NOT EXISTS idx_prompt_history_prompt ON prompt_history(prompt_id);
     CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
+    CREATE TABLE IF NOT EXISTS chains (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        title       TEXT NOT NULL,
+        slug        TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'active',
+        summary     TEXT NOT NULL DEFAULT '',
+        channel_ids TEXT NOT NULL DEFAULT '[]',
+        first_seen  REAL NOT NULL,
+        last_seen   REAL NOT NULL,
+        item_count  INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS chain_refs (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+        ref_type      TEXT NOT NULL,
+        digest_id     INTEGER NOT NULL DEFAULT 0,
+        decision_idx  INTEGER NOT NULL DEFAULT 0,
+        track_id      INTEGER NOT NULL DEFAULT 0,
+        channel_id    TEXT NOT NULL DEFAULT '',
+        timestamp     REAL NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status);
+    CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id);
+    CREATE TABLE IF NOT EXISTS user_interactions (
+        user_a              TEXT NOT NULL,
+        user_b              TEXT NOT NULL,
+        period_from         REAL NOT NULL,
+        period_to           REAL NOT NULL,
+        messages_to         INTEGER NOT NULL DEFAULT 0,
+        messages_from       INTEGER NOT NULL DEFAULT 0,
+        shared_channels     INTEGER NOT NULL DEFAULT 0,
+        thread_replies_to   INTEGER NOT NULL DEFAULT 0,
+        thread_replies_from INTEGER NOT NULL DEFAULT 0,
+        shared_channel_ids  TEXT NOT NULL DEFAULT '[]',
+        PRIMARY KEY (user_a, user_b, period_from, period_to)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_interactions_a ON user_interactions(user_a, period_from, period_to);
+
+    CREATE TABLE IF NOT EXISTS people_cards (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id             TEXT NOT NULL,
+        period_from         REAL NOT NULL,
+        period_to           REAL NOT NULL,
+        message_count       INTEGER NOT NULL DEFAULT 0,
+        channels_active     INTEGER NOT NULL DEFAULT 0,
+        threads_initiated   INTEGER NOT NULL DEFAULT 0,
+        threads_replied     INTEGER NOT NULL DEFAULT 0,
+        avg_message_length  REAL NOT NULL DEFAULT 0,
+        active_hours_json   TEXT NOT NULL DEFAULT '{}',
+        volume_change_pct   REAL NOT NULL DEFAULT 0,
+        summary             TEXT NOT NULL DEFAULT '',
+        communication_style TEXT NOT NULL DEFAULT '',
+        decision_role       TEXT NOT NULL DEFAULT '',
+        red_flags           TEXT NOT NULL DEFAULT '[]',
+        highlights          TEXT NOT NULL DEFAULT '[]',
+        accomplishments     TEXT NOT NULL DEFAULT '[]',
+        how_to_communicate  TEXT NOT NULL DEFAULT '',
+        decision_style      TEXT NOT NULL DEFAULT '',
+        tactics             TEXT NOT NULL DEFAULT '[]',
+        relationship_context TEXT NOT NULL DEFAULT '',
+        model               TEXT NOT NULL DEFAULT '',
+        input_tokens        INTEGER NOT NULL DEFAULT 0,
+        output_tokens       INTEGER NOT NULL DEFAULT 0,
+        cost_usd            REAL NOT NULL DEFAULT 0,
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(user_id, period_from, period_to)
+    );
+    CREATE TABLE IF NOT EXISTS people_card_summaries (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        period_from   REAL NOT NULL,
+        period_to     REAL NOT NULL,
+        summary       TEXT NOT NULL DEFAULT '',
+        attention     TEXT NOT NULL DEFAULT '[]',
+        tips          TEXT NOT NULL DEFAULT '[]',
+        model         TEXT NOT NULL DEFAULT '',
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd      REAL NOT NULL DEFAULT 0,
+        prompt_version INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(period_from, period_to)
+    );
+
     CREATE TABLE IF NOT EXISTS user_profile (
         id                    INTEGER PRIMARY KEY,
         slack_user_id         TEXT NOT NULL UNIQUE,
@@ -510,5 +601,78 @@ enum TestDatabase {
                 starredChannels, starredPeople, painPoints, trackFocus,
                 onboardingDone ? 1 : 0, customPromptContext,
             ])
+    }
+
+    // MARK: - People Card Fixtures
+
+    static func insertPeopleCard(
+        _ db: Database,
+        userID: String = "U001",
+        periodFrom: Double = 1700000000,
+        periodTo: Double = 1700604800,
+        messageCount: Int = 100,
+        channelsActive: Int = 5,
+        threadsInitiated: Int = 10,
+        threadsReplied: Int = 20,
+        avgMessageLength: Double = 42.5,
+        activeHoursJSON: String = #"{"9":12,"10":8,"14":15}"#,
+        volumeChangePct: Double = 15.0,
+        summary: String = "Active contributor",
+        communicationStyle: String = "driver",
+        decisionRole: String = "approver",
+        redFlags: String = "[]",
+        highlights: String = #"["Great leadership"]"#,
+        accomplishments: String = "[]",
+        howToCommunicate: String = "",
+        decisionStyle: String = "",
+        tactics: String = "[]",
+        relationshipContext: String = "",
+        model: String = "haiku"
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO people_cards (user_id, period_from, period_to, message_count, channels_active,
+                threads_initiated, threads_replied, avg_message_length, active_hours_json,
+                volume_change_pct, summary, communication_style, decision_role, red_flags, highlights,
+                accomplishments, how_to_communicate, decision_style, tactics, relationship_context, model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [userID, periodFrom, periodTo, messageCount, channelsActive,
+                             threadsInitiated, threadsReplied, avgMessageLength, activeHoursJSON,
+                             volumeChangePct, summary, communicationStyle, decisionRole, redFlags, highlights,
+                             accomplishments, howToCommunicate, decisionStyle, tactics, relationshipContext, model])
+    }
+
+    // MARK: - Chain Fixtures
+
+    static func insertChain(
+        _ db: Database,
+        title: String = "Test Chain",
+        slug: String = "test-chain",
+        status: String = "active",
+        summary: String = "A test chain",
+        channelIDs: String = "[\"C001\"]",
+        firstSeen: Double = 1700000000,
+        lastSeen: Double = 1700086400,
+        itemCount: Int = 2
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO chains (title, slug, status, summary, channel_ids, first_seen, last_seen, item_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [title, slug, status, summary, channelIDs, firstSeen, lastSeen, itemCount])
+    }
+
+    static func insertChainRef(
+        _ db: Database,
+        chainID: Int = 1,
+        refType: String = "decision",
+        digestID: Int = 0,
+        decisionIdx: Int = 0,
+        trackID: Int = 0,
+        channelID: String = "C001",
+        timestamp: Double = 1700000000
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO chain_refs (chain_id, ref_type, digest_id, decision_idx, track_id, channel_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [chainID, refType, digestID, decisionIdx, trackID, channelID, timestamp])
     }
 }

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 21"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 28"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -896,6 +896,378 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v21: %w", err)
 		}
 		version = 21
+	}
+
+	if version < 22 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v22 tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		hasChains := hasColumn(tx, "chains", "id")
+
+		if !hasChains {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS chains (
+					id          INTEGER PRIMARY KEY AUTOINCREMENT,
+					parent_id   INTEGER REFERENCES chains(id) ON DELETE SET NULL,
+					title       TEXT NOT NULL,
+					slug        TEXT NOT NULL,
+					status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'stale')),
+					summary     TEXT NOT NULL DEFAULT '',
+					channel_ids TEXT NOT NULL DEFAULT '[]',
+					first_seen  REAL NOT NULL,
+					last_seen   REAL NOT NULL,
+					item_count  INTEGER NOT NULL DEFAULT 0,
+					read_at     TEXT,
+					created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+					updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status)`,
+				`CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id)`,
+				`CREATE TABLE IF NOT EXISTS chain_refs (
+					id            INTEGER PRIMARY KEY AUTOINCREMENT,
+					chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+					ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
+					digest_id     INTEGER NOT NULL DEFAULT 0,
+					decision_idx  INTEGER NOT NULL DEFAULT 0,
+					track_id      INTEGER NOT NULL DEFAULT 0,
+					channel_id    TEXT NOT NULL DEFAULT '',
+					timestamp     REAL NOT NULL,
+					created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+					UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id)`,
+			} {
+				if _, err := tx.Exec(stmt); err != nil {
+					return fmt.Errorf("migration v22 create chains: %w", err)
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 22"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v22: %w", err)
+		}
+		version = 22
+	}
+
+	if version < 23 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v23 tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		hasInteractions := hasColumn(tx, "user_interactions", "user_a")
+
+		if !hasInteractions {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS user_interactions (
+					user_a              TEXT NOT NULL,
+					user_b              TEXT NOT NULL,
+					period_from         REAL NOT NULL,
+					period_to           REAL NOT NULL,
+					messages_to         INTEGER NOT NULL DEFAULT 0,
+					messages_from       INTEGER NOT NULL DEFAULT 0,
+					shared_channels     INTEGER NOT NULL DEFAULT 0,
+					thread_replies_to   INTEGER NOT NULL DEFAULT 0,
+					thread_replies_from INTEGER NOT NULL DEFAULT 0,
+					shared_channel_ids  TEXT NOT NULL DEFAULT '[]',
+					PRIMARY KEY (user_a, user_b, period_from, period_to)
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_user_interactions_a ON user_interactions(user_a, period_from, period_to)`,
+			} {
+				if _, err := tx.Exec(stmt); err != nil {
+					return fmt.Errorf("migration v23 create user_interactions: %w", err)
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 23"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v23: %w", err)
+		}
+		version = 23
+	}
+
+	// --- Migration v24: Add parent_id + read_at to chains, digest ref_type to chain_refs ---
+	if version < 24 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v24: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Add parent_id to chains if not present.
+		if !hasColumn(tx, "chains", "parent_id") {
+			if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN parent_id INTEGER REFERENCES chains(id) ON DELETE SET NULL`); err != nil {
+				return fmt.Errorf("migration v24 add parent_id: %w", err)
+			}
+		}
+		// Add read_at to chains if not present.
+		if !hasColumn(tx, "chains", "read_at") {
+			if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN read_at TEXT`); err != nil {
+				return fmt.Errorf("migration v24 add read_at: %w", err)
+			}
+		}
+		// Index on parent_id.
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id)`); err != nil {
+			return fmt.Errorf("migration v24 create idx_chains_parent: %w", err)
+		}
+
+		// Widen chain_refs.ref_type CHECK to include 'digest'.
+		// SQLite doesn't support ALTER CHECK, so we recreate the table.
+		for _, stmt := range []string{
+			`CREATE TABLE IF NOT EXISTS chain_refs_new (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+				ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
+				digest_id     INTEGER NOT NULL DEFAULT 0,
+				decision_idx  INTEGER NOT NULL DEFAULT 0,
+				track_id      INTEGER NOT NULL DEFAULT 0,
+				channel_id    TEXT NOT NULL DEFAULT '',
+				timestamp     REAL NOT NULL,
+				created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+				UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+			)`,
+			`INSERT INTO chain_refs_new SELECT * FROM chain_refs`,
+			`DROP TABLE chain_refs`,
+			`ALTER TABLE chain_refs_new RENAME TO chain_refs`,
+			`CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id)`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("migration v24 recreate chain_refs: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 24"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v24: %w", err)
+		}
+		version = 24
+	}
+
+	// v25: Add new interaction columns for DMs, mentions, reactions, scoring
+	if version < 25 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v25: %w", err)
+		}
+		defer tx.Rollback()
+
+		columns := map[string]string{
+			"dm_messages_to":   "INTEGER NOT NULL DEFAULT 0",
+			"dm_messages_from": "INTEGER NOT NULL DEFAULT 0",
+			"mentions_to":     "INTEGER NOT NULL DEFAULT 0",
+			"mentions_from":   "INTEGER NOT NULL DEFAULT 0",
+			"reactions_to":    "INTEGER NOT NULL DEFAULT 0",
+			"reactions_from":  "INTEGER NOT NULL DEFAULT 0",
+			"interaction_score": "REAL NOT NULL DEFAULT 0",
+			"connection_type":  "TEXT NOT NULL DEFAULT ''",
+		}
+		for col, typ := range columns {
+			if !hasColumn(tx, "user_interactions", col) {
+				if _, err := tx.Exec("ALTER TABLE user_interactions ADD COLUMN " + col + " " + typ); err != nil {
+					return fmt.Errorf("migration v25 add %s: %w", col, err)
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 25"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v25: %w", err)
+		}
+		version = 25
+	}
+
+	if version < 26 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v26: %w", err)
+		}
+		defer tx.Rollback()
+
+		if !hasColumn(tx, "channels", "last_read") {
+			if _, err := tx.Exec(`ALTER TABLE channels ADD COLUMN last_read TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migration v26 add last_read: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 26"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v26: %w", err)
+		}
+		version = 26
+	}
+
+	// v27: Add communication_guides and guide_summaries tables
+	if version < 27 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v27: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS communication_guides (
+			id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id                 TEXT NOT NULL,
+			period_from             REAL NOT NULL,
+			period_to               REAL NOT NULL,
+			message_count           INTEGER NOT NULL DEFAULT 0,
+			channels_active         INTEGER NOT NULL DEFAULT 0,
+			threads_initiated       INTEGER NOT NULL DEFAULT 0,
+			threads_replied         INTEGER NOT NULL DEFAULT 0,
+			avg_message_length      REAL NOT NULL DEFAULT 0,
+			active_hours_json       TEXT NOT NULL DEFAULT '{}',
+			volume_change_pct       REAL NOT NULL DEFAULT 0,
+			summary                 TEXT NOT NULL DEFAULT '',
+			communication_preferences TEXT NOT NULL DEFAULT '',
+			availability_patterns   TEXT NOT NULL DEFAULT '',
+			decision_process        TEXT NOT NULL DEFAULT '',
+			situational_tactics     TEXT NOT NULL DEFAULT '[]',
+			effective_approaches    TEXT NOT NULL DEFAULT '[]',
+			recommendations         TEXT NOT NULL DEFAULT '[]',
+			relationship_context    TEXT NOT NULL DEFAULT '',
+			model                   TEXT NOT NULL DEFAULT '',
+			input_tokens            INTEGER NOT NULL DEFAULT 0,
+			output_tokens           INTEGER NOT NULL DEFAULT 0,
+			cost_usd                REAL NOT NULL DEFAULT 0,
+			prompt_version          INTEGER NOT NULL DEFAULT 0,
+			created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			UNIQUE(user_id, period_from, period_to)
+		)`); err != nil {
+			return fmt.Errorf("migration v27 create communication_guides: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_communication_guides_user ON communication_guides(user_id)`); err != nil {
+			return fmt.Errorf("migration v27 create index: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_communication_guides_period ON communication_guides(period_from, period_to)`); err != nil {
+			return fmt.Errorf("migration v27 create index: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS guide_summaries (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			period_from   REAL NOT NULL,
+			period_to     REAL NOT NULL,
+			summary       TEXT NOT NULL DEFAULT '',
+			tips          TEXT NOT NULL DEFAULT '[]',
+			model         TEXT NOT NULL DEFAULT '',
+			input_tokens  INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			cost_usd      REAL NOT NULL DEFAULT 0,
+			prompt_version INTEGER NOT NULL DEFAULT 0,
+			created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			UNIQUE(period_from, period_to)
+		)`); err != nil {
+			return fmt.Errorf("migration v27 create guide_summaries: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 27"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v27: %w", err)
+		}
+		version = 27
+	}
+
+	if version < 28 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("starting migration v28: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Add people_signals column to digests table (MAP phase output)
+		if !hasColumn(tx, "digests", "people_signals") {
+			if _, err := tx.Exec(`ALTER TABLE digests ADD COLUMN people_signals TEXT NOT NULL DEFAULT '[]'`); err != nil {
+				return fmt.Errorf("migration v28 add people_signals: %w", err)
+			}
+		}
+
+		// Create unified people_cards table (REDUCE phase output)
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS people_cards (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id             TEXT NOT NULL,
+			period_from         REAL NOT NULL,
+			period_to           REAL NOT NULL,
+			message_count       INTEGER NOT NULL DEFAULT 0,
+			channels_active     INTEGER NOT NULL DEFAULT 0,
+			threads_initiated   INTEGER NOT NULL DEFAULT 0,
+			threads_replied     INTEGER NOT NULL DEFAULT 0,
+			avg_message_length  REAL NOT NULL DEFAULT 0,
+			active_hours_json   TEXT NOT NULL DEFAULT '{}',
+			volume_change_pct   REAL NOT NULL DEFAULT 0,
+			summary             TEXT NOT NULL DEFAULT '',
+			communication_style TEXT NOT NULL DEFAULT '',
+			decision_role       TEXT NOT NULL DEFAULT '',
+			red_flags           TEXT NOT NULL DEFAULT '[]',
+			highlights          TEXT NOT NULL DEFAULT '[]',
+			accomplishments     TEXT NOT NULL DEFAULT '[]',
+			how_to_communicate  TEXT NOT NULL DEFAULT '',
+			decision_style      TEXT NOT NULL DEFAULT '',
+			tactics             TEXT NOT NULL DEFAULT '[]',
+			relationship_context TEXT NOT NULL DEFAULT '',
+			model               TEXT NOT NULL DEFAULT '',
+			input_tokens        INTEGER NOT NULL DEFAULT 0,
+			output_tokens       INTEGER NOT NULL DEFAULT 0,
+			cost_usd            REAL NOT NULL DEFAULT 0,
+			prompt_version      INTEGER NOT NULL DEFAULT 0,
+			created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			UNIQUE(user_id, period_from, period_to)
+		)`); err != nil {
+			return fmt.Errorf("migration v28 create people_cards: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_people_cards_user ON people_cards(user_id)`); err != nil {
+			return fmt.Errorf("migration v28 create index: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_people_cards_period ON people_cards(period_from, period_to)`); err != nil {
+			return fmt.Errorf("migration v28 create index: %w", err)
+		}
+
+		// Create people_card_summaries table
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS people_card_summaries (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			period_from   REAL NOT NULL,
+			period_to     REAL NOT NULL,
+			summary       TEXT NOT NULL DEFAULT '',
+			attention     TEXT NOT NULL DEFAULT '[]',
+			tips          TEXT NOT NULL DEFAULT '[]',
+			model         TEXT NOT NULL DEFAULT '',
+			input_tokens  INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			cost_usd      REAL NOT NULL DEFAULT 0,
+			prompt_version INTEGER NOT NULL DEFAULT 0,
+			created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			UNIQUE(period_from, period_to)
+		)`); err != nil {
+			return fmt.Errorf("migration v28 create people_card_summaries: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 28"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v28: %w", err)
+		}
+		version = 28
 	}
 
 	_ = version // silence unused variable if this is the last migration

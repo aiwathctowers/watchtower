@@ -22,8 +22,8 @@ type mockGenerator struct {
 	response string
 }
 
-func (m *mockGenerator) Generate(_ context.Context, _, _ string) (string, *digest.Usage, error) {
-	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01}, nil
+func (m *mockGenerator) Generate(_ context.Context, _, _, _ string) (string, *digest.Usage, string, error) {
+	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01}, "mock-session", nil
 }
 
 func testDB(t *testing.T) *db.DB {
@@ -422,8 +422,14 @@ func TestCheckForUpdates(t *testing.T) {
 		ThreadTS: nullString("1000000001.000000"),
 	}))
 
+	// Get the track ID for the batch response.
+	allTracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, allTracks, 1)
+	trackID := allTracks[0].ID
+
 	gen := &mockGenerator{
-		response: `{"has_update": true, "updated_context": "Bob says this is now urgent, need by EOD", "status_hint": "active"}`,
+		response: fmt.Sprintf(`{"results": [{"track_id": %d, "has_update": true, "updated_context": "Bob says this is now urgent, need by EOD", "status_hint": "active", "ball_on": ""}]}`, trackID),
 	}
 
 	pipe := New(database, testConfig(), gen, log.Default())
@@ -473,8 +479,14 @@ func TestCheckForUpdatesChannelMessage(t *testing.T) {
 		// No ThreadTS — this is a standalone channel message
 	}))
 
+	// Get the track ID for the batch response.
+	allTracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, allTracks, 1)
+	trackID := allTracks[0].ID
+
 	gen := &mockGenerator{
-		response: `{"has_update": true, "updated_context": "Denis opened access for the IP on prod EU", "status_hint": "done"}`,
+		response: fmt.Sprintf(`{"results": [{"track_id": %d, "has_update": true, "updated_context": "Denis opened access for the IP on prod EU", "status_hint": "done", "ball_on": ""}]}`, trackID),
 	}
 
 	pipe := New(database, testConfig(), gen, log.Default())
@@ -891,11 +903,11 @@ type capturingGenerator struct {
 	capturedPrompt string
 }
 
-func (m *capturingGenerator) Generate(_ context.Context, _, prompt string) (string, *digest.Usage, error) {
+func (m *capturingGenerator) Generate(_ context.Context, _, prompt, _ string) (string, *digest.Usage, string, error) {
 	m.mu.Lock()
 	m.capturedPrompt = prompt
 	m.mu.Unlock()
-	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01}, nil
+	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.01}, "mock-session", nil
 }
 
 func (m *capturingGenerator) getCapturedPrompt() string {
@@ -1085,4 +1097,763 @@ func TestRoleRulesInExtractPrompt(t *testing.T) {
 	assert.Contains(t, captured, "ROLE-SPECIFIC RULES")
 	assert.Contains(t, captured, "DECISIONS in your area")
 	assert.Contains(t, captured, "DELEGATED TASKS")
+}
+
+// --- Additional tests for coverage ---
+
+// errGenerator returns an error from Generate.
+type errGenerator struct {
+	err error
+}
+
+func (m *errGenerator) Generate(_ context.Context, _, _, _ string) (string, *digest.Usage, string, error) {
+	return "", nil, "", m.err
+}
+
+func TestSanitize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"newlines", "hello\nworld\r!", "hello world !"},
+		{"backticks", "```code```", "` ` `code` ` `"},
+		{"section markers", "=== SECTION === and --- divider ---", "= = = SECTION = = = and - - - divider - - -"},
+		{"clean text", "nothing to sanitize", "nothing to sanitize"},
+		{"combined", "```\n===\n---", "` ` ` = = = - - -"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, sanitize(tt.input))
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	assert.Equal(t, "short", truncate("short", 100))
+	assert.Equal(t, "hel...", truncate("hello world", 3))
+	assert.Equal(t, "", truncate("", 10))
+	// Unicode
+	assert.Equal(t, "при...", truncate("привет мир", 3))
+}
+
+func TestCleanJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"plain json", `{"items": []}`, `{"items": []}`},
+		{"json fences", "```json\n{\"items\": []}\n```", `{"items": []}`},
+		{"plain fences", "```\n{\"items\": []}\n```", `{"items": []}`},
+		{"leading text", "Here is the result:\n{\"items\": []}", `{"items": []}`},
+		{"trailing text", "{\"items\": []} done!", `{"items": []}`},
+		{"nested braces", "text {\"a\": {\"b\": 1}} more", `{"a": {"b": 1}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, cleanJSON(tt.input))
+		})
+	}
+}
+
+func TestJsonOrEmpty(t *testing.T) {
+	assert.Equal(t, "[]", jsonOrEmpty(nil))
+	assert.Equal(t, "[]", jsonOrEmpty(json.RawMessage("null")))
+	assert.Equal(t, "[]", jsonOrEmpty(json.RawMessage("")))
+	assert.Equal(t, "[]", jsonOrEmpty(json.RawMessage("not valid json")))
+	assert.Equal(t, `["a","b"]`, jsonOrEmpty(json.RawMessage(`["a","b"]`)))
+	assert.Equal(t, `{"x":1}`, jsonOrEmpty(json.RawMessage(`{"x":1}`)))
+}
+
+func TestParseResultInvalid(t *testing.T) {
+	_, err := parseResult("not json at all {{{ bad")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing tracks JSON")
+}
+
+func TestParseBatchUpdateResult(t *testing.T) {
+	raw := `{"results": [{"track_id": 1, "has_update": true, "updated_context": "done", "status_hint": "done", "ball_on": "U2"}]}`
+	result, err := parseBatchUpdateResult(raw)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, 1, result.Results[0].TrackID)
+	assert.True(t, result.Results[0].HasUpdate)
+	assert.Equal(t, "done", result.Results[0].StatusHint)
+	assert.Equal(t, "U2", result.Results[0].BallOn)
+}
+
+func TestParseBatchUpdateResultInvalid(t *testing.T) {
+	_, err := parseBatchUpdateResult("bad json {{{")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing batch update check JSON")
+}
+
+func TestAccumulatedUsage(t *testing.T) {
+	pipe := &Pipeline{}
+	in, out, cost := pipe.AccumulatedUsage()
+	assert.Equal(t, 0, in)
+	assert.Equal(t, 0, out)
+	assert.Equal(t, 0.0, cost)
+
+	pipe.totalInputTokens.Add(1000)
+	pipe.totalOutputTokens.Add(500)
+	pipe.totalCostMicro.Add(10000) // 0.01 USD
+	in, out, cost = pipe.AccumulatedUsage()
+	assert.Equal(t, 1000, in)
+	assert.Equal(t, 500, out)
+	assert.InDelta(t, 0.01, cost, 0.0001)
+}
+
+func TestReactivateSnoozed(t *testing.T) {
+	database := testDB(t)
+
+	pipe := New(database, testConfig(), &mockGenerator{response: `{"items":[]}`}, log.Default())
+	n, err := pipe.ReactivateSnoozed(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestSetPromptStore(t *testing.T) {
+	pipe := &Pipeline{}
+	assert.Nil(t, pipe.promptStore)
+	// SetPromptStore just assigns, verify it doesn't panic
+	pipe.SetPromptStore(nil)
+	assert.Nil(t, pipe.promptStore)
+}
+
+func TestProgressCallback(t *testing.T) {
+	pipe := &Pipeline{}
+	// No panic when OnProgress is nil
+	pipe.progress(0, 10, "test")
+
+	var calledDone, calledTotal int
+	var calledStatus string
+	pipe.OnProgress = func(done, total int, status string) {
+		calledDone = done
+		calledTotal = total
+		calledStatus = status
+	}
+	pipe.progress(5, 10, "halfway")
+	assert.Equal(t, 5, calledDone)
+	assert.Equal(t, 10, calledTotal)
+	assert.Equal(t, "halfway", calledStatus)
+}
+
+func TestLanguageInstruction(t *testing.T) {
+	pipe := &Pipeline{cfg: &config.Config{}}
+	// Default (empty language)
+	assert.Contains(t, pipe.languageInstruction(), "language most commonly used")
+
+	// English (should also use default)
+	pipe.cfg.Digest.Language = "English"
+	assert.Contains(t, pipe.languageInstruction(), "language most commonly used")
+
+	// Non-English
+	pipe.cfg.Digest.Language = "Russian"
+	assert.Contains(t, pipe.languageInstruction(), "Russian")
+	assert.Contains(t, pipe.languageInstruction(), "IMPORTANT")
+}
+
+func TestChannelNameUserNameCacheMiss(t *testing.T) {
+	pipe := &Pipeline{}
+	pipe.channelNames = map[string]string{"C1": "general"}
+	pipe.userNames = map[string]string{"U1": "alice"}
+
+	// Hit
+	assert.Equal(t, "general", pipe.channelName("C1"))
+	assert.Equal(t, "alice", pipe.userName("U1"))
+
+	// Miss — returns ID
+	assert.Equal(t, "C999", pipe.channelName("C999"))
+	assert.Equal(t, "U999", pipe.userName("U999"))
+}
+
+func TestRunDigestDisabled(t *testing.T) {
+	database := testDB(t)
+	cfg := &config.Config{Digest: config.DigestConfig{Enabled: false}}
+	pipe := New(database, cfg, &mockGenerator{response: `{"items":[]}`}, log.Default())
+
+	n, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestCheckForUpdatesDigestDisabled(t *testing.T) {
+	database := testDB(t)
+	cfg := &config.Config{Digest: config.DigestConfig{Enabled: false}}
+	pipe := New(database, cfg, &mockGenerator{response: `{"items":[]}`}, log.Default())
+
+	n, err := pipe.CheckForUpdates(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestCheckForUpdatesNoTracks(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+
+	pipe := New(database, testConfig(), &mockGenerator{response: `{"items":[]}`}, log.Default())
+	n, err := pipe.CheckForUpdates(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestFormatMessages(t *testing.T) {
+	pipe := &Pipeline{}
+	pipe.channelNames = map[string]string{}
+	pipe.userNames = map[string]string{"U1": "alice", "U2": "bob"}
+
+	msgs := []db.Message{
+		{TS: "1000000001.000000", TSUnix: 1000000001, UserID: "U1", Text: "hello world"},
+		{TS: "1000000002.000000", TSUnix: 1000000002, UserID: "U2", Text: "reply here", ThreadTS: nullString("1000000001.000000")},
+		{TS: "1000000003.000000", TSUnix: 1000000003, UserID: "U1", Text: "", IsDeleted: false}, // empty text, skipped
+		{TS: "1000000004.000000", TSUnix: 1000000004, UserID: "U1", Text: "deleted", IsDeleted: true}, // deleted, skipped
+	}
+
+	formatted := pipe.formatMessages(msgs)
+	assert.Contains(t, formatted, "@alice")
+	assert.Contains(t, formatted, "hello world")
+	assert.Contains(t, formatted, "[thread reply]")
+	assert.Contains(t, formatted, "@bob")
+	assert.NotContains(t, formatted, "deleted")
+}
+
+func TestPipelineRunForWindowWithAllFields(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob", DisplayName: "Bob"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U002",
+		Text: "@alice deploy to staging",
+	}))
+
+	gen := &mockGenerator{
+		response: `{
+			"items": [
+				{
+					"text": "Deploy to staging",
+					"context": "Bob asked Alice to deploy",
+					"channel_id": "C1",
+					"channel_name": "#general",
+					"source_message_ts": "1000000001.000000",
+					"priority": "high",
+					"due_date": "2026-03-20",
+					"requester": {"name": "@bob", "user_id": "U002"},
+					"category": "task",
+					"blocking": "Release blocked",
+					"tags": ["deploy", "staging"],
+					"decision_summary": "Agreed to deploy today",
+					"decision_options": [{"option": "deploy now"}],
+					"participants": [{"name": "@bob", "user_id": "U002", "stance": "requestor"}],
+					"source_refs": [{"ts": "1000000001.000000", "author": "@bob", "text": "deploy please"}],
+					"sub_items": [{"text": "run tests", "status": "open"}],
+					"ownership": "mine",
+					"ball_on": "U001",
+					"owner_user_id": "U001"
+				}
+			]
+		}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, tracks, 1)
+
+	track := tracks[0]
+	assert.Equal(t, "Deploy to staging", track.Text)
+	assert.Equal(t, "high", track.Priority)
+	assert.Equal(t, "task", track.Category)
+	assert.Equal(t, "Release blocked", track.Blocking)
+	assert.Equal(t, "@bob", track.RequesterName)
+	assert.Equal(t, "U002", track.RequesterUserID)
+	assert.Equal(t, "Agreed to deploy today", track.DecisionSummary)
+	assert.Equal(t, "mine", track.Ownership)
+	assert.Equal(t, "U001", track.BallOn)
+	assert.True(t, track.DueDate > 0)
+	assert.Contains(t, track.Tags, "deploy")
+	assert.Contains(t, track.SubItems, "run tests")
+}
+
+func TestPipelinePriorityValidation(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test",
+	}))
+
+	// Invalid priority and empty priority should both default to "medium"
+	gen := &mockGenerator{
+		response: `{
+			"items": [
+				{
+					"text": "invalid priority",
+					"context": "ctx",
+					"channel_id": "C1",
+					"channel_name": "#general",
+					"source_message_ts": "1000000001.000000",
+					"priority": "URGENT_CRITICAL"
+				},
+				{
+					"text": "empty priority",
+					"context": "ctx2",
+					"channel_id": "C1",
+					"channel_name": "#general",
+					"source_message_ts": "1000000001.000000",
+					"priority": ""
+				}
+			]
+		}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, tracks, 2)
+	for _, track := range tracks {
+		assert.Equal(t, "medium", track.Priority)
+	}
+}
+
+func TestPipelineCategoryValidation(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test",
+	}))
+
+	gen := &mockGenerator{
+		response: `{
+			"items": [
+				{
+					"text": "invalid category",
+					"context": "ctx",
+					"channel_id": "C1",
+					"channel_name": "#general",
+					"source_message_ts": "1000000001.000000",
+					"priority": "low",
+					"category": "totally_invalid_category"
+				}
+			]
+		}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "task", tracks[0].Category) // defaults to "task"
+}
+
+func TestPipelineOwnershipValidation(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test",
+	}))
+
+	gen := &mockGenerator{
+		response: `{
+			"items": [
+				{
+					"text": "invalid ownership",
+					"context": "ctx",
+					"channel_id": "C1",
+					"channel_name": "#general",
+					"source_message_ts": "1000000001.000000",
+					"priority": "medium",
+					"ownership": "invalid_ownership_value"
+				}
+			]
+		}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	require.Len(t, tracks, 1)
+	assert.Equal(t, "mine", tracks[0].Ownership) // defaults to "mine"
+}
+
+func TestProcessChannelAIError(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test message",
+	}))
+
+	gen := &errGenerator{err: fmt.Errorf("AI service unavailable")}
+	pipe := New(database, testConfig(), gen, log.Default())
+
+	// RunForWindow should propagate the error from processChannel
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	// The error is logged but RunForWindow doesn't fail — it logs the error per channel
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestPipelineContextCancelled(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test",
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	gen := &mockGenerator{response: `{"items": []}`}
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(ctx, "U001", 1000000000, 1000000100)
+	require.NoError(t, err) // doesn't return error, just skips
+	assert.Equal(t, 0, n)
+}
+
+func TestFormatExistingItems(t *testing.T) {
+	database := testDB(t)
+
+	pipe := New(database, testConfig(), nil, log.Default())
+	pipe.channelNames = map[string]string{"C1": "general"}
+	pipe.userNames = map[string]string{}
+
+	// No tracks → empty string
+	assert.Equal(t, "", pipe.formatExistingItems("C1", "U001"))
+
+	// Add tracks with various fields
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID:       "C1",
+		AssigneeUserID:  "U001",
+		Text:            "track with fields",
+		Context:         "some context here",
+		Status:          "inbox",
+		Priority:        "medium",
+		PeriodFrom:      1000,
+		PeriodTo:        2000,
+		DecisionSummary: "decision made",
+		Tags:            `["backend"]`,
+		RelatedDigestIDs: "[1,2]",
+	})
+	require.NoError(t, err)
+
+	result := pipe.formatExistingItems("C1", "U001")
+	assert.Contains(t, result, "EXISTING TRACKS")
+	assert.Contains(t, result, "track with fields")
+	assert.Contains(t, result, "decision made")
+	assert.Contains(t, result, `["backend"]`)
+	assert.Contains(t, result, "[1,2]")
+	assert.Contains(t, result, "some context here")
+}
+
+func TestFormatCrossChannelItems(t *testing.T) {
+	database := testDB(t)
+
+	pipe := New(database, testConfig(), nil, log.Default())
+	pipe.channelNames = map[string]string{"C1": "general", "C2": "devops"}
+	pipe.userNames = map[string]string{}
+
+	// No tracks → empty string
+	assert.Equal(t, "", pipe.formatCrossChannelItems("C1", "U001"))
+
+	// Add a track in C2
+	_, err := database.UpsertTrack(db.Track{
+		ChannelID:      "C2",
+		AssigneeUserID: "U001",
+		Text:           "cross channel track",
+		Context:        "some cross context",
+		Status:         "inbox",
+		Priority:       "high",
+		PeriodFrom:     1000,
+		PeriodTo:       2000,
+	})
+	require.NoError(t, err)
+
+	result := pipe.formatCrossChannelItems("C1", "U001")
+	assert.Contains(t, result, "EXISTING TRACKS FROM OTHER CHANNELS")
+	assert.Contains(t, result, "cross channel track")
+	assert.Contains(t, result, "devops")
+	assert.Contains(t, result, "some cross context")
+
+	// Exclude C2 — should return empty
+	result = pipe.formatCrossChannelItems("C2", "U001")
+	assert.Equal(t, "", result)
+}
+
+func TestFormatDigestDecisions(t *testing.T) {
+	database := testDB(t)
+
+	pipe := New(database, testConfig(), nil, log.Default())
+
+	// No decisions → empty string
+	result := pipe.formatDigestDecisions("C1", 1000, 2000)
+	assert.Equal(t, "", result)
+}
+
+func TestProfileContextWithPeersAndManager(t *testing.T) {
+	p := &Pipeline{}
+	p.profile = &db.UserProfile{
+		CustomPromptContext: "Test context",
+		Reports:            `["U002","U003"]`,
+		Peers:              `["U010","U011"]`,
+		Manager:            "U020",
+		StarredChannels:    `["C1"]`,
+		StarredPeople:      `["U030"]`,
+		Role:               "Engineering Manager",
+	}
+
+	ctx := p.formatProfileContext()
+	assert.Contains(t, ctx, "USER PROFILE CONTEXT")
+	assert.Contains(t, ctx, "Test context")
+	assert.Contains(t, ctx, "OWNERSHIP RULES")
+	assert.Contains(t, ctx, `["U002","U003"]`)
+	assert.Contains(t, ctx, "MY PEERS")
+	assert.Contains(t, ctx, `["U010","U011"]`)
+	assert.Contains(t, ctx, "MY MANAGER")
+	assert.Contains(t, ctx, "U020")
+	assert.Contains(t, ctx, "STARRED CHANNELS")
+	assert.Contains(t, ctx, "STARRED PEOPLE")
+}
+
+func TestProfileContextEmptyReportsAndPeers(t *testing.T) {
+	p := &Pipeline{}
+	p.profile = &db.UserProfile{
+		CustomPromptContext: "Test context",
+		Reports:            "[]",
+		Peers:              "[]",
+		StarredChannels:    "[]",
+		StarredPeople:      "[]",
+		Role:               "Software Engineer",
+	}
+
+	ctx := p.formatProfileContext()
+	assert.Contains(t, ctx, "USER PROFILE CONTEXT")
+	// Empty arrays should NOT produce the specific MY REPORTS/MY PEERS sections with user_ids
+	assert.NotContains(t, ctx, "MY REPORTS (user_ids)")
+	assert.NotContains(t, ctx, "MY PEERS (user_ids)")
+	assert.NotContains(t, ctx, "MY MANAGER (user_id)")
+	assert.NotContains(t, ctx, "STARRED CHANNELS:")
+	assert.NotContains(t, ctx, "STARRED PEOPLE:")
+}
+
+func TestCategoryWeightingPM(t *testing.T) {
+	p := &Pipeline{}
+	p.profile = &db.UserProfile{
+		CustomPromptContext: "context",
+		Role:                "Product Manager",
+	}
+	ctx := p.formatProfileContext()
+	assert.Contains(t, ctx, "decision_needed, approval")
+}
+
+func TestCategoryWeightingLead(t *testing.T) {
+	p := &Pipeline{}
+	p.profile = &db.UserProfile{
+		CustomPromptContext: "context",
+		Role:                "Tech Lead",
+	}
+	ctx := p.formatProfileContext()
+	assert.Contains(t, ctx, "decision_needed, code_review")
+}
+
+func TestCategoryWeightingDefault(t *testing.T) {
+	p := &Pipeline{}
+	p.profile = &db.UserProfile{
+		CustomPromptContext: "context",
+		Role:                "Intern",
+	}
+	ctx := p.formatProfileContext()
+	assert.Contains(t, ctx, "code_review, bug_fix, task")
+}
+
+func TestPipelineWithChainContext(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000001.000000", UserID: "U001",
+		Text: "test message",
+	}))
+
+	gen := &capturingGenerator{
+		response: `{"items": []}`,
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	pipe.ChainContext = "=== ACTIVE CHAINS ===\nChain #1: Migration project"
+
+	_, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+
+	captured := gen.getCapturedPrompt()
+	assert.Contains(t, captured, "ACTIVE CHAINS")
+	assert.Contains(t, captured, "Migration project")
+	assert.Contains(t, captured, "chain_id")
+}
+
+func TestPipelineNoMessagesInWindow(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+
+	gen := &mockGenerator{response: `{"items": []}`}
+	pipe := New(database, testConfig(), gen, log.Default())
+
+	// No channels or messages at all
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestPipelineExistingIDOwnerMismatch(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice", DisplayName: "Alice"}))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob", DisplayName: "Bob"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	// Create track owned by U002 (different user).
+	otherID, err := database.UpsertTrack(db.Track{
+		ChannelID:      "C1",
+		AssigneeUserID: "U002",
+		Text:           "bob's track",
+		Status:         "inbox",
+		Priority:       "medium",
+		PeriodFrom:     1000000000,
+		PeriodTo:       1000000100,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1000000050.000000", UserID: "U001",
+		Text: "some message",
+	}))
+
+	// AI tries to update bob's track with existing_id — should be ignored and create a new track.
+	gen := &mockGenerator{
+		response: fmt.Sprintf(`{
+			"items": [
+				{
+					"existing_id": %d,
+					"text": "try to hijack",
+					"context": "hijack attempt",
+					"source_message_ts": "1000000050.000000",
+					"priority": "high"
+				}
+			]
+		}`, otherID),
+	}
+
+	pipe := New(database, testConfig(), gen, log.Default())
+	n, err := pipe.RunForWindow(context.Background(), "U001", 1000000000, 1000000100)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Should have created a new track, not updated bob's
+	tracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U001"})
+	require.NoError(t, err)
+	assert.Len(t, tracks, 1)
+	assert.Equal(t, "try to hijack", tracks[0].Text)
+
+	// Bob's track should be unchanged
+	bobTracks, err := database.GetTracks(db.TrackFilter{AssigneeUserID: "U002"})
+	require.NoError(t, err)
+	assert.Len(t, bobTracks, 1)
+	assert.Equal(t, "bob's track", bobTracks[0].Text)
+}
+
+func TestGetPromptFallback(t *testing.T) {
+	pipe := &Pipeline{
+		cfg: testConfig(),
+	}
+	// No prompt store — should return default
+	tmpl, version := pipe.getPrompt("tracks.extract")
+	assert.NotEmpty(t, tmpl)
+	assert.Equal(t, 0, version)
+}
+
+func TestLoadCaches(t *testing.T) {
+	database := testDB(t)
+
+	require.NoError(t, database.UpsertUser(db.User{ID: "U1", Name: "alice", DisplayName: "Alice Display"}))
+	require.NoError(t, database.UpsertUser(db.User{ID: "U2", Name: "bob_no_display"}))
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+
+	pipe := New(database, testConfig(), nil, log.Default())
+	pipe.loadCaches()
+
+	assert.Equal(t, "Alice Display", pipe.userName("U1"))
+	assert.Equal(t, "bob_no_display", pipe.userName("U2")) // falls back to Name when DisplayName is empty
+	assert.Equal(t, "general", pipe.channelName("C1"))
+}
+
+func TestDayWindowDifferentTimezones(t *testing.T) {
+	// Test with UTC
+	utcTime, _ := time.Parse(time.RFC3339, "2026-03-18T15:00:00Z")
+	from, to := DayWindow(utcTime)
+	assert.True(t, to > from)
+	assert.True(t, to-from >= 82800) // at least ~23h
+
+	// Window should start at midnight
+	startTime := time.Unix(int64(from), 0).UTC()
+	assert.Equal(t, 0, startTime.Hour())
+	assert.Equal(t, 0, startTime.Minute())
 }

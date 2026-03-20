@@ -92,6 +92,34 @@ final class DatabaseManager: Sendable {
         return total
     }
 
+    // MARK: - Wipe LLM Data
+
+    /// Delete all AI-generated data from the database, preserving raw Slack data, config, and user profile.
+    func wipeLLMData() throws {
+        try dbPool.write { db in
+            // AI-generated content tables
+            try db.execute(sql: "DELETE FROM digests")
+            try db.execute(sql: "DELETE FROM user_analyses")
+            try db.execute(sql: "DELETE FROM period_summaries")
+            try db.execute(sql: "DELETE FROM tracks")
+            try db.execute(sql: "DELETE FROM communication_guides")
+            try db.execute(sql: "DELETE FROM people_cards")
+            try db.execute(sql: "DELETE FROM chains")
+            try db.execute(sql: "DELETE FROM chain_refs")
+
+            // AI-generated summary tables
+            try db.execute(sql: "DELETE FROM guide_summaries")
+            try db.execute(sql: "DELETE FROM people_card_summaries")
+
+            // Feedback & training signal (tied to wiped content)
+            try db.execute(sql: "DELETE FROM feedback")
+            try db.execute(sql: "DELETE FROM decision_importance_corrections")
+            try db.execute(sql: "DELETE FROM decision_reads")
+            try db.execute(sql: "DELETE FROM track_history")
+            try db.execute(sql: "DELETE FROM user_interactions")
+        }
+    }
+
     // MARK: - CLI Migrations
 
     /// Run the bundled Go CLI to apply all pending DB migrations before opening the pool.

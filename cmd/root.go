@@ -75,9 +75,11 @@ func runREPL(cmd *cobra.Command, args []string) error {
 	}
 
 	domain := ""
+	teamID := ""
 	workspace := cfg.ActiveWorkspace
 	if ws != nil {
 		domain = ws.Domain
+		teamID = ws.ID
 		workspace = ws.Name
 	}
 
@@ -86,6 +88,7 @@ func runREPL(cmd *cobra.Command, args []string) error {
 		DB:        database,
 		DBPath:    cfg.DBPath(),
 		Domain:    domain,
+		TeamID:    teamID,
 		Workspace: workspace,
 	}
 

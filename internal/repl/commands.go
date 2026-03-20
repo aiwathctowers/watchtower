@@ -190,7 +190,7 @@ func (r *REPL) runCatchup() {
 		},
 	}
 
-	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.DBPath, db.Schema)
+	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema)
 	timeHints := ai.FormatTimeHints(pq)
 	question := "What happened since I was last here? Give me a structured catchup summary."
 	userMessage := ai.AssembleUserMessage(question, timeHints)
@@ -228,7 +228,7 @@ func (r *REPL) runCatchup() {
 	}
 
 	// Render markdown + resolve sources, print formatted output.
-	renderer := ai.NewResponseRenderer(database, r.deps.Domain)
+	renderer := ai.NewResponseRenderer(database, r.deps.Domain, r.deps.TeamID)
 	rendered, renderErr := renderer.Render(fullResponse.String())
 	if renderErr != nil {
 		rendered = fullResponse.String()

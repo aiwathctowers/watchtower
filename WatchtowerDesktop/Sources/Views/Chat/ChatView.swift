@@ -162,14 +162,19 @@ private struct ChatSplitView: View {
             }
 
             Divider()
-            ChatInput(text: $chatVM.inputText, isStreaming: chatVM.isStreaming) {
-                if chatVM.conversationID == nil {
-                    if let conv = historyVM.createConversation() {
-                        chatVM.bind(to: conv)
+            ChatInput(
+                text: $chatVM.inputText,
+                isStreaming: chatVM.isStreaming,
+                onSend: {
+                    if chatVM.conversationID == nil {
+                        if let conv = historyVM.createConversation() {
+                            chatVM.bind(to: conv)
+                        }
                     }
-                }
-                chatVM.send()
-            }
+                    chatVM.send()
+                },
+                onStop: { chatVM.cancelStream() }
+            )
         }
     }
 

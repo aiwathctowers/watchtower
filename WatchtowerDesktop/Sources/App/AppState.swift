@@ -9,8 +9,14 @@ final class AppState {
     var errorMessage: String?
     var isDBAvailable: Bool { databaseManager != nil }
 
+    /// True while initialize() is running (before DB and onboarding check complete).
+    var isLoading: Bool = true
+
     /// Whether the user needs to complete the onboarding chat flow.
     var needsOnboarding: Bool = false
+
+    /// Persistent onboarding state machine — tracks which step the user is on across app restarts.
+    let onboarding = OnboardingStateMachine()
 
     /// Cache for custom workspace emoji images.
     let emojiImageCache = EmojiImageCache()
@@ -26,6 +32,9 @@ final class AppState {
 
     /// Tracks ownership filter (nil = all ownerships).
     var trackOwnershipFilter: String?
+
+    /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
+    var analysisLegacyMode: Bool = false
 
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
@@ -59,10 +68,11 @@ final class AppState {
 
     func navigateToDigest(_ digestID: Int) {
         pendingDigestID = digestID
-        selectedDestination = .digests
+        selectedDestination = .chains
     }
 
     func initialize() {
+        isLoading = true
         Task {
             do {
                 let manager = try await Task.detached {
@@ -73,12 +83,33 @@ final class AppState {
                 }.value
                 databaseManager = manager
                 errorMessage = nil
-                needsOnboarding = await checkNeedsOnboarding(dbPool: manager.dbPool)
+                // Sync state machine with DB: if profile says done, mark complete
+                if onboarding.currentStep != .complete {
+                    let dbDone = await checkNeedsOnboarding(dbPool: manager.dbPool)
+                    if !dbDone {
+                        onboarding.markComplete()
+                    } else {
+                        onboarding.skipCompleted()
+                    }
+                }
+                needsOnboarding = onboarding.currentStep != .complete
+                analysisLegacyMode = ConfigService().analysisLegacyMode
+                isLoading = false
                 loadCustomEmoji(from: manager)
                 startDigestWatcher(dbPool: manager.dbPool)
+                // Resume pipelines if app was closed mid-generation
+                if !needsOnboarding && !UserDefaults.standard.bool(forKey: Constants.pipelinesCompletedKey) {
+                    backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 databaseManager = nil
+                // No DB available — if state machine not complete, onboarding needed
+                needsOnboarding = onboarding.currentStep != .complete
+                if needsOnboarding {
+                    onboarding.skipCompleted()
+                }
+                isLoading = false
             }
         }
         // Check for updates in background (once per 24h)
@@ -103,12 +134,37 @@ final class AppState {
 
     /// Called when onboarding flow completes successfully.
     func completeOnboarding() {
+        onboarding.markComplete()
         needsOnboarding = false
     }
 
     /// Re-triggers the onboarding flow (from Settings).
+    /// Resets to the chat step since connect/settings/claude are already done.
     func startOnboarding() {
+        onboarding.reset(to: .chat)
         needsOnboarding = true
+        UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
+    }
+
+    /// Wipe all LLM-generated data, stop daemon, and re-run post-onboarding pipelines.
+    func resetLLMData() async throws {
+        guard let db = databaseManager else { return }
+
+        // 1. Stop daemon
+        let daemon = DaemonManager()
+        daemon.resolvePathIfNeeded()
+        if DaemonManager.checkDaemonRunning() {
+            await daemon.stopDaemon()
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+
+        // 2. Wipe LLM-generated tables
+        try db.wipeLLMData()
+
+        // 3. Reset pipelines flag and re-run
+        UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
+        backgroundTaskManager.tasks.removeAll()
+        backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
     }
 
     private func startDigestWatcher(dbPool: DatabasePool) {

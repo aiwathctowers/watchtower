@@ -12,8 +12,10 @@ var Defaults = map[string]string{
 	DigestPeriod:   defaultDigestPeriod,
 	TracksExtract:  defaultTracksExtract,
 	TracksUpdate:   defaultTracksUpdate,
-	AnalysisUser:   defaultAnalysisUser,
-	AnalysisPeriod: defaultAnalysisPeriod,
+	GuideUser:      defaultGuideUser,
+	GuidePeriod:    defaultGuidePeriod,
+	PeopleReduce:   defaultPeopleReduce,
+	PeopleTeam:     defaultPeopleTeam,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -24,8 +26,10 @@ var AllIDs = []string{
 	DigestPeriod,
 	TracksExtract,
 	TracksUpdate,
-	AnalysisUser,
-	AnalysisPeriod,
+	GuideUser,
+	GuidePeriod,
+	PeopleReduce,
+	PeopleTeam,
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
@@ -36,8 +40,10 @@ var Descriptions = map[string]string{
 	DigestPeriod:   "Period summary — comprehensive period overview",
 	TracksExtract:  "Tracks — extract tasks from messages",
 	TracksUpdate:   "Track update check — detect progress in threads",
-	AnalysisUser:   "User analysis — communication pattern analysis",
-	AnalysisPeriod: "Team summary — cross-user team dynamics",
+	GuideUser:      "Communication guide — personal coaching per user",
+	GuidePeriod:    "Team guide — cross-user communication tips",
+	PeopleReduce:   "People card — unified profile from signals",
+	PeopleTeam:     "Team summary — cross-user attention & tips",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -51,7 +57,8 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
   "topics": ["topic1", "topic2"],
   "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
   "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
-  "key_messages": ["1234567890.123456", "1234567891.123456"]
+  "key_messages": ["1234567890.123456", "1234567891.123456"],
+  "people_signals": [{"user_id": "U123456", "signals": [{"type": "bottleneck", "detail": "specific observation with evidence", "evidence_ts": "1234567890.123456"}]}]
 }
 
 %s
@@ -72,6 +79,21 @@ Rules:
   If only 0-1 true decisions exist, return an empty or single-item array. Do NOT inflate the list.
 - action_items: Tasks mentioned or assigned. status is always "open" for new items
 - key_messages: Timestamps of the most important messages (max 5)
+- people_signals: For each person who STOOD OUT in this channel (max 5-7), emit typed signals based on their behavior IN CONTEXT of the conversation. Only notable behavior — skip routine participants. Each signal MUST cite specific evidence from messages. Use the Slack user ID (e.g. U123456) from the message headers, NOT the display name.
+  Signal types:
+  * "bottleneck" — blocked a decision, process, or other people
+  * "accomplishment" — delivered, resolved, shipped something concrete
+  * "initiative" — proposed new ideas, started discussions, drove change
+  * "mediator" — resolved conflicts, coordinated between parties
+  * "conflict" — unconstructive behavior, tension with others
+  * "disengagement" — ignored questions, went silent, minimal responses
+  * "dropped_ball" — committed to something but didn't follow through
+  * "rubber_stamping" — approved without meaningful review
+  * "overloaded" — too many threads, fragmented responses
+  * "after_hours" — significant activity outside business hours
+  * "knowledge_hub" — multiple people asked them for help/answers
+  * "blocker" — explicitly blocked without providing alternatives
+  If no one stood out, return empty array [].
 - If a field has no items, use an empty array []
 - Return valid JSON only, no other text
 
@@ -265,8 +287,8 @@ Rules:
 - ball_on: the user_id of the person who needs to act NEXT on this track. If the user asked a question and is waiting for a reply, ball_on is the other person's user_id. If someone asked the user something, ball_on is the user's own user_id. Leave empty string "" if unclear.
 - owner_user_id: the user_id of the person who "owns" the track. For "mine" tracks, this is the current user. For "delegated" tracks, this is the direct report's user_id. For "watching" tracks, this can be whoever is responsible. Leave empty string "" if same as the current user.
 - If no tracks are found, return {"items": []}
-- Return valid JSON only, no other text
 %[13]s
+- Return valid JSON only, no other text
 %[8]s
 
 %[9]s
@@ -314,106 +336,166 @@ Rules:
 - ball_on: the user_id of the person who needs to act next based on the new messages. If someone replied and the ball moved to another person, update this. Leave empty string "" if the ball hasn't moved or if unclear.
 - Return valid JSON only, no other text`
 
-const defaultAnalysisUser = `You are analyzing Slack communication patterns for @%s over a 7-day window (%s to %s).
+const defaultGuideUser = `You are a personal communication coach helping the user work more effectively with @%s over a 7-day window (%s to %s).
 
 %s
 
-Below are the user's computed statistics and ALL their messages from this period. Perform a deep analysis of their communication patterns, effectiveness, and areas of concern.
+Below are computed statistics and messages for this person. Your goal is NOT to evaluate or judge them — instead, generate actionable advice for the user on how to communicate, collaborate, and get things done with this person most effectively.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
-  "summary": "2-3 sentence overview of this person's communication patterns, role, and impact on the team",
-  "communication_style": "one of: driver, collaborator, executor, observer, facilitator",
-  "decision_role": "one of: decision-maker, approver, contributor, observer, blocker",
-  "style_details": "Detailed paragraph evaluating communication quality. What this person does well and what they do poorly. Are they constructive? Do they provide clear context? Do they follow up? Are they responsive? Do they create friction? Be specific with examples from messages.",
-  "red_flags": ["list of concerns — be specific: quote messages, name channels, describe situations"],
-  "highlights": ["positive contributions — be specific with examples"],
-  "recommendations": ["actionable suggestions for improving communication effectiveness"],
-  "concerns": ["specific issues: unconstructive behavior, missed commitments, dropped balls, conflicts — cite evidence from messages"],
-  "accomplishments": ["what this person delivered/completed/moved forward this week — specific tasks, decisions made, problems solved, features shipped, reviews done. Be concrete: 'launched X', 'resolved issue with Y', 'reviewed and approved Z'"]
+  "summary": "2-3 sentence overview of how to work effectively with this person — what makes them tick, what they respond to, what to keep in mind",
+  "communication_preferences": "Detailed paragraph: preferred communication format (long vs short messages, structured vs informal), response patterns (quick/slow, thorough/brief), preferred channels, threading habits. Frame as actionable: 'Send structured messages with clear asks — they respond best to bullet points'",
+  "availability_patterns": "When this person is most active and responsive. Peak hours, timezone patterns, response lag. Frame as: 'Best time to reach them is...'",
+  "decision_process": "How they participate in decisions: do they decide quickly or need time? Do they want data or prefer discussion? Do they defer or take charge? Frame as: 'When you need a decision from them...'",
+  "situational_tactics": ["If X situation arises, here's the best approach..."],
+  "effective_approaches": ["What works well when communicating with this person — based on observed patterns"],
+  "recommendations": ["Specific actionable tips for improving collaboration with this person"]
 }
 
-Communication styles:
-- driver: Initiates discussions, sets direction, proposes ideas
-- collaborator: Engages actively, builds on others' ideas, provides feedback
-- executor: Focused on tasks, updates progress, asks clarifying questions
-- observer: Reads but rarely contributes, occasional reactions/short replies
-- facilitator: Coordinates between people, summarizes, mediates
+Communication preferences to analyze:
+- Message format: long-form vs concise, structured vs stream-of-consciousness
+- Response speed: how quickly they typically reply, any patterns
+- Channel preference: which channels they are most active in
+- Threading: do they use threads or reply in channel?
+- Tone: formal vs casual, direct vs diplomatic
 
-Decision roles:
-- decision-maker: Makes final calls, sets direction
-- approver: Reviews and approves/rejects proposals
-- contributor: Provides input and analysis for decisions
-- observer: Present but doesn't influence decisions
-- blocker: Delays or blocks decision progress (use only with clear evidence)
+Availability patterns to identify:
+- Peak activity hours (from active_hours data)
+- Response latency patterns
+- Days/times when they are most engaged
 
-ANALYSIS FOCUS — be thorough on these:
+Decision process to assess:
+- Do they make decisions independently or seek consensus?
+- Do they need data/evidence or go with intuition?
+- Are they decisive or deliberative?
+- How do they handle disagreements?
 
-1. CONSTRUCTIVENESS: Is this person constructive in discussions? Do they offer solutions or just complain? Do they provide helpful feedback or just criticize? Look for passive-aggressive patterns, dismissive responses, or lack of engagement.
+Situational tactics — identify communication patterns that may lead to friction, delays, or misalignment, and suggest specific tactics the user can apply to prevent or navigate these situations:
+- If they tend to not respond to messages → suggest escalation path or better timing
+- If they get overloaded → suggest batching requests
+- If they prefer written over verbal → adapt approach
+- Frame as "If [situation], then [tactic]" — specific and actionable
 
-2. ACCOUNTABILITY: Did they commit to something and not follow through? Did they miss deadlines mentioned in messages? Did they drop a task or ignore a request? Cite specific messages.
-
-3. CONFLICT & FRICTION: Are there signs of tension with other team members? Unresolved disagreements? Blocking behavior? Dismissing others' input?
-
-4. COMMUNICATION QUALITY: Are messages clear and actionable? Or vague and confusing? Do they provide context? Do they over-communicate or under-communicate? Are they responsive in threads?
-
-5. DECISION PARTICIPATION: Do they engage in decision-making or avoid it? Do they rubber-stamp or provide genuine input? Do they delay decisions?
-
-6. TEAM IMPACT: How does this person affect team dynamics? Are they a multiplier (making others more effective) or a bottleneck?
-
-Red flags to watch for:
-- Volume drop >40%% vs previous period → potential disengagement
-- Only short messages without substance → low engagement
-- Never participates in threads → not collaborating
-- Blocked decisions or unresolved conflicts
-- Sudden tone shift
-- Ignoring questions or requests from teammates
-- Making commitments without follow-through
-- Unconstructive criticism without offering alternatives
+%s
 
 Rules:
-- Base analysis ONLY on the data provided — do not invent facts
-- Be direct and honest — this is for a manager who needs real insights
-- If there are problems, say so clearly with evidence
+- This is a PERSONAL COACHING tool — frame everything as advice FOR THE USER, not judgments ABOUT the person
+- Be specific: cite patterns from actual messages, reference channels, mention timing
+- Do NOT use evaluative language ("good communicator", "poor performance", "red flag")
+- Instead use actionable language ("responds best to...", "when you need X, try...")
+- If the relationship is manager→report: advice should be more directive ("set clear deadlines", "check in at standup")
+- If peer: advice should be collaborative ("mention in shared channel", "align on approach first")
+- If report→manager: advice should be tactical ("batch questions for 1:1", "send follow-up summary")
 - If too few messages for meaningful analysis, say so in summary
-- red_flags, highlights, recommendations, concerns: use empty arrays [] if nothing notable
-- style_details must be a substantive paragraph, not a single sentence
+- situational_tactics, effective_approaches, recommendations: use empty arrays [] if nothing notable
 - %s
 - Return valid JSON only
 
 === USER ===
 %s`
 
-const defaultAnalysisPeriod = `You are creating a team communication summary for the period %s to %s.
+const defaultGuidePeriod = `You are a communication coach creating a team-level guide for the period %s to %s.
 
 %s
 
-Below are individual analyses for all team members. Create a high-level summary that a manager can quickly scan to understand what needs attention.
+Below are individual communication guides for team members. Create a high-level summary of team communication health and practical tips.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
-  "summary": "3-5 sentence overview of team communication health. Overall dynamics, collaboration quality, decision-making effectiveness.",
-  "attention": [
-    "Specific actionable items that need manager attention. Reference specific people and situations. Examples: '@john has gone silent — 0 messages this week, was active last week', '@alice and @bob have unresolved tension in #engineering about deployment process', '@charlie is blocking decisions in #product — 3 threads without resolution'"
+  "summary": "3-5 sentence overview of team communication dynamics. Focus on collaboration quality, response patterns, decision-making flow, and areas where communication could be smoother.",
+  "tips": [
+    "Specific, actionable team-level communication tips. Examples: 'Consider async updates for cross-timezone discussions — @alice and @bob have 6h timezone gap', 'Decisions in #product are taking 3+ days — try setting explicit deadlines', 'Thread usage is low — encouraging threads could reduce noise in busy channels'"
   ]
 }
 
 Focus on:
-1. WHO needs attention and WHY — name names, be specific
-2. TEAM DYNAMICS — any friction, silos, or collaboration gaps?
-3. RISKS — disengagement, burnout indicators, communication breakdowns
-4. DECISIONS — any stuck or delayed decisions? Who is blocking?
-5. POSITIVE — who is doing great work that should be recognized?
+1. COLLABORATION PATTERNS — who works well together, where are communication gaps?
+2. RESPONSE DYNAMICS — are there bottlenecks? Who is hard to reach?
+3. DECISION FLOW — are decisions happening efficiently or getting stuck?
+4. PRACTICAL TIPS — actionable advice for improving team communication
 
 Rules:
-- Be direct and actionable — this is for a busy manager
-- Reference specific people by @username
-- Each attention item should be one clear, actionable insight
-- Don't be vague — "some team members are less active" is useless; "@john dropped from 50 msgs to 3" is useful
+- Frame as coaching advice, not performance evaluation
+- Reference specific people by @username when relevant
+- Each tip should be concrete and actionable
+- Avoid evaluative/judgmental language — use "consider", "try", "you might find"
 - %s
 - Return valid JSON only
 
-=== TEAM ANALYSES ===
+=== TEAM GUIDES ===
+%s`
+
+const defaultPeopleReduce = `You are creating a unified profile card for @%s based on behavioral signals observed across Slack channels over %s to %s.
+
+%s
+
+Below are TYPED SIGNALS observed in channel context (by the digest pipeline), plus computed statistics and team norms. Your job is to synthesize these into a single card that combines:
+1. ANALYSIS — classify their communication style, role in decisions, flag concerns
+2. COACHING — actionable advice for the viewer on how to work with this person
+
+IMPORTANT: Focus on what makes this person DIFFERENT from team norms. Do NOT describe typical behavior that matches the team average.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "summary": "1-2 sentences: what makes this person distinctive. Reference specific signals.",
+  "communication_style": "driver|collaborator|executor|observer|facilitator",
+  "decision_role": "decision-maker|approver|contributor|observer|blocker",
+  "red_flags": ["Specific concerns backed by signals. Empty [] if none."],
+  "highlights": ["Positive contributions backed by signals. Empty [] if none."],
+  "accomplishments": ["Concrete things delivered/resolved this period from signals."],
+  "how_to_communicate": "Paragraph: communication preferences, timing, format. ONLY what is specific to this person vs team norms. If they match the norm, say so briefly and focus on exceptions.",
+  "decision_style": "How they participate in decisions — based on bottleneck/rubber_stamping/initiative/blocker signals. If no decision signals, say 'No notable decision patterns this period.'",
+  "tactics": ["If X, then Y — specific actionable tactics based on observed signals. Max 3-4."]
+}
+
+%s
+
+Rules:
+- Base ALL analysis on the signals provided. Do NOT invent patterns not supported by evidence.
+- If a signal appears in multiple channels, it is a PATTERN — emphasize it.
+- If conflicting signals exist (e.g., initiative in one channel, disengagement in another), note the CONTRAST.
+- Compare stats to team norms: only mention stats that deviate significantly (>30%% from avg).
+- Coaching framing: frame guide sections as advice FOR THE VIEWER, not judgments ABOUT the person.
+- If relationship is manager->report: be more direct about concerns and accountability.
+- If relationship is report->manager: frame tactically (managing up).
+- If too few signals for meaningful analysis, say so in summary.
+- %s
+- Return valid JSON only
+
+=== SIGNALS FROM CHANNELS ===
+%s
+
+=== COMPUTED STATS ===
+%s
+
+=== TEAM NORMS ===
+%s`
+
+const defaultPeopleTeam = `You are creating a team communication summary for %s to %s.
+
+%s
+
+Below are unified people cards for all team members. Create a summary that a manager can quickly scan to understand what needs attention.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "summary": "3-5 sentences: team communication health, dynamics, decision flow.",
+  "attention": ["Who needs attention and WHY — name names, cite specific signals and patterns. Be direct."],
+  "tips": ["Actionable team-level communication tips based on patterns across people."]
+}
+
+Rules:
+- Be direct — this is for a busy manager
+- Reference specific people by @username
+- Cross-reference: if multiple people have bottleneck signals, that is a systemic issue
+- Look for signal clusters: multiple conflict signals = team friction
+- %s
+- Return valid JSON only
+
+=== PEOPLE CARDS ===
 %s`

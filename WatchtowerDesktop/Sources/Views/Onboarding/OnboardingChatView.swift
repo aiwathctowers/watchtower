@@ -82,41 +82,41 @@ struct OnboardingChatView: View {
                 }
             }
 
-            // Bottom section: text input (during chat) or completion screen (after AI says ready)
-            if !viewModel.chatReady && viewModel.quickReplies.isEmpty {
-                ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
-                    viewModel.send()
-                }
-            } else if viewModel.chatReady {
-                VStack(spacing: 16) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 40))
-                            .foregroundStyle(.green)
-
-                        Text(viewModel.loc("header"))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-
-                        Text(viewModel.loc("subtitle"))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
+            // Bottom section: chat input + optional Continue button
+            if viewModel.quickReplies.isEmpty {
+                VStack(spacing: 0) {
+                    if viewModel.chatReady {
+                        Button {
+                            Task {
+                                await viewModel.finishChat()
+                                onComplete()
+                            }
+                        } label: {
+                            if viewModel.isExtractingProfile {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Analyzing...")
+                                }
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                            } else {
+                                Label(viewModel.loc("continue"), systemImage: "arrow.right.circle.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(viewModel.isExtractingProfile)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
                     }
-                    .padding(.top, 20)
 
-                    Button {
-                        viewModel.finishChat()
-                        onComplete()
-                    } label: {
-                        Label(viewModel.loc("continue"), systemImage: "arrow.right.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                    ChatInput(text: $viewModel.inputText, isStreaming: viewModel.isStreaming) {
+                        viewModel.send()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 20)
                 }
             }
         }

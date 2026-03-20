@@ -28,6 +28,7 @@ final class OnboardingChatViewModel {
 
     // MARK: - Parsed Profile Data (from chat)
 
+    var isExtractingProfile = false
     var role = ""
     var team = ""
     var painPoints: [String] = []
@@ -65,8 +66,16 @@ final class OnboardingChatViewModel {
     var peerIDs: [String] = []
     var allUsers: [User] = []
 
-    /// Set to true when AI signals it has gathered enough info (via [READY] marker).
+    /// Set to true when AI signals it has gathered enough info (via [READY] marker),
+    /// or when fallback triggers after enough user messages.
     var chatReady = false
+
+    /// Number of free-form user messages sent (after role questionnaire).
+    var userMessageCount = 0
+
+    /// Fallback: show Continue button after this many user messages even without [READY].
+    /// Set high so the LLM can finish its full interview (4-6 questions) via [READY] marker first.
+    private static let fallbackMessageCount = 10
 
     // MARK: - Private
 
@@ -174,10 +183,11 @@ final class OnboardingChatViewModel {
     func initiateChat() {
         guard !isStreaming else { return }
 
-        let roleName = determinedRole?.displayName ?? "your role"
+        let roleName = determinedRole?.displayName ?? "unknown"
+        let roleDesc = determinedRole?.shortDescription ?? ""
         let langInstruction = language != "English" ? " Respond in \(language)." : ""
-        let hiddenPrompt = "The user just completed the role questionnaire and was identified as: \(roleName). " +
-            "Greet them briefly, acknowledge the role, and ask your first question." + langInstruction
+        let hiddenPrompt = "The user completed the role questionnaire. Role level: \(roleName) (\(roleDesc)). " +
+            "Greet them briefly (1 sentence), acknowledge their role, and ask your first question about their team and domain." + langInstruction
 
         let assistantMsg = ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true)
         messages.append(assistantMsg)
@@ -234,6 +244,7 @@ final class OnboardingChatViewModel {
 
         streamTask?.cancel()
         inputText = ""
+        userMessageCount += 1
 
         let userMsg = ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false)
         messages.append(userMsg)
@@ -290,17 +301,23 @@ final class OnboardingChatViewModel {
                 self.messages[idx].isStreaming = false
                 self.stripReadyMarker(at: idx)
             }
+            // Fallback: if AI didn't send [READY] but user answered enough questions, allow proceeding
+            if !self.chatReady && self.userMessageCount >= Self.fallbackMessageCount {
+                self.chatReady = true
+            }
             self.isStreaming = false
         }
     }
 
-    /// Finish the chat phase and parse results from the conversation.
-    func finishChat() {
+    /// Finish the chat phase and extract profile data from the conversation via LLM.
+    func finishChat() async {
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
         chatCompleted = true
-        parseProfileFromChat()
+        isExtractingProfile = true
+        await parseProfileFromChat()
+        isExtractingProfile = false
     }
 
     /// Record role determination answer from UI questions.
@@ -345,34 +362,49 @@ final class OnboardingChatViewModel {
             hasAnsweredRoleQ2 = true
         }
 
-        // Update role string from determined role
-        if let determined = determinedRole {
-            role = determined.rawValue
-        }
+        // Role string will be extracted from AI conversation in parseProfileFromChat()
     }
 
     // MARK: - Profile Generation
 
-    /// Generate custom_prompt_context via LLM based on collected profile data.
+    /// Generate custom_prompt_context via LLM based on the full onboarding conversation.
     func generatePromptContext() async {
-        let profileSummary = buildProfileSummary()
+        let conversationTranscript = messages
+            .filter { $0.role == .user || $0.role == .assistant }
+            .map { "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)" }
+            .joined(separator: "\n")
+
+        let roleName = determinedRole?.displayName ?? role
+        let roleDesc = determinedRole?.shortDescription ?? ""
+
         let prompt = """
-        Based on the following user profile, generate a concise context paragraph that will be \
-        injected into AI prompts to personalize Slack workspace analysis.
+        Based on the onboarding conversation below, generate a detailed profile context that will be \
+        injected into AI prompts to personalize Slack workspace analysis for this user.
 
-        The context should describe who the user is, what they care about, and how to prioritize \
-        information for them. Write in English, 3-5 sentences.
+        The context will be used by 4 AI features:
+        1. Digests — daily/weekly Slack summaries (what to prioritize, what to skip)
+        2. Tracks — personal task extraction from Slack (what counts as a task for this user)
+        3. People Analytics — team communication analysis (what patterns to watch for)
+        4. Action Items — requests/tasks needing attention (what's actionable for this user)
 
-        PROFILE:
-        Role: \(role)
-        Team: \(team)
-        Pain points: \(painPoints.joined(separator: ", "))
-        Track focus: \(trackFocus.joined(separator: ", "))
+        Write a comprehensive profile context (5-10 sentences) in English that covers:
+        - Who this person is (role, team, domain)
+        - What they're responsible for and what decisions they make
+        - What information is most important to them
+        - What they want prioritized vs filtered out
+        - What team dynamics they care about
+        - What kind of tasks/tracks are relevant for them
+
+        ADDITIONAL INFO:
+        Role level: \(roleName) (\(roleDesc))
         Reports: \(reportIDs.count) direct reports
-        Has manager: \(managerID.isEmpty ? "no" : "yes")
+        Has manager: \(!managerID.isEmpty)
         Peers: \(peerIDs.count) key peers
 
-        Return ONLY the context paragraph, no explanation.
+        Return ONLY the context text, no explanation or formatting.
+
+        === ONBOARDING CONVERSATION ===
+        \(conversationTranscript)
         """
 
         var contextText = ""
@@ -385,8 +417,8 @@ final class OnboardingChatViewModel {
                 }
             }
         } catch {
-            // Fallback: use the profile summary directly
-            contextText = profileSummary
+            // Fallback: use the conversation transcript directly
+            contextText = buildProfileSummary()
         }
 
         // Save profile
@@ -445,13 +477,28 @@ final class OnboardingChatViewModel {
 
     // MARK: - Private Helpers
 
+    /// Minimum user answers before secondary "no question" heuristic kicks in.
+    private static let minAnswersForNoQuestionHeuristic = 6
+
     /// Check for [READY] marker in the last assistant message, strip it, and set chatReady.
+    /// Also applies secondary heuristic: if the LLM stopped asking questions after enough answers,
+    /// consider the interview complete.
     private func stripReadyMarker(at idx: Int) {
         let text = messages[idx].text
-        if text.contains(Self.readyMarker) {
-            messages[idx].text = text
-                .replacingOccurrences(of: Self.readyMarker, with: "")
+
+        // Primary: detect [READY] marker (case-insensitive)
+        if let range = text.range(of: Self.readyMarker, options: .caseInsensitive) {
+            messages[idx].text = text.replacingCharacters(in: range, with: "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            chatReady = true
+            return
+        }
+
+        // Secondary: if LLM response contains no question mark and user has given enough answers,
+        // the LLM has finished the interview (wrote a summary without asking another question).
+        if !chatReady &&
+            userMessageCount >= Self.minAnswersForNoQuestionHeuristic &&
+            !text.contains("?") {
             chatReady = true
         }
     }
@@ -474,81 +521,73 @@ final class OnboardingChatViewModel {
         }) ?? ""
     }
 
-    /// Parse the AI conversation to extract role, team, pain points, track focus.
-    private func parseProfileFromChat() {
-        let assistantMessages = messages
-            .filter { $0.role == .assistant }
-            .map { $0.text }
-            .joined(separator: "\n")
-        let userMessages = messages
-            .filter { $0.role == .user }
-            .map { $0.text }
+    /// Extract role, team, and pain points from the onboarding conversation via LLM.
+    private func parseProfileFromChat() async {
+        let transcript = messages
+            .filter { $0.role == .user || $0.role == .assistant }
+            .map { "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)" }
             .joined(separator: "\n")
 
-        // Simple heuristic extraction from user messages
-        // The AI will have asked about role, pain points, etc. — the user's answers contain the data.
-        // We keep it simple: store raw text, the LLM will generate proper context in generatePromptContext.
+        let roleLevelHint = determinedRole?.displayName ?? "unknown"
 
-        // Try to detect role keywords only if the questionnaire didn't already determine a role.
-        // Otherwise keyword matching can overwrite the structured questionnaire result
-        // (e.g. user mentions "devops" when describing their team, not their role).
-        if roleDetermination == nil {
-            let roleKeywords = ["engineering manager", "tech lead", "product manager",
-                               "software engineer", "data scientist", "staff engineer",
-                               "designer", "devops", "director", "principal",
-                               "cto", "vp", "em", "tl", "pm", "swe", "ic"]
-            let lowerUser = userMessages.lowercased()
-            for keyword in roleKeywords {
-                // For short keywords (≤3 chars), require word boundaries to avoid false positives.
-                if keyword.count <= 3 {
-                    let pattern = "\\b\(NSRegularExpression.escapedPattern(for: keyword))\\b"
-                    if lowerUser.range(of: pattern, options: .regularExpression) != nil {
-                        role = keyword.uppercased()
-                        break
-                    }
-                } else if lowerUser.contains(keyword) {
-                    role = keyword.capitalized
-                    break
+        let extractionPrompt = """
+        Extract the user's job title and team name from this onboarding conversation.
+
+        The user's organizational level is: \(roleLevelHint) (from a questionnaire).
+        This is NOT their job title — extract the ACTUAL job title they mentioned (e.g. "Engineering Manager", \
+        "Staff Backend Engineer", "Head of Platform", "Product Designer").
+
+        If the user never explicitly stated their job title, infer the most likely one from context \
+        (their responsibilities, what they manage, their domain).
+
+        Return ONLY valid JSON, no markdown, no explanation:
+        {"role": "their job title", "team": "their team name", "pain_points": ["point1", "point2"]}
+
+        Rules:
+        - "role": The user's actual job title / position. NOT the organizational level.
+        - "team": The team or department name. Empty string if not mentioned.
+        - "pain_points": List of specific problems they want Watchtower to solve. Empty array if none mentioned.
+        - All values in English regardless of conversation language.
+
+        === CONVERSATION ===
+        \(transcript)
+        """
+
+        var responseText = ""
+        do {
+            for try await event in claudeService.stream(prompt: extractionPrompt, systemPrompt: nil, sessionID: nil, dbPath: nil) {
+                switch event {
+                case .text(let chunk): responseText += chunk
+                case .turnComplete(let text): responseText = text
+                case .sessionID, .done: break
                 }
             }
+        } catch {
+            // Fallback: keep whatever we have from questionnaire
+            return
         }
 
-        // Try to extract team name from user messages.
-        // Look for patterns like "my team is X", "I'm on the X team", "team: X", etc.
-        if team.isEmpty {
-            let teamPatterns = [
-                "(?:my team is|i'm on the|i am on the|team:|our team is|work on the|work in the)\\s+([\\w\\s&/-]+?)(?:\\s*[.,!?]|\\s+team|$)",
-                "([\\w\\s&/-]+?)\\s+team\\b"
-            ]
-            for pattern in teamPatterns {
-                if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-                   let match = regex.firstMatch(in: userMessages, range: NSRange(userMessages.startIndex..., in: userMessages)),
-                   match.numberOfRanges > 1,
-                   let range = Range(match.range(at: 1), in: userMessages) {
-                    let extracted = String(userMessages[range]).trimmingCharacters(in: .whitespaces)
-                    if !extracted.isEmpty && extracted.count <= 40 {
-                        team = extracted.capitalized
-                        break
-                    }
-                }
-            }
+        // Parse JSON response
+        let cleaned = responseText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let data = cleaned.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
         }
 
-        // Extract pain points from user messages using word-boundary matching
-        let painPointKeywords = [
-            "missing": "Missing important messages while AFK",
-            "decisions": "Decisions getting lost in threads",
-            "tracking": "Losing track of who owes what",
-            "lose track": "Losing track of who owes what",
-            "what team": "Can't tell what team is working on",
-            "deadlines": "Deadlines discussed in chat get forgotten",
-            "urgent": "Hard to tell what's urgent vs can wait",
-            "prioritize": "Hard to tell what's urgent vs can wait",
-        ]
-        let lowerUserMessages = userMessages.lowercased()
-        for (key, value) in painPointKeywords {
-            if lowerUserMessages.contains(key) && !painPoints.contains(value) {
-                painPoints.append(value)
+        if let extractedRole = json["role"] as? String, !extractedRole.isEmpty {
+            role = extractedRole
+        }
+        if let extractedTeam = json["team"] as? String, !extractedTeam.isEmpty {
+            team = extractedTeam
+        }
+        if let extractedPainPoints = json["pain_points"] as? [String] {
+            for point in extractedPainPoints where !painPoints.contains(point) {
+                painPoints.append(point)
             }
         }
     }
@@ -624,27 +663,43 @@ final class OnboardingChatViewModel {
         let langRule: String
         switch language {
         case "Russian":
-            langRule = "- IMPORTANT: Respond in Russian (Русский). All your messages must be in Russian."
+            langRule = "- LANGUAGE: Respond in Russian (Русский). All your messages MUST be in Russian."
         case "Ukrainian":
-            langRule = "- IMPORTANT: Respond in Ukrainian (Українська). All your messages must be in Ukrainian."
+            langRule = "- LANGUAGE: Respond in Ukrainian (Українська). All your messages MUST be in Ukrainian."
         default:
-            langRule = "- Respond in English."
+            langRule = "- LANGUAGE: Respond in English."
         }
 
         return """
-        You are Watchtower's onboarding assistant. Your goal is to learn exactly 3 things from the user:
+        You are the onboarding assistant for Watchtower — a tool that monitors a Slack workspace and provides:
 
-        1. **Role & Team**: What's their position? (Engineering Manager, IC, Tech Lead, PM, etc?) And what team are they on?
-        2. **Pain Points**: What's their main pain point with Slack? (missing messages, decisions lost in threads, losing track of tasks, etc.)
-        3. **Track Focus**: What should Watchtower focus on for them? (team blockers, code reviews, decisions, deadlines, etc.)
+        1. **Digests** — daily/weekly summaries of what happened in channels: key decisions, topics, action items
+        2. **Tracks** — personal task tracker extracted from Slack: requests directed at the user, assignments, commitments, follow-ups
+        3. **People Analytics** — communication pattern analysis for team members: engagement, decision-making style, red flags, accomplishments
+        4. **Action Items** — tasks and requests that need the user's attention, extracted from messages
 
-        INSTRUCTIONS:
-        - Ask ONE question at a time
-        - Be concise (1-2 sentences per message)
-        - After you get clear answers to ALL THREE questions, write a brief summary and then on a new line write exactly:
+        The user's ROLE has already been determined via a questionnaire. Do NOT ask about their role level.
+
+        YOUR TASK: Conduct a brief interview (4-6 questions) to understand the user well enough to personalize ALL of the above features. Ask ONE question at a time. Be concise (1-3 sentences per message).
+
+        You need to learn:
+        1. **Team & domain**: What team are they on? What does the team do? What projects/products do they own?
+        2. **Responsibilities**: What are they personally responsible for? What decisions do they make? What do they delegate?
+        3. **Information needs**: What do they currently miss in Slack? What's the most important information they need but struggle to find? (e.g., decisions made while AFK, tasks assigned in threads, status of delegated work)
+        4. **Priorities**: What should Watchtower prioritize for them? (e.g., blockers and deadlines vs strategic decisions vs team health signals)
+        5. **Team dynamics**: What do they watch for in their team? (e.g., someone going silent, unresolved conflicts, missed commitments, workload imbalance)
+
+        ADAPT your questions to the user's role:
+        - For managers: focus on delegation, team oversight, decision tracking, people signals
+        - For ICs: focus on personal task tracking, code reviews, blocking requests, staying informed
+
+        DO NOT ask generic questions. DO NOT ask about tools (JIRA, etc.) — Watchtower only works with Slack.
+        DO NOT ask more than 6 questions total. Keep it conversational and natural.
+
+        WHEN DONE: After you have enough information (4+ answers), write a brief summary of what you learned, then on a NEW LINE write exactly:
         [READY]
 
-        CRITICAL: You must end with [READY] on its own line when you have answers to all 3 questions. Do not continue asking questions after that.
+        You MUST write [READY] after the summary. Do not skip it. Do not continue asking after it.
 
         \(langRule)
         """

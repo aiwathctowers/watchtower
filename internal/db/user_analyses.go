@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -485,6 +487,492 @@ func (db *DB) ComputeAllUserStats(from, to float64, minMessages int) ([]UserStat
 		results = append(results, *s)
 	}
 	return results, nil
+}
+
+// Interaction score weights — higher = stronger signal of real connection.
+const (
+	weightDM          = 5.0 // DM = strongest intentional signal
+	weightMention     = 4.0 // @-mention = explicit addressing
+	weightThreadReply = 3.0 // thread reply = active conversation
+	weightReaction    = 1.0 // reaction = light engagement
+	weightChannelMsg  = 0.5 // shared channel message = ambient noise
+)
+
+// classifyConnection determines connection type from directional scores.
+// peer: balanced bidirectional (±30%), i_depend: I reach out more,
+// depends_on_me: they reach out more, weak: low total score.
+func classifyConnection(scoreTo, scoreFrom float64) string {
+	total := scoreTo + scoreFrom
+	if total < 5 {
+		return "weak"
+	}
+	if total == 0 {
+		return "weak"
+	}
+	ratio := scoreTo / total // 0..1; 0.5 = balanced
+	if ratio >= 0.35 && ratio <= 0.65 {
+		return "peer"
+	}
+	if ratio > 0.65 {
+		return "i_depend"
+	}
+	return "depends_on_me"
+}
+
+// ComputeUserInteractions calculates interaction metrics between currentUser and
+// all other active users in the time window. Pure SQL, no AI.
+// Signals: shared channels, DMs, @-mentions, thread replies, reactions.
+func (db *DB) ComputeUserInteractions(currentUserID string, from, to float64) ([]UserInteraction, error) {
+	if currentUserID == "" {
+		return nil, nil
+	}
+
+	resultMap := make(map[string]*UserInteraction)
+	ensureUser := func(uid string) *UserInteraction {
+		if r, ok := resultMap[uid]; ok {
+			return r
+		}
+		r := &UserInteraction{
+			UserA:            currentUserID,
+			UserB:            uid,
+			PeriodFrom:       from,
+			PeriodTo:         to,
+			SharedChannelIDs: "[]",
+		}
+		resultMap[uid] = r
+		return r
+	}
+
+	// 1. Shared channels (non-DM): channels where both users posted
+	rows, err := db.Query(`
+		SELECT b.user_id,
+			COUNT(DISTINCT b.channel_id) as shared_ch,
+			GROUP_CONCAT(DISTINCT b.channel_id) as ch_ids
+		FROM (
+			SELECT DISTINCT channel_id
+			FROM messages m
+			JOIN channels c ON c.id = m.channel_id
+			WHERE m.user_id = ? AND m.ts_unix >= ? AND m.ts_unix <= ?
+				AND m.is_deleted = 0 AND m.text != ''
+				AND c.type NOT IN ('dm', 'group_dm')
+		) my_channels
+		JOIN messages b ON b.channel_id = my_channels.channel_id
+		JOIN users u ON u.id = b.user_id
+		WHERE b.user_id != ? AND b.ts_unix >= ? AND b.ts_unix <= ?
+			AND b.is_deleted = 0 AND b.text != ''
+			AND u.is_bot = 0 AND u.is_deleted = 0
+		GROUP BY b.user_id
+		HAVING shared_ch >= 1
+		ORDER BY COUNT(*) DESC
+		LIMIT 100`,
+		currentUserID, from, to,
+		currentUserID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("computing shared channels: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid, chIDs string
+		var sharedCh int
+		if err := rows.Scan(&uid, &sharedCh, &chIDs); err != nil {
+			return nil, fmt.Errorf("scanning shared channels: %w", err)
+		}
+		r := ensureUser(uid)
+		r.SharedChannels = sharedCh
+		if chIDs != "" {
+			parts := strings.Split(chIDs, ",")
+			if data, err := json.Marshal(parts); err == nil {
+				r.SharedChannelIDs = string(data)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 2. Messages to/from in shared channels (non-DM)
+	for _, dir := range []struct {
+		field string
+		query string
+	}{
+		{"to", `
+			SELECT other.user_id, COUNT(*) as cnt
+			FROM messages other
+			JOIN (
+				SELECT DISTINCT channel_id
+				FROM messages m
+				JOIN channels c ON c.id = m.channel_id
+				WHERE m.user_id = ? AND m.ts_unix >= ? AND m.ts_unix <= ?
+					AND m.is_deleted = 0 AND m.text != ''
+					AND c.type NOT IN ('dm', 'group_dm')
+			) my_ch ON other.channel_id = my_ch.channel_id
+			JOIN users u ON u.id = other.user_id
+			WHERE other.user_id != ? AND other.ts_unix >= ? AND other.ts_unix <= ?
+				AND other.is_deleted = 0
+				AND u.is_bot = 0 AND u.is_deleted = 0
+			GROUP BY other.user_id`},
+		{"from", `
+			SELECT other.user_id, COUNT(*) as cnt
+			FROM messages other
+			JOIN (
+				SELECT DISTINCT channel_id
+				FROM messages m
+				JOIN channels c ON c.id = m.channel_id
+				WHERE m.user_id = ? AND m.ts_unix >= ? AND m.ts_unix <= ?
+					AND m.is_deleted = 0 AND m.text != ''
+					AND c.type NOT IN ('dm', 'group_dm')
+			) my_ch ON other.channel_id = my_ch.channel_id
+			JOIN users u ON u.id = other.user_id
+			WHERE other.user_id != ? AND other.ts_unix >= ? AND other.ts_unix <= ?
+				AND other.is_deleted = 0 AND other.text != ''
+				AND u.is_bot = 0 AND u.is_deleted = 0
+			GROUP BY other.user_id`},
+	} {
+		mRows, err := db.Query(dir.query, currentUserID, from, to, currentUserID, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("computing messages_%s: %w", dir.field, err)
+		}
+		defer mRows.Close()
+		for mRows.Next() {
+			var uid string
+			var cnt int
+			if err := mRows.Scan(&uid, &cnt); err != nil {
+				return nil, fmt.Errorf("scanning messages_%s: %w", dir.field, err)
+			}
+			if r, ok := resultMap[uid]; ok {
+				if dir.field == "to" {
+					r.MessagesTo = cnt
+				} else {
+					r.MessagesFrom = cnt
+				}
+			}
+		}
+		if err := mRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 3. Thread replies (non-DM): currentUser ↔ others in threads
+	for _, dir := range []struct {
+		field string
+		query string
+	}{
+		{"to", `
+			SELECT parent.user_id, COUNT(*) as cnt
+			FROM messages reply
+			JOIN messages parent ON reply.channel_id = parent.channel_id
+				AND reply.thread_ts = parent.ts
+			JOIN channels c ON c.id = reply.channel_id
+			WHERE reply.user_id = ? AND reply.ts_unix >= ? AND reply.ts_unix <= ?
+				AND reply.thread_ts IS NOT NULL
+				AND reply.is_deleted = 0
+				AND parent.user_id != ?
+				AND c.type NOT IN ('dm', 'group_dm')
+			GROUP BY parent.user_id`},
+		{"from", `
+			SELECT reply.user_id, COUNT(*) as cnt
+			FROM messages reply
+			JOIN messages parent ON reply.channel_id = parent.channel_id
+				AND reply.thread_ts = parent.ts
+			JOIN channels c ON c.id = reply.channel_id
+			WHERE parent.user_id = ? AND reply.ts_unix >= ? AND reply.ts_unix <= ?
+				AND reply.thread_ts IS NOT NULL
+				AND reply.is_deleted = 0
+				AND reply.user_id != ?
+				AND c.type NOT IN ('dm', 'group_dm')
+			GROUP BY reply.user_id`},
+	} {
+		trRows, err := db.Query(dir.query, currentUserID, from, to, currentUserID)
+		if err != nil {
+			return nil, fmt.Errorf("computing thread_replies_%s: %w", dir.field, err)
+		}
+		defer trRows.Close()
+		for trRows.Next() {
+			var uid string
+			var cnt int
+			if err := trRows.Scan(&uid, &cnt); err != nil {
+				return nil, fmt.Errorf("scanning thread_replies_%s: %w", dir.field, err)
+			}
+			r := ensureUser(uid)
+			if dir.field == "to" {
+				r.ThreadRepliesTo = cnt
+			} else {
+				r.ThreadRepliesFrom = cnt
+			}
+		}
+		if err := trRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	// 4. DM messages: count messages in DM channels between currentUser and others.
+	// dm_user_id stores the "other" user from currentUser's perspective,
+	// so all messages in that channel are between currentUser and dm_user_id.
+	dmRows, err := db.Query(`
+		SELECT c.dm_user_id,
+			SUM(CASE WHEN m.user_id = ? THEN 1 ELSE 0 END) as to_them,
+			SUM(CASE WHEN m.user_id != ? THEN 1 ELSE 0 END) as from_them
+		FROM messages m
+		JOIN channels c ON c.id = m.channel_id
+		WHERE c.type = 'dm' AND c.dm_user_id IS NOT NULL AND c.dm_user_id != ''
+			AND m.ts_unix >= ? AND m.ts_unix <= ?
+			AND m.is_deleted = 0
+		GROUP BY c.dm_user_id`,
+		currentUserID, currentUserID,
+		from, to)
+	if err != nil {
+		return nil, fmt.Errorf("computing DM messages: %w", err)
+	}
+	defer dmRows.Close()
+	for dmRows.Next() {
+		var uid string
+		var toThem, fromThem int
+		if err := dmRows.Scan(&uid, &toThem, &fromThem); err != nil {
+			return nil, fmt.Errorf("scanning DM messages: %w", err)
+		}
+		if uid == currentUserID {
+			continue
+		}
+		r := ensureUser(uid)
+		r.DMMessagesTo = toThem
+		r.DMMessagesFrom = fromThem
+	}
+	if err := dmRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 5. @-mentions: parse <@USERID> patterns from message text
+	// A mentioned B: currentUser's messages containing <@otherUID>
+	mentToRows, err := db.Query(`
+		SELECT mentioned_uid, COUNT(*) as cnt
+		FROM (
+			SELECT m.text, u2.id as mentioned_uid
+			FROM messages m
+			JOIN channels c ON c.id = m.channel_id
+			JOIN users u2 ON m.text LIKE '%<@' || u2.id || '>%'
+			WHERE m.user_id = ? AND m.ts_unix >= ? AND m.ts_unix <= ?
+				AND m.is_deleted = 0 AND m.text LIKE '%<@%>%'
+				AND u2.id != ? AND u2.is_bot = 0 AND u2.is_deleted = 0
+		)
+		GROUP BY mentioned_uid`,
+		currentUserID, from, to, currentUserID)
+	if err != nil {
+		return nil, fmt.Errorf("computing mentions_to: %w", err)
+	}
+	defer mentToRows.Close()
+	for mentToRows.Next() {
+		var uid string
+		var cnt int
+		if err := mentToRows.Scan(&uid, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning mentions_to: %w", err)
+		}
+		r := ensureUser(uid)
+		r.MentionsTo = cnt
+	}
+	if err := mentToRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// B mentioned A: other users' messages containing <@currentUserID>
+	mentFromRows, err := db.Query(`
+		SELECT m.user_id, COUNT(*) as cnt
+		FROM messages m
+		JOIN users u ON u.id = m.user_id
+		WHERE m.text LIKE '%<@' || ? || '>%'
+			AND m.user_id != ?
+			AND m.ts_unix >= ? AND m.ts_unix <= ?
+			AND m.is_deleted = 0
+			AND u.is_bot = 0 AND u.is_deleted = 0
+		GROUP BY m.user_id`,
+		currentUserID, currentUserID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("computing mentions_from: %w", err)
+	}
+	defer mentFromRows.Close()
+	for mentFromRows.Next() {
+		var uid string
+		var cnt int
+		if err := mentFromRows.Scan(&uid, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning mentions_from: %w", err)
+		}
+		r := ensureUser(uid)
+		r.MentionsFrom = cnt
+	}
+	if err := mentFromRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 6. Reactions: A reacted to B's messages / B reacted to A's messages
+	reactToRows, err := db.Query(`
+		SELECT msg.user_id, COUNT(*) as cnt
+		FROM reactions r
+		JOIN messages msg ON r.channel_id = msg.channel_id AND r.message_ts = msg.ts
+		WHERE r.user_id = ? AND msg.user_id != ?
+			AND msg.ts_unix >= ? AND msg.ts_unix <= ?
+		GROUP BY msg.user_id`,
+		currentUserID, currentUserID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("computing reactions_to: %w", err)
+	}
+	defer reactToRows.Close()
+	for reactToRows.Next() {
+		var uid string
+		var cnt int
+		if err := reactToRows.Scan(&uid, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning reactions_to: %w", err)
+		}
+		r := ensureUser(uid)
+		r.ReactionsTo = cnt
+	}
+	if err := reactToRows.Err(); err != nil {
+		return nil, err
+	}
+
+	reactFromRows, err := db.Query(`
+		SELECT r.user_id, COUNT(*) as cnt
+		FROM reactions r
+		JOIN messages msg ON r.channel_id = msg.channel_id AND r.message_ts = msg.ts
+		WHERE msg.user_id = ? AND r.user_id != ?
+			AND msg.ts_unix >= ? AND msg.ts_unix <= ?
+		GROUP BY r.user_id`,
+		currentUserID, currentUserID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("computing reactions_from: %w", err)
+	}
+	defer reactFromRows.Close()
+	for reactFromRows.Next() {
+		var uid string
+		var cnt int
+		if err := reactFromRows.Scan(&uid, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning reactions_from: %w", err)
+		}
+		r := ensureUser(uid)
+		r.ReactionsFrom = cnt
+	}
+	if err := reactFromRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 7. Compute weighted interaction score and classify connection type
+	for _, r := range resultMap {
+		scoreTo := float64(r.DMMessagesTo)*weightDM +
+			float64(r.MentionsTo)*weightMention +
+			float64(r.ThreadRepliesTo)*weightThreadReply +
+			float64(r.ReactionsTo)*weightReaction +
+			float64(r.MessagesTo)*weightChannelMsg
+
+		scoreFrom := float64(r.DMMessagesFrom)*weightDM +
+			float64(r.MentionsFrom)*weightMention +
+			float64(r.ThreadRepliesFrom)*weightThreadReply +
+			float64(r.ReactionsFrom)*weightReaction +
+			float64(r.MessagesFrom)*weightChannelMsg
+
+		r.InteractionScore = scoreTo + scoreFrom
+		r.ConnectionType = classifyConnection(scoreTo, scoreFrom)
+	}
+
+	// Build result slice sorted by interaction_score DESC, limit to top 50
+	if len(resultMap) == 0 {
+		return nil, nil
+	}
+	type scored struct {
+		uid   string
+		score float64
+	}
+	var sortable []scored
+	for uid, r := range resultMap {
+		sortable = append(sortable, scored{uid, r.InteractionScore})
+	}
+	sort.Slice(sortable, func(i, j int) bool {
+		return sortable[i].score > sortable[j].score
+	})
+	limit := 50
+	if len(sortable) < limit {
+		limit = len(sortable)
+	}
+	results := make([]UserInteraction, 0, limit)
+	for _, s := range sortable[:limit] {
+		results = append(results, *resultMap[s.uid])
+	}
+	return results, nil
+}
+
+// UpsertUserInteractions inserts or replaces interaction records for a window.
+func (db *DB) UpsertUserInteractions(interactions []UserInteraction) error {
+	if len(interactions) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning upsert interactions tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete old interactions for this window first
+	first := interactions[0]
+	_, err = tx.Exec(`DELETE FROM user_interactions WHERE user_a = ? AND period_from = ? AND period_to = ?`,
+		first.UserA, first.PeriodFrom, first.PeriodTo)
+	if err != nil {
+		return fmt.Errorf("deleting old interactions: %w", err)
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO user_interactions
+		(user_a, user_b, period_from, period_to,
+		 messages_to, messages_from, shared_channels,
+		 thread_replies_to, thread_replies_from, shared_channel_ids,
+		 dm_messages_to, dm_messages_from, mentions_to, mentions_from,
+		 reactions_to, reactions_from, interaction_score, connection_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("preparing upsert interactions: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, i := range interactions {
+		_, err := stmt.Exec(
+			i.UserA, i.UserB, i.PeriodFrom, i.PeriodTo,
+			i.MessagesTo, i.MessagesFrom, i.SharedChannels,
+			i.ThreadRepliesTo, i.ThreadRepliesFrom, i.SharedChannelIDs,
+			i.DMMessagesTo, i.DMMessagesFrom, i.MentionsTo, i.MentionsFrom,
+			i.ReactionsTo, i.ReactionsFrom, i.InteractionScore, i.ConnectionType)
+		if err != nil {
+			return fmt.Errorf("inserting interaction %s→%s: %w", i.UserA, i.UserB, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetUserInteractions returns interaction edges for a user in a specific window.
+func (db *DB) GetUserInteractions(userA string, periodFrom, periodTo float64) ([]UserInteraction, error) {
+	rows, err := db.Query(`SELECT user_a, user_b, period_from, period_to,
+		messages_to, messages_from, shared_channels,
+		thread_replies_to, thread_replies_from, shared_channel_ids,
+		dm_messages_to, dm_messages_from, mentions_to, mentions_from,
+		reactions_to, reactions_from, interaction_score, connection_type
+		FROM user_interactions
+		WHERE user_a = ? AND period_from = ? AND period_to = ?
+		ORDER BY interaction_score DESC`,
+		userA, periodFrom, periodTo)
+	if err != nil {
+		return nil, fmt.Errorf("querying user interactions: %w", err)
+	}
+	defer rows.Close()
+
+	var results []UserInteraction
+	for rows.Next() {
+		var i UserInteraction
+		if err := rows.Scan(&i.UserA, &i.UserB, &i.PeriodFrom, &i.PeriodTo,
+			&i.MessagesTo, &i.MessagesFrom, &i.SharedChannels,
+			&i.ThreadRepliesTo, &i.ThreadRepliesFrom, &i.SharedChannelIDs,
+			&i.DMMessagesTo, &i.DMMessagesFrom, &i.MentionsTo, &i.MentionsFrom,
+			&i.ReactionsTo, &i.ReactionsFrom, &i.InteractionScore, &i.ConnectionType); err != nil {
+			return nil, fmt.Errorf("scanning user interaction: %w", err)
+		}
+		results = append(results, i)
+	}
+	return results, rows.Err()
 }
 
 func buildHoursJSON(m map[int]int) string {

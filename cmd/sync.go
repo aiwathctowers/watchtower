@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"encoding/json"
-	"watchtower/internal/analysis"
+	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
+	"watchtower/internal/guide"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -257,11 +258,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 		d.SetLogger(logger)
 		d.SetPIDPath(pidFilePath(cfg))
 		if cfg.Digest.Enabled {
-			gen := digest.NewClaudeGeneratorWithPool(cfg.Digest.Model, cfg.ClaudePath, d.SessionPool())
+			gen, cleanupPool := cliPooledGenerator(cfg, logger)
+		defer cleanupPool()
 			pipe := digest.New(database, cfg, gen, logger)
 			d.SetDigestPipeline(pipe)
-			d.SetAnalysisPipeline(analysis.New(database, cfg, gen, logger))
+			d.SetChainsPipeline(chains.New(database, cfg, gen, logger))
 			d.SetTracksPipeline(tracks.New(database, cfg, gen, logger))
+			d.SetPeoplePipeline(guide.New(database, cfg, gen, logger))
 		}
 		return d.Run(ctx)
 	}
@@ -327,6 +330,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if syncErr != nil {
 				return fmt.Errorf("sync failed: %w", syncErr)
 			}
+			// Skip post-sync pipelines in --progress-json mode: the desktop app
+			// runs them independently via BackgroundTaskManager after onboarding.
 			if !syncFlagProgressJSON {
 				runPostSyncPipelines(ctx, database, cfg, logger)
 			}
@@ -390,7 +395,8 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 	}
 
 	out := os.Stdout
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, cleanup := cliPooledGenerator(cfg, logger)
+	defer cleanup()
 
 	// Digests
 	fmt.Fprintln(out)
@@ -413,19 +419,21 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		digestSpinner.Stop("No new digests needed")
 	}
 
-	// People analysis (independent, runs before tracks)
-	analysisSpinner := ui.NewSpinner(out, "Running people analysis...")
-	analysisPipe := analysis.New(database, cfg, gen, logger)
-	analysisPipe.OnProgress = func(done, total int, status string) {
-		analysisSpinner.UpdateProgress(done, total, status)
-	}
-	pn, err := analysisPipe.Run(ctx)
-	if err != nil {
-		analysisSpinner.Stop(fmt.Sprintf("People analysis error: %v", err))
-	} else if pn > 0 {
-		analysisSpinner.Stop(fmt.Sprintf("Analyzed %d user(s)", pn))
-	} else {
-		analysisSpinner.Stop("No new analyses needed")
+	// People cards (REDUCE phase: reads signals from channel digests)
+	{
+		peopleSpinner := ui.NewSpinner(out, "Generating people cards...")
+		peoplePipe := guide.New(database, cfg, gen, logger)
+		peoplePipe.OnProgress = func(done, total int, status string) {
+			peopleSpinner.UpdateProgress(done, total, status)
+		}
+		pn, err := peoplePipe.Run(ctx)
+		if err != nil {
+			peopleSpinner.Stop(fmt.Sprintf("People cards error: %v", err))
+		} else if pn > 0 {
+			peopleSpinner.Stop(fmt.Sprintf("Generated %d people card(s)", pn))
+		} else {
+			peopleSpinner.Stop("No new people cards needed")
+		}
 	}
 
 	// Tracks (depends on digests for related_digest_ids)

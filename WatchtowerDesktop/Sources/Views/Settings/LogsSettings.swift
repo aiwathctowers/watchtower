@@ -2,13 +2,18 @@ import SwiftUI
 
 struct LogsSettings: View {
     @State private var selectedLog: LogFile = .sync
-    @State private var logContent: String = ""
+    @State private var logLines: [String] = []
     @State private var isLoading = false
+    @State private var isLoadingMore = false
     @State private var autoScroll = true
-    @State private var lineCount: Int = 0
-    @State private var showingMore = false
+    @State private var totalLineCount: Int = 0
+    @State private var hasMore = false
+    @State private var fileSizeText: String?
+    @State private var loadTask: Task<Void, Never>?
 
     private let workspaceDir = Self.resolveWorkspaceDir()
+    private let pageSize = 200
+    private let loadMoreThreshold = 5
 
     enum LogFile: String, CaseIterable, Identifiable {
         case sync = "watchtower.log"
@@ -45,14 +50,14 @@ struct LogsSettings: View {
 
                 Spacer()
 
-                if lineCount > 0 {
-                    Text("\(lineCount) lines")
+                if !logLines.isEmpty {
+                    Text("\(logLines.count)\(hasMore ? "+" : "") of \(totalLineCount) lines")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
 
-                if let size = fileSize(for: selectedLog) {
+                if let size = fileSizeText {
                     Text(size)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -72,6 +77,7 @@ struct LogsSettings: View {
                     Image(systemName: "doc.richtext")
                 }
                 .help("Open in Default Editor")
+                .disabled(logPath(for: selectedLog) == nil)
 
                 Button {
                     revealInFinder()
@@ -90,7 +96,7 @@ struct LogsSettings: View {
                 Spacer()
                 ProgressView()
                 Spacer()
-            } else if logContent.isEmpty {
+            } else if logLines.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "doc.text")
@@ -103,17 +109,35 @@ struct LogsSettings: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView([.horizontal, .vertical]) {
-                        Text(logContent)
-                            .font(.system(size: 11, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id("logBottom")
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if hasMore {
+                                if isLoadingMore {
+                                    ProgressView()
+                                        .frame(maxWidth: .infinity)
+                                        .padding(4)
+                                } else {
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("loadMoreSentinel")
+                                        .onAppear { loadMore() }
+                                }
+                            }
+
+                            ForEach(Array(logLines.enumerated()), id: \.offset) { index, line in
+                                Text(line)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 0.5)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(index)
+                            }
+                        }
                     }
                     .background(Color(nsColor: .textBackgroundColor))
-                    .onChange(of: logContent) {
+                    .onChange(of: logLines.count) {
                         if autoScroll {
-                            proxy.scrollTo("logBottom", anchor: .bottom)
+                            proxy.scrollTo(logLines.count - 1, anchor: .bottom)
                         }
                     }
                 }
@@ -123,68 +147,115 @@ struct LogsSettings: View {
         .onAppear { loadLog() }
     }
 
-    // L2 fix: read only the tail of large files to avoid memory spikes.
     private func loadLog() {
+        loadTask?.cancel()
+
         guard let path = logPath(for: selectedLog) else {
-            logContent = ""
-            lineCount = 0
+            logLines = []
+            totalLineCount = 0
+            hasMore = false
+            fileSizeText = nil
             return
         }
 
         isLoading = true
-        Task.detached {
-            let content: String
-            let lines: Int
-
-            // Cap how much we read: last 512KB for large files
-            let maxBytes = 512 * 1024
-            let url = URL(fileURLWithPath: path)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                  let fileSize = attrs[.size] as? Int64 else {
-                await MainActor.run { logContent = ""; lineCount = 0; isLoading = false }
-                return
-            }
-
-            if fileSize <= maxBytes {
-                // Small file: read entirely
-                if let data = FileManager.default.contents(atPath: path),
-                   let str = String(data: data, encoding: .utf8) {
-                    let allLines = str.components(separatedBy: "\n")
-                    lines = allLines.count
-                    content = str
-                } else {
-                    content = ""; lines = 0
-                }
-            } else {
-                // Large file: read only the tail
-                do {
-                    let handle = try FileHandle(forReadingFrom: url)
-                    defer { try? handle.close() }
-                    let offset = UInt64(fileSize) - UInt64(maxBytes)
-                    try handle.seek(toOffset: offset)
-                    let data = handle.readData(ofLength: maxBytes)
-                    if var str = String(data: data, encoding: .utf8) {
-                        // Drop the first partial line
-                        if let newline = str.firstIndex(of: "\n") {
-                            str = String(str[str.index(after: newline)...])
-                        }
-                        let allLines = str.components(separatedBy: "\n")
-                        let tailLines = Array(allLines.suffix(500))
-                        lines = tailLines.count
-                        content = "... (showing last \(lines) lines of ~\(ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)) file)\n\n"
-                            + tailLines.joined(separator: "\n")
-                    } else {
-                        content = ""; lines = 0
-                    }
-                } catch {
-                    content = "Error reading log: \(error.localizedDescription)"; lines = 0
-                }
-            }
+        let count = pageSize
+        loadTask = Task.detached {
+            let result = Self.readTail(path: path, lineCount: count)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                logContent = content
-                lineCount = lines
+                logLines = result.lines
+                totalLineCount = result.totalLines
+                hasMore = result.totalLines > result.lines.count
+                fileSizeText = result.fileSizeText
                 isLoading = false
             }
+        }
+    }
+
+    private func loadMore() {
+        guard hasMore, !isLoadingMore, let path = logPath(for: selectedLog) else { return }
+
+        isLoadingMore = true
+        let currentCount = logLines.count
+        let nextCount = currentCount + pageSize
+        Task.detached {
+            let result = Self.readTail(path: path, lineCount: nextCount)
+            await MainActor.run {
+                // Prepend older lines, keep scroll position stable
+                let newLines = result.lines
+                logLines = newLines
+                hasMore = result.totalLines > newLines.count
+                totalLineCount = result.totalLines
+                isLoadingMore = false
+                autoScroll = false
+            }
+        }
+    }
+
+    private nonisolated static func readTail(path: String, lineCount: Int) -> TailResult {
+        let fileSizeText: String?
+        let totalLines: Int
+
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int64 {
+            fileSizeText = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        } else {
+            fileSizeText = nil
+        }
+
+        totalLines = countLines(path: path)
+        let lines = tailLines(path: path, count: lineCount)
+
+        return TailResult(
+            lines: lines,
+            totalLines: totalLines,
+            fileSizeText: fileSizeText
+        )
+    }
+
+    private nonisolated static func tailLines(path: String, count: Int) -> [String] {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
+        process.arguments = ["-n", "\(count)", path]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return [] }
+            var lines = output.components(separatedBy: "\n")
+            if lines.last?.isEmpty == true { lines.removeLast() }
+            return lines
+        } catch {
+            return ["Error reading log: \(error.localizedDescription)"]
+        }
+    }
+
+    private nonisolated static func countLines(path: String) -> Int {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/wc")
+        process.arguments = ["-l", path]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return 0 }
+            let trimmed = output.trimmingCharacters(in: .whitespaces)
+            if let spaceIdx = trimmed.firstIndex(of: " "),
+               let count = Int(trimmed[trimmed.startIndex..<spaceIdx]) {
+                return count
+            }
+            return Int(trimmed) ?? 0
+        } catch {
+            return 0
         }
     }
 
@@ -251,4 +322,10 @@ struct LogsSettings: View {
 
         return nil
     }
+}
+
+private struct TailResult {
+    let lines: [String]
+    let totalLines: Int
+    let fileSizeText: String?
 }

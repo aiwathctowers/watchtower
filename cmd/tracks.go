@@ -12,7 +12,6 @@ import (
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
-	"watchtower/internal/digest"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
@@ -303,9 +302,10 @@ func printTracks(w io.Writer, items []db.Track, database *db.DB) {
 		}
 
 		ownershipBadge := ""
-		if item.Ownership == "delegated" {
+		switch item.Ownership {
+		case "delegated":
 			ownershipBadge = " 📋"
-		} else if item.Ownership == "watching" {
+		case "watching":
 			ownershipBadge = " 👁"
 		}
 
@@ -590,16 +590,17 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
 	pipe := tracks.New(database, cfg, gen, logger)
+
+	// When --since is not explicitly passed, use pipe.Run() which detects
+	// first run and processes all initial_history_days day-by-day.
+	sinceExplicit := cmd.Flags().Changed("since")
 
 	if days > 3650 {
 		days = 3650 // clamp to prevent time.Duration overflow
 	}
-
-	now := time.Now().UTC()
-	to := float64(now.Unix())
-	from := float64(now.Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
 	if tracksGenFlagProgressJSON {
 		type pj struct {
@@ -619,7 +620,16 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 		pipe.OnProgress = func(done, total int, status string) {
 			emit(pj{Pipeline: "tracks", Done: done, Total: total, Status: status})
 		}
-		n, err := pipe.RunForWindow(cmd.Context(), userID, from, to)
+
+		var n int
+		if sinceExplicit {
+			now := time.Now().UTC()
+			to := float64(now.Unix())
+			from := float64(now.Add(-time.Duration(days) * 24 * time.Hour).Unix())
+			n, err = pipe.RunForWindow(cmd.Context(), userID, from, to)
+		} else {
+			n, err = pipe.Run(cmd.Context())
+		}
 		inTok, outTok, cost := pipe.AccumulatedUsage()
 		final := pj{Pipeline: "tracks", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost}
 		if err != nil {
@@ -629,12 +639,35 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	spinner := ui.NewSpinner(out, fmt.Sprintf("Extracting tracks for the last %d day(s) using %s...", days, cfg.Digest.Model))
+	var n int
+	if sinceExplicit {
+		now := time.Now().UTC()
+		to := float64(now.Unix())
+		from := float64(now.Add(-time.Duration(days) * 24 * time.Hour).Unix())
+
+		spinner := ui.NewSpinner(out, fmt.Sprintf("Extracting tracks for the last %d day(s) using %s...", days, cfg.Digest.Model))
+		pipe.OnProgress = func(done, total int, status string) {
+			spinner.UpdateProgress(done, total, status)
+		}
+		n, err = pipe.RunForWindow(cmd.Context(), userID, from, to)
+		if err != nil {
+			spinner.Stop("failed")
+			return fmt.Errorf("tracks pipeline: %w", err)
+		}
+		if n == 0 {
+			spinner.Stop("No tracks found")
+		} else {
+			spinner.Stop(fmt.Sprintf("Found %d track(s). Run 'watchtower tracks' to view them.", n))
+		}
+		return nil
+	}
+
+	spinner := ui.NewSpinner(out, fmt.Sprintf("Extracting tracks using %s...", cfg.Digest.Model))
 	pipe.OnProgress = func(done, total int, status string) {
 		spinner.UpdateProgress(done, total, status)
 	}
 
-	n, err := pipe.RunForWindow(cmd.Context(), userID, from, to)
+	n, err = pipe.Run(cmd.Context())
 	if err != nil {
 		spinner.Stop("failed")
 		return fmt.Errorf("tracks pipeline: %w", err)

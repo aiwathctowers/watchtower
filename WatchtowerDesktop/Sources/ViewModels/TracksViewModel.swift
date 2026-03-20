@@ -22,6 +22,7 @@ final class TracksViewModel {
     private(set) var starredChannelIDs: Set<String> = []
 
     private(set) var workspaceDomain: String?
+    private(set) var workspaceTeamID: String?
     private let dbManager: DatabaseManager
     private var currentUserID: String?
 
@@ -62,23 +63,24 @@ final class TracksViewModel {
                 let oCounts = try uid.map { try TrackQueries.fetchOwnershipCounts(db, assigneeUserID: $0) } ?? [:]
                 let profile = try ProfileQueries.fetchCurrentProfile(db)
                 let starred = Set(profile?.decodedStarredChannels ?? [])
-                return (uid, ws?.domain, all, count, inbox, updated, sCounts, total, oCounts, starred)
+                return (uid, ws?.domain, ws?.id, all, count, inbox, updated, sCounts, total, oCounts, starred)
             }
             currentUserID = result.0
             workspaceDomain = result.1
-            var loadedItems = result.2
-            let starredCh = result.9
+            workspaceTeamID = result.2
+            var loadedItems = result.3
+            let starredCh = result.10
             starredChannelIDs = starredCh
             if starredOnly && !starredCh.isEmpty {
                 loadedItems = loadedItems.filter { starredCh.contains($0.channelID) }
             }
             items = loadedItems
-            openCount = result.3
-            inboxCount = result.4
-            updatedCount = result.5
-            statusCounts = result.6
-            totalCount = result.7
-            ownershipCounts = result.8
+            openCount = result.4
+            inboxCount = result.5
+            updatedCount = result.6
+            statusCounts = result.7
+            totalCount = result.8
+            ownershipCounts = result.9
             availableChannels = loadAvailableChannels()
             errorMessage = nil
         } catch {
@@ -180,10 +182,14 @@ final class TracksViewModel {
         }
     }
 
+    func slackChannelURL(channelID: String) -> URL? {
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)")
+    }
+
     func slackMessageURL(channelID: String, messageTS: String) -> URL? {
-        guard let domain = workspaceDomain, !domain.isEmpty else { return nil }
-        let tsForURL = "p" + messageTS.replacingOccurrences(of: ".", with: "")
-        return URL(string: "https://\(domain).slack.com/archives/\(channelID)/\(tsForURL)")
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)&message=\(messageTS)")
     }
 
     /// Unique channel names for filter picker, refreshed on each load().

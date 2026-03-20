@@ -205,9 +205,17 @@ struct TrackRow: View {
                         .background(.teal, in: Capsule())
                 }
                 if !item.sourceChannelName.isEmpty {
-                    Text("#\(item.sourceChannelName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let url = viewModel.slackChannelURL(channelID: item.channelID) {
+                        Link(destination: url) {
+                            Text("#\(item.sourceChannelName)")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    } else {
+                        Text("#\(item.sourceChannelName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if item.isOverdue {
                     Text("OVERDUE")
@@ -218,7 +226,7 @@ struct TrackRow: View {
                         .background(.red, in: Capsule())
                 }
                 Spacer()
-                Text(item.createdDate, style: .relative)
+                Text(item.sourceDate, style: .relative)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

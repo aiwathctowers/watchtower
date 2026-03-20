@@ -65,8 +65,10 @@ func (db *DB) GetFeedbackForPrompt(promptID string, limit int) ([]Feedback, erro
 		entityType = "digest"
 	case "tracks.extract", "tracks.update":
 		entityType = "track"
-	case "analysis.user", "analysis.period":
-		entityType = "user_analysis" // CHECK constraint allows this since migration v19
+	case "analysis.user", "analysis.period", "people.reduce", "people.team":
+		entityType = "user_analysis"
+	case "guide.user", "guide.period":
+		entityType = "user_analysis"
 	default:
 		return nil, fmt.Errorf("unknown prompt ID %q: cannot determine feedback entity type", promptID)
 	}

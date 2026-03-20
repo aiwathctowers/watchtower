@@ -125,7 +125,7 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
-        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        process.currentDirectoryURL = Constants.processWorkingDirectory()
         process.arguments = args
 
         // Use shared resolved environment (caches login shell PATH, removes CLAUDECODE)

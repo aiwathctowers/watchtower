@@ -12,14 +12,21 @@ struct PeopleListView: View {
                 listPanel(vm)
 
                 if let userID = selectedUserID,
-                   let analysis = vm.analyses.first(where: { $0.userID == userID }) {
+                   let card = vm.cards.first(where: { $0.userID == userID }) {
                     Divider()
                     PersonDetailView(
-                        analysis: analysis,
+                        card: card,
                         userName: vm.userName(for: userID),
-                        history: vm.userHistory(userID: userID),
+                        history: vm.cardHistory(userID: userID),
                         userNameResolver: { vm.userName(for: $0) },
-                        onClose: { selectedUserID = nil }
+                        onClose: { selectedUserID = nil },
+                        isCurrentUser: userID == vm.currentUserID,
+                        profile: userID == vm.currentUserID ? vm.currentProfile : nil,
+                        interactions: userID == vm.currentUserID ? vm.interactions : [],
+                        allCards: vm.cards,
+                        onUpdateConnections: { reports, peers, manager in
+                            vm.updateConnections(reports: reports, peers: peers, manager: manager)
+                        }
                     )
                     .id(userID)
                     .frame(minWidth: 400, idealWidth: 500)
@@ -40,16 +47,23 @@ struct PeopleListView: View {
         }
     }
 
-    private var filteredAnalyses: [UserAnalysis] {
+    /// Current user's card (for "My Card" pinned row).
+    private var myCard: PeopleCard? {
+        guard let vm = viewModel, let uid = vm.currentUserID else { return nil }
+        return vm.cards.first { $0.userID == uid }
+    }
+
+    private var filteredCards: [PeopleCard] {
         guard let vm = viewModel else { return [] }
-        if searchText.isEmpty { return vm.analyses }
+        let excluding = vm.cards.filter { $0.userID != vm.currentUserID }
+        if searchText.isEmpty { return excluding }
         let q = searchText.lowercased()
-        return vm.analyses.filter { a in
-            let name = vm.userName(for: a.userID).lowercased()
+        return excluding.filter { card in
+            let name = vm.userName(for: card.userID).lowercased()
             if name.contains(q) { return true }
-            if a.summary.lowercased().contains(q) { return true }
-            if a.communicationStyle.lowercased().contains(q) { return true }
-            if a.decisionRole.lowercased().contains(q) { return true }
+            if card.summary.lowercased().contains(q) { return true }
+            if card.communicationStyle.lowercased().contains(q) { return true }
+            if card.decisionRole.lowercased().contains(q) { return true }
             return false
         }
     }
@@ -94,7 +108,7 @@ struct PeopleListView: View {
 
             // Summary stats
             HStack(spacing: 16) {
-                StatBadge(value: "\(vm.analyses.count)", label: "users")
+                StatBadge(value: "\(vm.cards.count)", label: "users")
                 if vm.redFlagCount > 0 {
                     StatBadge(value: "\(vm.redFlagCount)", label: "flags", color: .red)
                 }
@@ -121,19 +135,19 @@ struct PeopleListView: View {
             // User list
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    // Period summary
-                    if let ps = vm.periodSummary, searchText.isEmpty {
+                    // Card summary (team summary)
+                    if let cs = vm.cardSummary, searchText.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Team Summary")
                                 .font(.caption)
                                 .fontWeight(.bold)
                                 .foregroundStyle(.secondary)
 
-                            Text(ps.summary)
+                            Text(cs.summary)
                                 .font(.subheadline)
                                 .lineLimit(4)
 
-                            let attention = ps.parsedAttention
+                            let attention = cs.parsedAttention
                             if !attention.isEmpty {
                                 ForEach(attention, id: \.self) { item in
                                     HStack(alignment: .top, spacing: 4) {
@@ -141,6 +155,19 @@ struct PeopleListView: View {
                                             .foregroundStyle(.orange)
                                             .font(.caption)
                                         Text(item)
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+
+                            let tips = cs.parsedTips
+                            if !tips.isEmpty {
+                                ForEach(tips, id: \.self) { tip in
+                                    HStack(alignment: .top, spacing: 4) {
+                                        Image(systemName: "lightbulb.fill")
+                                            .foregroundStyle(.yellow)
+                                            .font(.caption)
+                                        Text(tip)
                                             .font(.caption)
                                     }
                                 }
@@ -155,16 +182,42 @@ struct PeopleListView: View {
                             .padding(.horizontal, 8)
                     }
 
-                    ForEach(filteredAnalyses) { analysis in
-                        personRow(analysis, vm: vm)
+                    // My Card — pinned at top
+                    if let my = myCard, let vm = viewModel, searchText.isEmpty {
+                        myCardRow(my, vm: vm)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedUserID = analysis.userID
+                                selectedUserID = my.userID
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(
-                                selectedUserID == analysis.userID
+                                selectedUserID == my.userID
+                                    ? Color.accentColor.opacity(0.15)
+                                    : Color.accentColor.opacity(0.05),
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 1)
+                            )
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 4)
+
+                        Divider()
+                            .padding(.horizontal, 8)
+                    }
+
+                    ForEach(filteredCards) { card in
+                        personRow(card, vm: vm)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedUserID = card.userID
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                selectedUserID == card.userID
                                     ? Color.accentColor.opacity(0.15)
                                     : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 6)
@@ -178,57 +231,103 @@ struct PeopleListView: View {
         .frame(minWidth: 300, idealWidth: 360)
     }
 
-    private func personRow(_ analysis: UserAnalysis, vm: PeopleViewModel) -> some View {
+    private func myCardRow(_ card: PeopleCard, vm: PeopleViewModel) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(analysis.styleEmoji)
-                Text("@\(vm.userName(for: analysis.userID))")
-                    .fontWeight(.medium)
-
-                StarToggleButton(isStarred: vm.isPersonStarred(analysis.userID)) {
-                    vm.toggleStarredPerson(analysis.userID)
-                }
-
+                Text(card.styleEmoji)
+                Text("My Card")
+                    .fontWeight(.bold)
+                    .foregroundStyle(Color.accentColor)
+                Text("@\(vm.userName(for: card.userID))")
+                    .foregroundStyle(.secondary)
                 Spacer()
-
-                if analysis.hasConcerns {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-                if analysis.hasRedFlags {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                        .font(.caption)
-                }
-
-                Text("\(analysis.messageCount) msgs")
+                Text("\(card.messageCount) msgs")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {
-                Text(analysis.communicationStyle)
+                if let profile = vm.currentProfile {
+                    if !profile.role.isEmpty {
+                        Text(profile.role)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !profile.team.isEmpty {
+                        Text(profile.team)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.1), in: Capsule())
+                    }
+                }
+
+                Text(card.communicationStyle)
+                    .font(.caption)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.1), in: Capsule())
+            }
+
+            if !vm.interactions.isEmpty {
+                let connCount = vm.interactions.count
+                let orgCount = (vm.currentProfile?.decodedReports.count ?? 0)
+                    + (vm.currentProfile?.decodedPeers.count ?? 0)
+                    + (vm.currentProfile?.manager.isEmpty == false ? 1 : 0)
+                Text("\(connCount) connections \u{00B7} \(orgCount) org links")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func personRow(_ card: PeopleCard, vm: PeopleViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(card.styleEmoji)
+                Text("@\(vm.userName(for: card.userID))")
+                    .fontWeight(.medium)
+
+                StarToggleButton(isStarred: vm.isPersonStarred(card.userID)) {
+                    vm.toggleStarredPerson(card.userID)
+                }
+
+                Spacer()
+
+                if card.hasRedFlags {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                }
+
+                Text("\(card.messageCount) msgs")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Text(card.communicationStyle)
                     .font(.caption)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.1), in: Capsule())
 
-                Text(analysis.decisionRole)
+                Text(card.decisionRole)
                     .font(.caption)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.1), in: Capsule())
 
-                if analysis.volumeChangePct != 0 {
-                    Text(String(format: "%+.0f%%", analysis.volumeChangePct))
+                if card.volumeChangePct != 0 {
+                    Text(String(format: "%+.0f%%", card.volumeChangePct))
                         .font(.caption)
-                        .foregroundStyle(analysis.volumeChangePct < -30 ? .red : .secondary)
+                        .foregroundStyle(card.volumeChangePct < -30 ? .red : .secondary)
                 }
             }
 
-            if !analysis.summary.isEmpty {
-                Text(analysis.summary)
+            if !card.summary.isEmpty {
+                Text(card.summary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

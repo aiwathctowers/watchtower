@@ -142,7 +142,7 @@ func setupTestDB(t *testing.T) (*db.DB, time.Time) {
 
 func TestNewContextBuilder(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 	assert.NotNil(t, cb)
 	assert.Equal(t, 150000, cb.budget)
 	assert.Equal(t, "test-corp", cb.domain)
@@ -150,13 +150,13 @@ func TestNewContextBuilder(t *testing.T) {
 
 func TestNewContextBuilder_DefaultBudget(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 0, "test-corp")
+	cb := NewContextBuilder(database, 0, "test-corp", "T001")
 	assert.Equal(t, 150000, cb.budget)
 }
 
 func TestBuild_EmptyQuery(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{RawText: ""}
 	result, err := cb.Build(query)
@@ -169,7 +169,7 @@ func TestBuild_EmptyQuery(t *testing.T) {
 
 func TestBuild_WorkspaceSummary(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{RawText: "what's happening"}
 	result, err := cb.Build(query)
@@ -188,7 +188,7 @@ func TestBuild_WithWatchList(t *testing.T) {
 	require.NoError(t, database.AddWatch("channel", "C001", "engineering", "high"))
 	require.NoError(t, database.AddWatch("user", "U001", "alice", "high"))
 
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	// Query with time range covering our test data
 	query := ParsedQuery{
@@ -213,7 +213,7 @@ func TestBuild_WithWatchList(t *testing.T) {
 
 func TestBuild_ChannelQuery(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText:  "summarize #engineering",
@@ -234,7 +234,7 @@ func TestBuild_ChannelQuery(t *testing.T) {
 
 func TestBuild_UserQuery(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText: "what did alice say",
@@ -255,7 +255,7 @@ func TestBuild_UserQuery(t *testing.T) {
 
 func TestBuild_SearchQuery(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText: "find messages about deployment",
@@ -275,7 +275,7 @@ func TestBuild_SearchQuery(t *testing.T) {
 
 func TestBuild_BroadContext(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText: "what's going on",
@@ -296,7 +296,7 @@ func TestBuild_TokenBudgetRespected(t *testing.T) {
 	database, refTime := setupTestDB(t)
 
 	// Very small budget
-	cb := NewContextBuilder(database, 500, "test-corp")
+	cb := NewContextBuilder(database, 500, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText: "what happened",
@@ -316,7 +316,7 @@ func TestBuild_TokenBudgetRespected(t *testing.T) {
 
 func TestBuild_DefaultTimeRange(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	// No time range specified — should default to last 24h
 	query := ParsedQuery{
@@ -331,7 +331,7 @@ func TestBuild_DefaultTimeRange(t *testing.T) {
 
 func TestFormatMessage(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	tsUnix := float64(time.Date(2025, 2, 26, 14, 30, 0, 0, time.UTC).Unix())
 	msg := db.Message{
@@ -352,7 +352,7 @@ func TestFormatMessage(t *testing.T) {
 
 func TestFormatMessage_LongText(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	longText := strings.Repeat("x", 600)
 	msg := db.Message{
@@ -371,7 +371,7 @@ func TestFormatMessage_LongText(t *testing.T) {
 
 func TestFormatMessage_UnknownUser(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	msg := db.Message{
 		ChannelID: "C001",
@@ -407,7 +407,7 @@ func TestBuildWorkspaceSummary_EmptyDB(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 	summary, err := cb.buildWorkspaceSummary(1000, nil)
 	require.NoError(t, err)
 	assert.Contains(t, summary, "Workspace Summary")
@@ -416,7 +416,7 @@ func TestBuildWorkspaceSummary_EmptyDB(t *testing.T) {
 
 func TestBuildPriorityContext_NoWatchList(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		TimeRange: &TimeRange{
@@ -433,7 +433,7 @@ func TestBuildPriorityContext_WithWatchedChannel(t *testing.T) {
 	database, refTime := setupTestDB(t)
 	require.NoError(t, database.AddWatch("channel", "C001", "engineering", "high"))
 
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	watchList, err := database.GetWatchList()
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestBuildPriorityContext_WithWatchedChannel(t *testing.T) {
 
 func TestBuildRelevantContext_NoMatchingData(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		Channels: []string{"nonexistent"},
@@ -469,7 +469,7 @@ func TestBuildRelevantContext_NoMatchingData(t *testing.T) {
 
 func TestBuildBroadContext_ShowsActiveChannels(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		TimeRange: &TimeRange{
@@ -486,7 +486,7 @@ func TestBuildBroadContext_ShowsActiveChannels(t *testing.T) {
 
 func TestResolveChannelName(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	assert.Equal(t, "engineering", cb.resolveChannelName("C001"))
 	assert.Equal(t, "CUNKNOWN", cb.resolveChannelName("CUNKNOWN"))
@@ -494,7 +494,7 @@ func TestResolveChannelName(t *testing.T) {
 
 func TestResolveUser(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	name, display := cb.resolveUser("U001")
 	assert.Equal(t, "alice", name)
@@ -507,7 +507,7 @@ func TestResolveUser(t *testing.T) {
 
 func TestEffectiveTimeRange_WithQuery(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	from := time.Date(2025, 2, 25, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 2, 25, 23, 59, 59, 0, time.UTC)
@@ -522,7 +522,7 @@ func TestEffectiveTimeRange_WithQuery(t *testing.T) {
 
 func TestEffectiveTimeRange_DefaultLast24h(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{}
 	f, tt := cb.effectiveTimeRange(query)
@@ -535,7 +535,7 @@ func TestEffectiveTimeRange_DefaultLast24h(t *testing.T) {
 
 func TestBuild_CombinedChannelAndUser(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText:  "what did alice say in engineering",
@@ -560,7 +560,7 @@ func TestBuild_ThreadSummaryIncluded(t *testing.T) {
 	// Add a watch so priority context picks up the engineering channel with thread
 	require.NoError(t, database.AddWatch("channel", "C001", "engineering", "high"))
 
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText: "catch me up",
@@ -579,7 +579,7 @@ func TestBuild_ThreadSummaryIncluded(t *testing.T) {
 
 func TestFormatSearchResults_Dedup(t *testing.T) {
 	database, _ := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	msgs := []db.Message{
 		{ChannelID: "C001", TS: "1.000", UserID: "U001", Text: "first", TSUnix: 1000},
@@ -597,7 +597,7 @@ func TestBuild_SmallBudgetStillProducesSummary(t *testing.T) {
 	database, _ := setupTestDB(t)
 
 	// Very small budget - should still produce at least workspace summary
-	cb := NewContextBuilder(database, 100, "test-corp")
+	cb := NewContextBuilder(database, 100, "test-corp", "T001")
 
 	query := ParsedQuery{RawText: "hello"}
 	result, err := cb.Build(query)
@@ -607,7 +607,7 @@ func TestBuild_SmallBudgetStillProducesSummary(t *testing.T) {
 
 func TestBuild_MultipleChannelQuery(t *testing.T) {
 	database, refTime := setupTestDB(t)
-	cb := NewContextBuilder(database, 150000, "test-corp")
+	cb := NewContextBuilder(database, 150000, "test-corp", "T001")
 
 	query := ParsedQuery{
 		RawText:  "compare #engineering and #design",
@@ -630,7 +630,7 @@ func TestBuild_EmptyDB(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
-	cb := NewContextBuilder(database, 150000, "empty-corp")
+	cb := NewContextBuilder(database, 150000, "empty-corp", "T001")
 
 	query := ParsedQuery{RawText: "what happened"}
 	result, err := cb.Build(query)

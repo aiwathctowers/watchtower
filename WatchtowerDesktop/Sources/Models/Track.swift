@@ -220,6 +220,16 @@ struct Track: FetchableRecord, Identifiable, Equatable {
         return Self.iso8601Standard.date(from: createdAt) ?? Date()
     }
 
+    /// Date derived from Slack source message timestamp (e.g. "1710345600.123456").
+    /// Falls back to createdDate if sourceMessageTS is empty or unparseable.
+    var sourceDate: Date {
+        guard !sourceMessageTS.isEmpty,
+              let ts = Double(sourceMessageTS) else {
+            return createdDate
+        }
+        return Date(timeIntervalSince1970: ts)
+    }
+
     var isOverdue: Bool {
         guard let ts = dueDate, ts > 0, isInbox || isActive else { return false }
         return Date(timeIntervalSince1970: ts) < Date()

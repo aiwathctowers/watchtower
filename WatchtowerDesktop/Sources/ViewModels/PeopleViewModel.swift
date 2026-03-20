@@ -4,8 +4,8 @@ import GRDB
 @MainActor
 @Observable
 final class PeopleViewModel {
-    var analyses: [UserAnalysis] = []
-    var periodSummary: PeriodSummary?
+    var cards: [PeopleCard] = []
+    var cardSummary: PeopleCardSummary?
     var searchText = ""
     var isLoading = false
     var errorMessage: String?
@@ -15,17 +15,25 @@ final class PeopleViewModel {
     private(set) var userNameCache: [String: String] = [:]
     private(set) var starredPeopleIDs: Set<String> = []
     private(set) var currentUserID: String?
+    private(set) var currentProfile: UserProfile?
+    private(set) var interactions: [UserInteraction] = []
     private let dbManager: DatabaseManager
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
     }
 
+    /// The current user's card from the loaded cards list.
+    var myCard: PeopleCard? {
+        guard let uid = currentUserID else { return nil }
+        return cards.first { $0.userID == uid }
+    }
+
     func load() {
         isLoading = true
         do {
             let result = try dbManager.dbPool.read { db in
-                let windows = try UserAnalysisQueries.fetchAvailableWindows(db)
+                let windows = try PeopleCardQueries.fetchAvailableWindows(db)
                 let users = try UserQueries.fetchAll(db, activeOnly: false)
 
                 var nameMap: [String: String] = [:]
@@ -34,33 +42,44 @@ final class PeopleViewModel {
                     nameMap[u.id] = name
                 }
 
-                let analyses: [UserAnalysis]
-                let ps: PeriodSummary?
+                let cards: [PeopleCard]
+                let cs: PeopleCardSummary?
                 if let window = windows.first {
-                    analyses = try UserAnalysisQueries.fetchForWindow(
-                        db, periodFrom: window.from, periodTo: window.to
+                    cards = try PeopleCardQueries.fetchForWindow(
+                        db, from: window.from, to: window.to
                     )
-                    ps = try UserAnalysisQueries.fetchPeriodSummary(
-                        db, periodFrom: window.from, periodTo: window.to
+                    cs = try PeopleCardQueries.fetchSummary(
+                        db, from: window.from, to: window.to
                     )
                 } else {
-                    analyses = []
-                    ps = nil
+                    cards = []
+                    cs = nil
                 }
                 let profile = try ProfileQueries.fetchCurrentProfile(db)
                 let starred = Set(profile?.decodedStarredPeople ?? [])
                 let uid = profile?.slackUserID
-                return (analyses, windows, nameMap, ps, starred, uid)
+
+                // Load interactions for social graph
+                var ints: [UserInteraction] = []
+                if let uid, let window = windows.first {
+                    ints = try InteractionQueries.fetchForUser(
+                        db, userID: uid, periodFrom: window.from, periodTo: window.to
+                    )
+                }
+
+                return (cards, windows, nameMap, cs, starred, uid, profile, ints)
             }
-            analyses = result.0
+            cards = result.0
             availableWindows = result.1
             userNameCache = result.2
-            periodSummary = result.3
+            cardSummary = result.3
             starredPeopleIDs = result.4
             currentUserID = result.5
+            currentProfile = result.6
+            interactions = result.7
             errorMessage = nil
         } catch {
-            analyses = []
+            cards = []
             errorMessage = error.localizedDescription
         }
         isLoading = false
@@ -72,16 +91,23 @@ final class PeopleViewModel {
         let window = availableWindows[index]
         do {
             let result = try dbManager.dbPool.read { db in
-                let a = try UserAnalysisQueries.fetchForWindow(
-                    db, periodFrom: window.from, periodTo: window.to
+                let c = try PeopleCardQueries.fetchForWindow(
+                    db, from: window.from, to: window.to
                 )
-                let ps = try UserAnalysisQueries.fetchPeriodSummary(
-                    db, periodFrom: window.from, periodTo: window.to
+                let cs = try PeopleCardQueries.fetchSummary(
+                    db, from: window.from, to: window.to
                 )
-                return (a, ps)
+                var ints: [UserInteraction] = []
+                if let uid = currentUserID {
+                    ints = try InteractionQueries.fetchForUser(
+                        db, userID: uid, periodFrom: window.from, periodTo: window.to
+                    )
+                }
+                return (c, cs, ints)
             }
-            analyses = result.0
-            periodSummary = result.1
+            cards = result.0
+            cardSummary = result.1
+            interactions = result.2
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -91,10 +117,10 @@ final class PeopleViewModel {
         userNameCache[userID] ?? userID
     }
 
-    func userHistory(userID: String) -> [UserAnalysis] {
+    func cardHistory(userID: String) -> [PeopleCard] {
         do {
             return try dbManager.dbPool.read { db in
-                try UserAnalysisQueries.fetchByUser(db, userID: userID)
+                try PeopleCardQueries.fetchByUser(db, userID: userID)
             }
         } catch {
             return []
@@ -114,13 +140,39 @@ final class PeopleViewModel {
     }
 
     var redFlagCount: Int {
-        analyses.filter { $0.hasRedFlags }.count
+        cards.filter { $0.hasRedFlags }.count
     }
 
     // MARK: - Starred People Management
 
     func isPersonStarred(_ userID: String) -> Bool {
         starredPeopleIDs.contains(userID)
+    }
+
+    /// Look up the card for a specific user in the current window.
+    func cardFor(userID: String) -> PeopleCard? {
+        cards.first { $0.userID == userID }
+    }
+
+    /// Update profile connections (reports, peers, manager).
+    func updateConnections(reports: [String], peers: [String], manager: String) {
+        guard let userID = currentUserID else { return }
+        do {
+            let encoder = JSONEncoder()
+            let reportsJSON = String(data: try encoder.encode(reports), encoding: .utf8) ?? "[]"
+            let peersJSON = String(data: try encoder.encode(peers), encoding: .utf8) ?? "[]"
+            try dbManager.dbPool.write { db in
+                try ProfileQueries.updateField(db, slackUserID: userID, field: "reports", value: reportsJSON)
+                try ProfileQueries.updateField(db, slackUserID: userID, field: "peers", value: peersJSON)
+                try ProfileQueries.updateField(db, slackUserID: userID, field: "manager", value: manager)
+            }
+            // Reload profile
+            currentProfile = try dbManager.dbPool.read { db in
+                try ProfileQueries.fetchCurrentProfile(db)
+            }
+        } catch {
+            errorMessage = "Failed to update connections: \(error.localizedDescription)"
+        }
     }
 
     func toggleStarredPerson(_ personUserID: String) {

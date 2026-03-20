@@ -82,7 +82,7 @@ final class DaemonManager {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
-            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            process.currentDirectoryURL = Constants.processWorkingDirectory()
             process.arguments = arguments
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice

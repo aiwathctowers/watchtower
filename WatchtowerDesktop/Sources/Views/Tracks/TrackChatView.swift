@@ -196,9 +196,11 @@ final class TrackChatViewModel {
         let schema = (try? dbPool.read { db in try ChatViewModel.fetchSchema(db) }) ?? ""
         let dbPath = dbPool.path
 
-        let domain: String = (try? dbPool.read { db in
-            try WorkspaceQueries.fetchWorkspace(db)?.domain
-        }) ?? "unknown"
+        let ws: Workspace? = try? dbPool.read { db in
+            try WorkspaceQueries.fetchWorkspace(db)
+        }
+        let domain = ws?.domain ?? "unknown"
+        let teamID = ws?.id ?? "unknown"
 
         return """
         You are Watchtower, an AI assistant helping the user manage a specific track from their Slack workspace.
@@ -232,7 +234,7 @@ final class TrackChatViewModel {
         - Find the original message: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.ts = ?  (bind: '\(item.channelID.replacingOccurrences(of: "'", with: "''"))', '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))')
         - Find thread context: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.thread_ts = ? ORDER BY m.ts_unix ASC  (bind same values)
         - Find who else discussed this: Look for messages in the same channel around the same time
-        - Permalink format: https://\(domain.replacingOccurrences(of: "'", with: "")).slack.com/archives/{channel_id}/p{ts_without_dots}
+        - Deep link format: slack://channel?team=\(teamID)&id={channel_id}&message={ts}
 
         === RESPONSE STYLE ===
         - Be concise and direct

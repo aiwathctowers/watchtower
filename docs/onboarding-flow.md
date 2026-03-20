@@ -1,287 +1,432 @@
 # Onboarding Flow — Watchtower Desktop
 
-## High-Level Decision Tree
+## Architecture: Unified State Machine
 
-```
-App Launch
-       │
-       ▼
-  ┌─────────────┐     no DB / no config
-  │  AppState    │─────────────────────────┐
-  │  initialize()│                         │
-  └──────┬───────┘                         ▼
-         │                     ┌──────────────────────────────┐
-    DB found                   │   OnboardingView             │
-         │                     │   (Welcome Flow — 4 steps)   │
-         ▼                     └──────────────────────────────┘
-  checkNeedsOnboarding()
-         │
-    onboarding_done?
-    ┌────┴────┐
-    │  true   │  false
-    ▼         ▼
- MainNav   OnboardingChatFlow
-           (Chat Flow only)
+Onboarding is implemented as a **single linear flow** with the current step persisted in UserDefaults.
+On app restart — returns to the unfinished step, not a restart from scratch.
+
+### OnboardingStateMachine (OnboardingStateMachine.swift)
+
+```swift
+enum OnboardingStep: Int, CaseIterable, Comparable, Codable {
+    case connect = 0      // Slack OAuth
+    case settings = 1     // Language, model, history, sync frequency, notifications
+    case claude = 2       // Claude CLI health check
+    case chat = 3         // Role questionnaire + AI conversation (sync in background)
+    case teamForm = 4     // Team form (reports, manager, peers)
+    case generating = 5   // Profile generation via AI
+    case complete = 6     // Done
+}
 ```
 
----
+**Persistence:** UserDefaults keys `onboarding_current_step`, `onboarding_sync_completed`.
 
-## Path 1: Welcome Flow (first launch, no DB) — `OnboardingView`
+**Methods:**
+- `advance()` — transition to the next step
+- `goTo(step)` — jump to a specific step
+- `reset(to:)` — reset (for re-run from Settings)
+- `markComplete()` — clear UserDefaults
+- `skipCompleted()` — auto-skip completed steps (connect if config.yaml exists)
+- `shouldSkip(step)` — check if step should be skipped
 
-`NavigationRoot`: no `isDBAvailable` → `OnboardingView`.
+**Visual indicator:** The first 4 steps are displayed as dots in `stepsIndicator` (connect, settings, claude, chat). Steps teamForm/generating/complete are not shown in the indicator.
 
-Full linear flow with 4 steps:
+## Full Diagram
 
 ```
-Step 1: Connect → Step 2: Settings → Step 3: Claude Check → Step 4: Sync + Chat
-                                                                        │
-                                                              ┌─────────┴──────────┐
-                                                              │  Role Questionnaire │
-                                                              │  (quick-reply chat) │
-                                                              ├─────────────────────┤
-                                                              │  AI Conversation    │
-                                                              │  (free-form chat)   │
-                                                              ├─────────────────────┤
-                                                              │  Team Form          │
-                                                              ├─────────────────────┤
-                                                              │  Generating context │
-                                                              └─────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════╗
+║                          APP LAUNCH                                     ║
+║                      WatchtowerApp.swift                                ║
+╚════════════════════════════════╤═════════════════════════════════════════╝
+                                 │
+                                 ▼
+                    ┌────────────────────────┐
+                    │   AppState.initialize() │
+                    │                        │
+                    │ 1. runCLIMigrations()  │
+                    │ 2. resolveDBPath()     │
+                    │ 3. DatabaseManager()   │
+                    │ 4. Sync state machine  │
+                    │    with DB state       │
+                    └───────────┬────────────┘
+                                │
+               ┌────────────────┴─────────────────┐
+               │                                  │
+        onboarding.currentStep              onboarding.currentStep
+            != .complete                        == .complete
+               │                                  │
+               ▼                                  ▼
+    ╔═════════════════════╗            ╔══════════════════════╗
+    ║  OnboardingView     ║            ║  MainNavigationView  ║
+    ║  (unified flow)     ║            ╚══════════════════════╝
+    ╚═════════╤═══════════╝
+              │
+              ▼  (resume from persisted step)
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 1: connect                                     │
+   │  ─────────────────                                   │
+   │  Auto-skip if config.yaml exists.                    │
+   │                                                      │
+   │  UI: Privacy notice + [Connect to Slack] button      │
+   │  1. watchtower auth trust-cert                       │
+   │  2. watchtower auth login (opens browser)            │
+   │  3. OAuth callback → config.yaml created             │
+   │                                                      │
+   │  Success → goTo(.settings)                           │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 2: settings                                    │
+   │  ────────────────                                    │
+   │  Language, AI Model, History Depth, Sync Freq, Notifs│
+   │                                                      │
+   │  On "Continue": watchtower config set <key> <val>    │
+   │    Keys: digest.language, sync.initial_history_days, │
+   │          digest.model, ai.model, sync.poll_interval  │
+   │  Success → goTo(.claude)                             │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 3: claude                                      │
+   │  ──────────────                                      │
+   │  Claude CLI health check:                            │
+   │    claude -p "respond with: OK" --output-format text │
+   │      --model <selected>                              │
+   │                                                      │
+   │  ┌─ Not found → install instructions + manual path   │
+   │  │   + Browse... file picker                         │
+   │  ├─ Found → auto health check                        │
+   │  ├─ Passed → 1.5s delay → goTo(.chat) + runSync()   │
+   │  └─ Failed → diagnoseClaudeError() + retry/back     │
+   │                                                      │
+   │  [Skip for now] → goTo(.chat) + runSync()            │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 4: chat (two parallel processes)               │
+   │  ─────────────────────────────────────               │
+   │                                                      │
+   │  .task: creates OnboardingChatViewModel with         │
+   │    language = ConfigService().digestLanguage          │
+   │    ?? settingsLanguage                               │
+   │  If sync not started and not completed → runSync()   │
+   │                                                      │
+   │  ┌─────────────────────┐  ┌────────────────────────┐ │
+   │  │  BACKGROUND: Sync   │  │  FOREGROUND: Chat      │ │
+   │  │                     │  │                        │ │
+   │  │  runSync()          │  │  4a. Role Questionnaire│ │
+   │  │  watchtower sync    │  │    Q1: Reports? [Y/N]  │ │
+   │  │    --progress-json  │  │    Q2a/Q2b: Strategy?  │ │
+   │  │                     │  │    Q3: Manage mgrs?    │ │
+   │  │  Progress shown as  │  │    → 1 of 5 roles      │ │
+   │  │  compact banner at  │  │                        │ │
+   │  │  bottom of chat     │  │  4b. AI Conversation   │ │
+   │  │                     │  │    4-6 questions about  │ │
+   │  │  On complete:       │  │    team, domain, needs  │ │
+   │  │  1. Open DB         │  │                        │ │
+   │  │  2. vm.setDatabase()│  │  chatReady triggers:   │ │
+   │  │  3. syncCompleted   │  │  1. [READY] marker     │ │
+   │  │     = true          │  │  2. No "?" + ≥3 msgs   │ │
+   │  │                     │  │  3. Fallback: ≥10 msgs  │ │
+   │  │                     │  │  → [Continue] button    │ │
+   │  └────────┬────────────┘  └───────────┬────────────┘ │
+   │           │                           │              │
+   │           │  User taps "Continue":                   │
+   │           │  1. finishChat() cancels stream          │
+   │           │  2. isExtractingProfile = true            │
+   │           │  3. parseProfileFromChat() — LLM call    │
+   │           │     extracts role/team/pain_points JSON   │
+   │           │  4. isExtractingProfile = false           │
+   │           │                           │              │
+   │           ▼                           ▼              │
+   │  ┌─────────────────────────────────────────────────┐ │
+   │  │                                                 │ │
+   │  │  CASE A: Sync finished before chat              │ │
+   │  │    syncCompleted == true                        │ │
+   │  │    → goTo(.teamForm) immediately                │ │
+   │  │                                                 │ │
+   │  │  CASE B: Chat finished before sync              │ │
+   │  │    syncCompleted == false                       │ │
+   │  │    → chatFinished = true                        │ │
+   │  │    → UI switches to "Waiting for sync..." view  │ │
+   │  │      with full progress bar                     │ │
+   │  │    → when sync completes:                       │ │
+   │  │      runSync() sees chatFinished == true         │ │
+   │  │      → goTo(.teamForm) automatically            │ │
+   │  │      Also: .onChange(of: syncCompleted) as       │ │
+   │  │        reactive fallback for edge cases          │ │
+   │  │                                                 │ │
+   │  │  CASE C: Sync failed                            │ │
+   │  │    → show error + [Retry Sync] button           │ │
+   │  │                                                 │ │
+   │  │  CASE D: Sync finished, chat not yet done       │ │
+   │  │    → waiting view with [Continue] button        │ │
+   │  │    → ensures DB available before transition     │ │
+   │  │                                                 │ │
+   │  └─────────────────────────────────────────────────┘ │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 5: teamForm                                    │
+   │  ────────────────                                    │
+   │  OnboardingTeamFormView:                             │
+   │    Role (prefilled), Team (prefilled)                │
+   │    My Reports [multi-select picker]                  │
+   │    I Report To [single-select picker]                │
+   │    Key Peers [multi-select picker]                   │
+   │                                                      │
+   │  User taps "Done":                                   │
+   │    1. goTo(.generating)                              │
+   │    2. generatePromptContext() → Claude generates      │
+   │       custom_prompt_context (5-10 sentences)          │
+   │    3. markOnboardingDone() → onboarding_done = 1     │
+   │    4. On success:                                     │
+   │       backgroundTaskManager.startPipelines()          │
+   │       appState.completeOnboarding()                   │
+   │       onRetry() → appState.initialize()               │
+   │    5. On error: goTo(.teamForm) (retry)               │
+   │                                                      │
+   │  .task fallback: if VM == nil on restart,             │
+   │    creates a new VM with DB. If DB unavailable →      │
+   │    fallback to .chat for re-sync                      │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ┌──────────────────────────────────────────────────────┐
+   │                                                      │
+   │  STEP 6: generating                                  │
+   │  ──────────────────                                  │
+   │  Visual step — shows ProgressView +                   │
+   │  "Setting up your personalized experience..."         │
+   │  Actual work is performed in Task from teamForm       │
+   │  (generatePromptContext + markOnboardingDone)          │
+   │  Errors are displayed here, but handled in teamForm   │
+   └──────────────────┬───────────────────────────────────┘
+                      │
+                      ▼
+   ╔══════════════════════════════════════════════════════╗
+   ║  MainNavigationView                                  ║
+   ║  Sidebar: AI Chat, Tracks, Digests, People, Search,  ║
+   ║           Training                                    ║
+   ║                                                      ║
+   ║  Background pipelines (SidebarProgressView):          ║
+   ║  Phase 1: Digests (blocking)                          ║
+   ║  Phase 2: Tracks + People Analytics (parallel)        ║
+   ║  Phase 3: Daemon starts (sync --daemon --detach)      ║
+   ╚══════════════════════════════════════════════════════╝
 ```
 
-### Step 1: Connect (Slack OAuth)
+## Restart Behavior
 
-- Privacy notice: "Your data never leaves your Mac"
-- Button "Connect to Slack" → launches browser OAuth flow (only on button press, no auto-open)
-- OAuth callback via localhost HTTPS server (port 18491)
-- Success page shows "Open Watchtower" button (no auto-redirect via JS)
-- App handles `watchtower-auth://` URL scheme via `onOpenURL` — brings existing window to front
-- If `config.yaml` already exists (repeat launch) → auto-skip to Step 2
-
-**Key files:**
-- `Navigation.swift` → `connectStep`, `startBrowserOAuthFlow()`
-- `WatchtowerApp.swift` → `onOpenURL` handler
-- `internal/auth/oauth.go` — OAuth server, success/error pages
-
-### Step 2: Settings
-
-| Setting | Options |
+| Interrupted at step | On restart |
 |---|---|
-| Language | English / Ukrainian / Russian |
-| AI Model | Fast (Haiku) / Balanced (Sonnet) / Quality (Opus) |
-| History Depth | 1 / 3 / 5 / 7 days (or custom) |
-| Sync Frequency | 5m / 15m / 30m / 1h |
-| Notifications | Toggle on/off |
+| connect | Auto-skip if config.yaml exists, otherwise show connect |
+| settings | Show settings (settings may not have been saved) |
+| claude | Re-run health check (quick check). If already passed — auto-advance |
+| chat | Restart questionnaire + AI chat from scratch (Claude session can't be restored). Sync restarts if not completed |
+| teamForm | Show team form. If DB unavailable — fallback to chat for re-sync |
+| generating | Visual placeholder — actual work from teamForm |
+| **post-onboarding pipelines** | If `pipelines_completed == false` in UserDefaults → automatic restart of `startPipelines()`. Go pipelines safely skip already-generated data (digests by timestamp, tracks by day-window, people by window-level check) |
 
-Saves to `config.yaml` via `watchtower config set` → advances to Step 3.
-
-**Key files:**
-- `Navigation.swift` → `settingsStep`, `applySettingsAndSync()`, `ModelPreset`, `PollPreset`
-
-### Step 3: AI Setup (Claude Check)
-
-Three branches:
-
-1. **Claude CLI not found** → installation instructions (`npm install -g @anthropic-ai/claude-code`), browse for manual path, skip option
-2. **Claude found** → automatic health check (`claude -p "respond with: OK" --model <selected>`)
-   - Success → auto-advance to Step 4 (after 1.5s)
-   - Error → diagnostics + retry
-3. **Health passed** → green checkmark, then auto-advance
-
-**Diagnostics map:**
-- `not authenticated` / `unauthorized` → "Run `claude` in Terminal, complete login"
-- `model` + `access`/`permission` → "Try a different AI model in Settings"
-- `rate limit` / `overloaded` → "Wait and retry"
-- `network` / `connection` → "Check internet connection"
-
-**Key files:**
-- `Navigation.swift` → `claudeStepView`, `runClaudeHealthCheck()`, `diagnoseClaudeError()`
-
-### Step 4: Sync + Chat (parallel)
-
-**Sync and chat run simultaneously.** The user fills in their profile while data syncs in the background.
-
-Internal phases (`OnboardingChatPhase`):
+## Post-Onboarding Pipelines (BackgroundTaskManager)
 
 ```
-chat → waitingForSync / teamForm → generating → done
+startPipelines()
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 1: Digests (blocking)                         │
+│  watchtower digest generate --progress-json          │
+│  Generates channel/daily/weekly digests              │
+│  + decisions (JSON field in digests table)            │
+└──────────────────────┬──────────────────────────────┘
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+          ▼                         ▼
+┌──────────────────────┐  ┌──────────────────────────┐
+│  Phase 2a: Tracks    │  │  Phase 2b: People        │
+│  (parallel)          │  │  (parallel)              │
+│  watchtower tracks   │  │  watchtower people       │
+│  generate            │  │  generate                │
+│  --progress-json     │  │  --progress-json         │
+│                      │  │                          │
+│  Depends on digests  │  │  Does not depend on      │
+│  (digest decisions)  │  │  digests (reads raw msgs) │
+└──────────┬───────────┘  └──────────┬───────────────┘
+           │                         │
+           └────────────┬────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────┐
+│  Phase 3: Daemon                                     │
+│  watchtower sync --daemon --detach                   │
+│  Starts only after all pipelines complete             │
+│  Further updates: digests, tracks, people,           │
+│  action items — on schedule with throttling           │
+└─────────────────────────────────────────────────────┘
 ```
 
-Sync progress shown as compact banner at the bottom of the chat view. If chat finishes before sync — shows "Waiting for sync..." screen.
+### Recovery on Interruption
 
-#### 4a. Role Questionnaire (quick-reply buttons in chat)
+`UserDefaults["pipelines_completed"]` — flag for all pipelines completion.
+- Set to `true` after Phase 3 completes
+- Reset on onboarding re-run (`startOnboarding()`)
+- During `AppState.initialize()`: if onboarding completed but flag is `false` → `startPipelines()` automatically
 
-Questions appear as assistant chat bubbles. User answers via quick-reply buttons (shown instead of text input).
+Go pipelines are safe for re-execution:
+- **Digests**: skips channels with digests newer than latest messages
+- **Tracks**: day-aligned windows, delete+reinsert for current window
+- **People**: window-level skip if analysis already exists
+
+## Re-run from Settings (Path 3)
 
 ```
-[AI]  Let's understand your role. Do people report to you?
-                                            [Yes] [No]
-
-→ User taps "Yes"
-
-[You] Yes
-[AI]  Do you determine strategy or vision for your area?
-                                            [Yes] [No]
-
-→ User taps "No"
-
-[You] No
+ProfileSettings.swift → "Re-run Onboarding" button
+    │
+    ▼
+appState.startOnboarding()
+    onboarding.reset(to: .chat)    // connect/settings/claude already passed
+    needsOnboarding = true
+    UserDefaults.removeObject(forKey: pipelinesCompletedKey)
+    │
+    ▼
+NavigationRoot re-renders → OnboardingView
+    Starts from step .chat (Role Questionnaire)
 ```
-
-Branching logic:
-
-- **Q1**: "Do people report to you?" → Yes / No
-- **Q2a** (if Q1=Yes): "Do you determine strategy/vision for your area?" → Yes / No
-- **Q2b** (if Q1=No): "Your influence comes mainly through..." → Expertise & authority / Solving tasks
-- **Q3** (if Q1=Yes AND Q2a=Yes): "Do you manage other managers?" → Yes / No
-
-Result → one of 5 roles:
-
-| Q1 | Q2 | Q3 | Role |
-|---|---|---|---|
-| Yes | Yes (strategy) | Yes | **Top Management** |
-| Yes | Yes (strategy) | No | **Direction Owner** |
-| Yes | No | — | **Middle Management** |
-| No | Expertise | — | **Senior IC / Expert** |
-| No | Tasks | — | **IC / Specialist** |
-
-**Key files:**
-- `OnboardingChatViewModel.swift` → `startQuestionnaire()`, `answerRoleQ1()`, etc.
-- `UserProfile.swift` → `RoleDetermination`, `RoleLevel`
-
-#### 4b. AI Conversation (free-form)
-
-After the last question is answered, `initiateChat()` fires automatically:
-- Sends a hidden prompt to Claude with the determined role context
-- AI streams its first message — acknowledges the role, asks about team/pain points
-- Text input replaces the quick-reply buttons
-- AI asks 2-4 questions (one at a time) about:
-  1. Team — what team they're on
-  2. Pain Points — what problems they face with Slack
-  3. Track Focus — what to monitor (role-dependent)
-- "Continue" button appears after ≥1 user message (for impatient users)
-
-**Auto-completion:** AI appends `[READY]` marker when it has gathered enough info. The app strips the marker from displayed text, sets `chatReady = true`, and auto-transitions to team form.
-
-**Key files:**
-- `OnboardingChatViewModel.swift` → `initiateChat()`, `send()`, `stripReadyMarker()`, `chatReady`
-- `OnboardingChatView.swift` → `onChange(of: chatReady)`
-
-#### 4c. Team Form
-
-- **Role** (text field, prefilled from chat)
-- **Team** (text field, prefilled from chat)
-- **My Reports** — multi-select SlackUserPicker (from synced users)
-- **I Report To** — single-select SlackUserPicker
-- **Key Peers** — multi-select SlackUserPicker
-- Shows "Waiting for Slack sync to load users..." if `allUsers` is empty
-- Button "Done" (Cmd+Return)
-
-**Key files:**
-- `OnboardingTeamFormView.swift`
-
-#### 4d. Generating
-
-1. `generatePromptContext()` — AI generates 3-5 sentence personalization context
-2. `markOnboardingDone()` — sets `onboarding_done = 1` in DB
-3. `backgroundTaskManager.startPipelines()` — kicks off digest/tracks pipelines
-4. `onRetry()` → `appState.initialize()` → DB reopened → MainNavigationView
-
-**Key files:**
-- `OnboardingChatViewModel.swift` → `generatePromptContext()`, `markOnboardingDone()`
 
 ---
 
-## Path 2: Re-onboarding (DB exists, incomplete) — `OnboardingChatFlow`
+## File Details
 
-If DB exists but `onboarding_done = false` → `needsOnboarding = true` → `OnboardingChatFlow`.
+### NavigationRoot — entry point (Navigation.swift)
 
-**Skips Steps 1-3** (OAuth, Settings, Claude check already done). Goes straight to chat:
-
+```swift
+if appState.isLoading        → Color.clear (blank)
+if appState.needsOnboarding  → OnboardingView(onRetry:)    // Unified flow
+else                         → MainNavigationView()         // Main app
 ```
-Chat (4a questionnaire + 4b AI conversation) → Team Form (4c) → Generating (4d)
-```
 
-On completion: `appState.completeOnboarding()` → MainNavigationView.
+### AppState — state management (AppState.swift)
 
-**Key files:**
-- `OnboardingChatFlow.swift`
+| Method | Description |
+|---|---|
+| `initialize()` | Opens DB, syncs state machine with DB, loads emoji, starts digest watcher, checks updates, recovers pipelines |
+| `onboarding` | `OnboardingStateMachine` — persistent state machine |
+| `needsOnboarding` | `onboarding.currentStep != .complete` (after sync with DB) |
+| `completeOnboarding()` | `onboarding.markComplete()` + `needsOnboarding = false` |
+| `startOnboarding()` | `onboarding.reset(to: .chat)` + `needsOnboarding = true` + clear `pipelinesCompletedKey` |
 
----
+### OnboardingChatViewModel — onboarding brain
 
-## Path 3: Re-run from Settings
-
-`ProfileSettings` → "Re-run Onboarding" button → `appState.startOnboarding()` → `needsOnboarding = true` → Path 2.
-
-**Key files:**
-- `ProfileSettings.swift` → `onboardingSection`
-
----
-
-## Data Model: `user_profile` table
-
-| Field | Source | Type |
+| Method | When called | What it does |
 |---|---|---|
-| `slack_user_id` | Workspace sync | TEXT (unique) |
-| `role` | Questionnaire + chat parsing | TEXT |
-| `team` | Chat parsing + team form | TEXT |
-| `responsibilities` | (reserved) | JSON array |
-| `reports` | Team form | JSON array of Slack user IDs |
-| `peers` | Team form | JSON array of Slack user IDs |
-| `manager` | Team form | Slack user ID |
-| `starred_channels` | Post-onboarding (Settings) | JSON array |
-| `starred_people` | Post-onboarding (Settings) | JSON array |
-| `pain_points` | Chat parsing | JSON array |
-| `track_focus` | Chat parsing | JSON array |
-| `onboarding_done` | Completion flag (0→1) | INTEGER |
-| `custom_prompt_context` | AI-generated personalization | TEXT |
+| `startQuestionnaire()` | `.task` in OnboardingChatView | First question Q1 + quick-reply buttons |
+| `answerRoleQ1(reportsToThem:)` | Yes/No button | Records answer, shows Q2a or Q2b |
+| `answerRoleQ2a(setStrategy:)` | Yes/No button | If Yes → Q3, if No → finishQuestionnaire |
+| `answerRoleQ2b(influenceType:)` | Expertise/Tasks button | → finishQuestionnaire |
+| `answerRoleQ3(manageManagers:)` | Yes/No button | → finishQuestionnaire |
+| `finishQuestionnaire()` | After last answer | Removes buttons, calls `initiateChat()` |
+| `initiateChat()` | After questionnaire | Hidden prompt → Claude → streams first message |
+| `send()` | User sends text | Streams Claude response, system prompt every time, checks `[READY]` marker |
+| `stripReadyMarker(at:)` | After each AI response | Primary: removes `[READY]`, sets `chatReady=true`. Secondary: no `?` + `≥3` responses → chatReady |
+| `finishChat()` | "Continue" button | Cancels stream, `isExtractingProfile=true`, calls `parseProfileFromChat()` |
+| `parseProfileFromChat()` | From finishChat | **LLM extraction**: sends transcript to Claude, gets JSON `{role, team, pain_points}` |
+| `generatePromptContext()` | Step generating (from teamForm closure) | Sends transcript + metadata to Claude → 5-10 sentences |
+| `markOnboardingDone()` | After generatePromptContext | `UPDATE user_profile SET onboarding_done = 1` |
 
----
+### chatReady — three mechanisms
 
-## How the Profile is Used Downstream
+1. **Primary**: AI sends `[READY]` marker (case-insensitive). `stripReadyMarker()` removes the marker from text.
+2. **Secondary**: AI stopped asking questions (response without `?`) after `≥3` user messages (`minAnswersForNoQuestionHeuristic`).
+3. **Fallback**: `≥10` user messages (`fallbackMessageCount`) — in case AI didn't send `[READY]` and keeps asking.
 
-### 1. Role-Aware Prompts (Go backend)
+### Claude CLI Invocations
 
-`prompts.Store.GetForRole(id, role)`:
-- Tries role-specific prompt variant first (e.g., `tracks.extract_direction_owner`)
-- Falls back to standard prompt if no variant exists
-- Prepends `RoleInstructions[role]` context to all prompts
+During onboarding, Claude CLI is called **4 times**:
 
-**Key files:**
-- `internal/prompts/store.go` → `GetForRole()`
-- `internal/prompts/role_variants.go` → `RoleInstructions` map
+1. **Health check** (Step claude): `claude -p "respond with: OK" --output-format text --model <model>` — verifies CLI works
+2. **Onboarding conversation** (Step chat): multi-turn streaming via `claudeService.stream()` with `sessionID` for context. System prompt is sent with every message.
+3. **Profile extraction** (Step chat → finishChat): one-shot LLM call — transcript → JSON `{role, team, pain_points}`. No sessionID.
+4. **Profile generation** (Step generating): one-shot call — transcript + metadata → custom_prompt_context (5-10 sentences). No sessionID.
 
-### 2. All Pipelines Get Personalized Prompts
+### Data Model: `user_profile` table
 
-- `internal/digest/pipeline.go` — digest generation
-- `internal/tracks/pipeline.go` — track extraction
-- `internal/analysis/pipeline.go` — people analytics
+| Field | Source | Type | Downstream usage |
+|---|---|---|---|
+| `slack_user_id` | `workspace.current_user_id` | TEXT UNIQUE | PK, workspace link |
+| `role` | LLM extraction from chat (parseProfileFromChat) | TEXT | `prompts.Store.GetForRole()` — role-specific prompts |
+| `team` | LLM extraction from chat + team form | TEXT | Context in prompts |
+| `reports` | Team form picker | JSON `[string]` | Tracks pipeline — ownership |
+| `peers` | Team form picker | JSON `[string]` | Tracks pipeline — ownership |
+| `manager` | Team form picker | TEXT | Tracks pipeline — ownership |
+| `pain_points` | LLM extraction from chat | JSON `[string]` | Personalization context |
+| `track_focus` | Chat parsing | JSON `[string]` | Personalization context |
+| `onboarding_done` | `markOnboardingDone()` | INTEGER 0/1 | Onboarding display trigger |
+| `custom_prompt_context` | AI-generated (5-10 sentences) | TEXT | Injected into ALL prompts: digest, tracks, analysis, action items, chat |
+| `starred_channels` | Post-onboarding (Settings) | JSON `[string]` | Priority channels |
+| `starred_people` | Post-onboarding (Settings) | JSON `[string]` | Priority people |
 
-### 3. AI Chat Personalization
+### Downstream Profile Usage
 
-`custom_prompt_context` is injected into the system prompt for the conversational AI chat.
+```
+custom_prompt_context ─┬─▶ digest/pipeline.go    (channel/daily/weekly digests)
+                       ├─▶ tracks/pipeline.go     (task extraction)
+                       ├─▶ analysis/pipeline.go   (people analytics)
+                       ├─▶ actionitems/pipeline.go (action items)
+                       └─▶ ChatView system prompt  (AI chat)
 
-### 4. Team Graph for Tracks
+role ─────────────────────▶ prompts/store.go GetForRole()
+                             → role-specific prompt variants
+                             → RoleInstructions[role] prefix
 
-Reports / manager / peers data is used for ownership assignment in the tracks pipeline.
+reports/manager/peers ────▶ tracks/pipeline.go
+                             → ownership assignment
+```
+
+### Localization
+
+All onboarding strings are localized in `OnboardingChatViewModel.strings` (3 languages: EN/RU/UA):
+- Role questions (Q1-Q3)
+- Button labels (Yes/No, Expertise/Tasks, Continue)
+- Chat header and subtitle
+
+System prompt for Claude switches language via `langRule` (English/Russian/Ukrainian).
+
+### Status Bar (bottom panel during onboarding)
+
+Shown only on steps connect/settings/claude (`currentStep <= .claude`).
+Displays two indicators:
+- 🟢/🔴 **Watchtower CLI** — `Constants.findCLIPath() != nil`
+- 🟢/🟠 **Claude Code** — `Constants.findClaudePath() != nil`
 
 ---
 
 ## File Index
 
-| File | Purpose |
+| File | Contents |
 |---|---|
-| `WatchtowerApp.swift` | App entry, `onOpenURL` handler for `watchtower-auth://` scheme |
-| `Navigation.swift` | `NavigationRoot`, `OnboardingView` (4-step wizard), `OnboardingStep` enum |
-| `OnboardingChatFlow.swift` | Simplified flow controller for Path 2 (chat → team form → generating) |
-| `OnboardingChatView.swift` | Unified chat UI: role questions (quick-reply buttons) + AI conversation |
-| `OnboardingChatViewModel.swift` | ViewModel: questionnaire, chat, role determination, profile parsing, prompt generation |
-| `OnboardingTeamFormView.swift` | Team picker form (reports, manager, peers) |
-| `AppState.swift` | `needsOnboarding`, `checkNeedsOnboarding()`, `completeOnboarding()` |
-| `ProfileSettings.swift` | "Re-run Onboarding" button, profile editing |
-| `UserProfile.swift` | `RoleLevel` enum, `RoleDetermination` struct, `UserProfile` model |
-| `ProfileQueries.swift` | DB operations for user_profile |
-| `internal/auth/oauth.go` | OAuth localhost server, success/error pages |
+| `WatchtowerApp.swift` | Entry point, `onOpenURL` for `watchtower-auth://` |
+| `OnboardingStateMachine.swift` | `OnboardingStep` enum (+ `indicatorTitle`, `indicatorSteps`), `OnboardingStateMachine` with UserDefaults persistence |
+| `Navigation.swift` | `NavigationRoot`, `OnboardingView` (all steps: connect/settings/claude/chat/teamForm/generating), `MainNavigationView`, `ModelPreset`, `PollPreset`, sync/CLI helpers |
+| `AppState.swift` | `onboarding: OnboardingStateMachine`, `needsOnboarding`, `completeOnboarding()`, `startOnboarding()`, `backgroundTaskManager`, `updateService` |
+| `OnboardingChatView.swift` | Chat UI: role questions (quick-reply) + AI conversation + Continue button (with "Analyzing..." state) |
+| `OnboardingChatViewModel.swift` | ViewModel: questionnaire, chat streaming, LLM profile extraction, prompt generation, localization |
+| `OnboardingTeamFormView.swift` | Team form: role, team, reports, manager, peers |
+| `UserProfile.swift` | `RoleLevel` enum, `RoleDetermination` struct |
+| `ProfileQueries.swift` | `fetchCurrentProfile()`, `upsertProfile()` |
+| `ProfileSettings.swift` | "Re-run Onboarding" button |
+| `BackgroundTaskManager.swift` | `TaskKind` (.digests/.tracks/.people), pipeline orchestration, progress tracking, ETA, retry/dismiss |
+| `internal/auth/oauth.go` | OAuth HTTPS server (port 18491), success/error pages |
+| `internal/db/db.go` | Schema migration: `user_profile` table |
+| `internal/db/profile.go` | Go-side `GetUserProfile()`, `UpsertUserProfile()` |
 | `internal/prompts/store.go` | `GetForRole()` — role-aware prompt loading |
-| `internal/prompts/role_variants.go` | `RoleInstructions` — per-role context |
-| `internal/db/schema.sql` | `user_profile` table definition |
-| `internal/db/profile.go` | Go-side profile DB operations |

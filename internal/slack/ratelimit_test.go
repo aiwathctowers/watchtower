@@ -1,7 +1,9 @@
 package slack
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"testing"
 	"time"
 
@@ -100,6 +102,94 @@ func TestUnlimitedRateLimiter(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 	assert.Less(t, elapsed, 1*time.Second, "unlimited limiter should not throttle")
+}
+
+func TestStatsAndResetStats(t *testing.T) {
+	rl := NewUnlimitedRateLimiter()
+
+	// Record some requests
+	rl.Done(Tier2)
+	rl.Done(Tier2)
+	rl.Done(Tier3)
+	rl.Done(Tier4)
+
+	// Simulate a rate limit
+	rl.HandleRateLimit(Tier2, 10*time.Millisecond)
+
+	counts, retries := rl.Stats()
+	assert.Equal(t, 2, counts[Tier2])
+	assert.Equal(t, 1, counts[Tier3])
+	assert.Equal(t, 1, counts[Tier4])
+	assert.Equal(t, 1, retries)
+
+	// Verify Stats returns a copy (modifying returned map should not affect internal state)
+	counts[Tier2] = 999
+	counts2, _ := rl.Stats()
+	assert.Equal(t, 2, counts2[Tier2])
+
+	// Reset and verify
+	rl.ResetStats()
+	counts, retries = rl.Stats()
+	assert.Empty(t, counts)
+	assert.Equal(t, 0, retries)
+}
+
+func TestHandleRateLimitDefaultDuration(t *testing.T) {
+	rl := NewRateLimiter()
+
+	// Zero duration should default to at least 1 second
+	rl.HandleRateLimit(Tier2, 0)
+
+	rl.mu.Lock()
+	until := rl.backoff
+	rl.mu.Unlock()
+
+	assert.False(t, until.IsZero())
+	// With 0 duration, it defaults to 1s + jitter (up to 250ms)
+	assert.True(t, until.After(time.Now().Add(500*time.Millisecond)))
+}
+
+func TestHandleRateLimitNeverShortens(t *testing.T) {
+	rl := NewRateLimiter()
+
+	// Set a long backoff
+	rl.HandleRateLimit(Tier2, 10*time.Second)
+	rl.mu.Lock()
+	firstBackoff := rl.backoff
+	rl.mu.Unlock()
+
+	// Set a shorter backoff — should not shorten
+	rl.HandleRateLimit(Tier2, 1*time.Millisecond)
+	rl.mu.Lock()
+	secondBackoff := rl.backoff
+	rl.mu.Unlock()
+
+	assert.False(t, secondBackoff.Before(firstBackoff), "backoff should never be shortened")
+}
+
+func TestHandleRateLimitWithLogger(t *testing.T) {
+	rl := NewRateLimiter()
+	var buf bytes.Buffer
+	rl.logger = log.New(&buf, "", 0)
+
+	rl.HandleRateLimit(Tier2, 100*time.Millisecond)
+	assert.Contains(t, buf.String(), "rate limited")
+}
+
+func TestTier4Constant(t *testing.T) {
+	assert.Equal(t, 4, Tier4)
+}
+
+func TestDoneIncrementsCount(t *testing.T) {
+	rl := NewUnlimitedRateLimiter()
+
+	rl.Done(Tier2)
+	rl.Done(Tier2)
+	rl.Done(Tier3)
+
+	counts, _ := rl.Stats()
+	assert.Equal(t, 2, counts[Tier2])
+	assert.Equal(t, 1, counts[Tier3])
 }
 
 func TestBackoffExpires(t *testing.T) {

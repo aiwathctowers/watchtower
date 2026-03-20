@@ -27,6 +27,7 @@ struct SettingsView: View {
                 .tabItem { Label("Logs", systemImage: "doc.text") }
 
             DataSettings()
+                .environment(appState)
                 .tabItem { Label("Data", systemImage: "externaldrive") }
         }
         .frame(width: 700, height: 550)

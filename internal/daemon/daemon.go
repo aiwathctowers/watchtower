@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	gosync "sync"
 	"time"
 
-	"watchtower/internal/analysis"
+	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/digest"
-	"watchtower/internal/sessions"
+	"watchtower/internal/guide"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
 )
@@ -32,27 +31,20 @@ type Daemon struct {
 	logger       *log.Logger
 	wakeCh       <-chan struct{}
 	pidPath      string
-	pool         *sessions.SessionPool // session pool for reusable Claude sessions
 	digestPipe   *digest.Pipeline
-	analysisPipe *analysis.Pipeline
+	chainsPipe   *chains.Pipeline
 	tracksPipe   *tracks.Pipeline
-	lastAnalysis time.Time // when analysis last ran (once per day)
+	peoplePipe   *guide.Pipeline
+	lastPeople   time.Time // when people cards last ran (once per day)
 	lastTracks   time.Time // when tracks last ran (throttled)
 }
 
 // New creates a Daemon that runs incremental syncs via the given orchestrator.
-// The session pool is created immediately and should be closed after Run() completes.
-// Pool size is determined by cfg.Digest.Workers (number of concurrent digest operations).
 func New(orchestrator *sync.Orchestrator, cfg *config.Config) *Daemon {
-	poolSize := cfg.Digest.Workers
-	if poolSize <= 0 {
-		poolSize = 1
-	}
 	return &Daemon{
 		orchestrator: orchestrator,
 		config:       cfg,
 		logger:       log.New(os.Stderr, "[daemon] ", log.LstdFlags),
-		pool:         sessions.NewSessionPool(poolSize),
 	}
 }
 
@@ -66,9 +58,9 @@ func (d *Daemon) SetDigestPipeline(p *digest.Pipeline) {
 	d.digestPipe = p
 }
 
-// SetAnalysisPipeline sets the people analysis pipeline for post-digest analysis.
-func (d *Daemon) SetAnalysisPipeline(p *analysis.Pipeline) {
-	d.analysisPipe = p
+// SetChainsPipeline sets the chains pipeline for post-digest chain linking.
+func (d *Daemon) SetChainsPipeline(p *chains.Pipeline) {
+	d.chainsPipe = p
 }
 
 // SetTracksPipeline sets the tracks pipeline for post-digest extraction.
@@ -76,15 +68,17 @@ func (d *Daemon) SetTracksPipeline(p *tracks.Pipeline) {
 	d.tracksPipe = p
 }
 
+// SetPeoplePipeline sets the people card pipeline (REDUCE phase).
+func (d *Daemon) SetPeoplePipeline(p *guide.Pipeline) {
+	d.peoplePipe = p
+}
+
+
 // SetPIDPath sets the path where the daemon will write its PID file.
 func (d *Daemon) SetPIDPath(path string) {
 	d.pidPath = path
 }
 
-// SessionPool returns the daemon's session pool for use with generators.
-func (d *Daemon) SessionPool() *sessions.SessionPool {
-	return d.pool
-}
 
 // Run starts the daemon poll loop. It blocks until ctx is cancelled.
 // The caller is responsible for wiring signal handling into the context.
@@ -107,13 +101,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	// Restore last pipeline times from disk so throttle guards survive restarts.
-	d.loadLastAnalysis()
+	d.loadLastPeople()
 	d.loadLastTracks()
 
-	// Close session pool on shutdown
-	defer d.pool.Close()
-
-	d.logger.Printf("daemon started, polling every %s, session pool size: %d", pollInterval, d.pool.Size())
+	d.logger.Printf("daemon started, polling every %s", pollInterval)
 
 	// Run an initial sync immediately on startup.
 	d.runSync(ctx)
@@ -181,51 +172,68 @@ func (d *Daemon) runSync(ctx context.Context) {
 		d.logger.Printf("sync had errors, but running pipelines on existing data")
 	}
 
-	// Phase 1: Digests + People in parallel (independent pipelines).
-	// People analysis runs once per day; digests run every sync.
-	var wg gosync.WaitGroup
-
+	// Phase 1: Channel digests (generates people_signals in MAP phase).
 	if d.digestPipe != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			n, usage, err := d.digestPipe.Run(ctx)
-			if err != nil {
-				d.logger.Printf("digest error: %v", err)
-			} else if n > 0 {
-				if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
-					d.logger.Printf("generated %d digest(s) (%d+%d tokens, $%.4f)",
-						n, usage.InputTokens, usage.OutputTokens, usage.CostUSD)
-				} else {
-					d.logger.Printf("generated %d digest(s)", n)
-				}
+		n, usage, err := d.digestPipe.RunChannelDigestsOnly(ctx)
+		if err != nil {
+			d.logger.Printf("digest error: %v", err)
+		} else if n > 0 {
+			if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+				d.logger.Printf("generated %d digest(s) (%d+%d tokens, $%.4f)",
+					n, usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+			} else {
+				d.logger.Printf("generated %d digest(s)", n)
 			}
-		}()
-	}
-
-	if d.analysisPipe != nil {
-		now := time.Now()
-		if d.lastAnalysis.IsZero() || now.Sub(d.lastAnalysis) >= 24*time.Hour {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				n, err := d.analysisPipe.Run(ctx)
-				if err != nil {
-					d.logger.Printf("people analysis error: %v", err)
-				} else {
-					if n > 0 {
-						d.logger.Printf("analyzed %d user(s)", n)
-					}
-					d.lastAnalysis = now
-					d.saveLastAnalysis()
-				}
-			}()
 		}
 	}
 
-	wg.Wait()
+	// Phase 2: Chains (depends on channel digests being generated).
+	// Links decisions from channel digests into thematic chains.
+	if d.chainsPipe != nil {
+		n, err := d.chainsPipe.Run(ctx)
+		if err != nil {
+			d.logger.Printf("chains error: %v", err)
+		} else if n > 0 {
+			d.logger.Printf("linked %d decision(s) to chains", n)
+		}
 
-	// Phase 2: Tracks (depend on digests for related_digest_ids).
+		// Inject chain context into digest and tracks pipelines for chain-aware rollups.
+		if chainCtx, err := d.chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
+			if d.digestPipe != nil {
+				d.digestPipe.ChainContext = chainCtx
+			}
+			if d.tracksPipe != nil {
+				d.tracksPipe.ChainContext = chainCtx
+			}
+		}
+	}
+
+	// Phase 3: Daily/weekly rollups (chain-aware — chained decisions collapsed).
+	if d.digestPipe != nil {
+		if err := d.digestPipe.RunRollups(ctx); err != nil {
+			d.logger.Printf("rollup error: %v", err)
+		}
+	}
+
+	// Phase 4: People REDUCE (reads signals from Phase 1, generates people_cards).
+	// Must run AFTER channel digests because it reads people_signals from them.
+	if d.peoplePipe != nil {
+		now := time.Now()
+		if d.lastPeople.IsZero() || now.Sub(d.lastPeople) >= 24*time.Hour {
+			n, err := d.peoplePipe.Run(ctx)
+			if err != nil {
+				d.logger.Printf("people cards error: %v", err)
+			} else {
+				if n > 0 {
+					d.logger.Printf("generated %d people card(s)", n)
+				}
+				d.lastPeople = now
+				d.saveLastPeople()
+			}
+		}
+	}
+
+	// Phase 5: Tracks (depend on digests + chains for context).
 	// Throttled to run at most once per tracks interval (default 1h).
 	if d.tracksPipe != nil {
 		interval := d.config.Digest.TracksInterval
@@ -256,16 +264,15 @@ func (d *Daemon) runSync(ctx context.Context) {
 			d.logger.Printf("detected updates on %d track(s)", n)
 		}
 	}
+
 }
 
-// lastAnalysisPath returns the file path for persisting the last analysis time.
-func (d *Daemon) lastAnalysisPath() string {
-	return filepath.Join(d.config.WorkspaceDir(), "last_analysis.txt")
+func (d *Daemon) lastPeoplePath() string {
+	return filepath.Join(d.config.WorkspaceDir(), "last_people.txt")
 }
 
-// loadLastAnalysis restores lastAnalysis from disk so the 24h guard survives daemon restarts.
-func (d *Daemon) loadLastAnalysis() {
-	data, err := os.ReadFile(d.lastAnalysisPath())
+func (d *Daemon) loadLastPeople() {
+	data, err := os.ReadFile(d.lastPeoplePath())
 	if err != nil {
 		return
 	}
@@ -273,15 +280,14 @@ func (d *Daemon) loadLastAnalysis() {
 	if err != nil {
 		return
 	}
-	d.lastAnalysis = time.Unix(unix, 0)
-	d.logger.Printf("restored last analysis time: %s", d.lastAnalysis.Format(time.RFC3339))
+	d.lastPeople = time.Unix(unix, 0)
+	d.logger.Printf("restored last people time: %s", d.lastPeople.Format(time.RFC3339))
 }
 
-// saveLastAnalysis persists lastAnalysis to disk.
-func (d *Daemon) saveLastAnalysis() {
-	data := strconv.FormatInt(d.lastAnalysis.Unix(), 10)
-	if err := os.WriteFile(d.lastAnalysisPath(), []byte(data), 0o600); err != nil {
-		d.logger.Printf("failed to save last analysis time: %v", err)
+func (d *Daemon) saveLastPeople() {
+	data := strconv.FormatInt(d.lastPeople.Unix(), 10)
+	if err := os.WriteFile(d.lastPeoplePath(), []byte(data), 0o600); err != nil {
+		d.logger.Printf("failed to save last people time: %v", err)
 	}
 }
 
@@ -313,3 +319,4 @@ func (d *Daemon) saveLastTracks() {
 		d.logger.Printf("failed to save last tracks time: %v", err)
 	}
 }
+

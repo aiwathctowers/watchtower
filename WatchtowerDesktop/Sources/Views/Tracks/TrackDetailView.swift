@@ -75,7 +75,7 @@ struct TrackDetailView: View {
 
                 Spacer()
 
-                Text(item.createdDate, style: .relative)
+                Text(item.sourceDate, style: .relative)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -97,9 +97,17 @@ struct TrackDetailView: View {
 
             HStack(spacing: 12) {
                 if !item.sourceChannelName.isEmpty {
-                    Label("#\(item.sourceChannelName)", systemImage: "number")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let url = viewModel.slackChannelURL(channelID: item.channelID) {
+                        Link(destination: url) {
+                            Label("#\(item.sourceChannelName)", systemImage: "number")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    } else {
+                        Label("#\(item.sourceChannelName)", systemImage: "number")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if !item.requesterName.isEmpty {

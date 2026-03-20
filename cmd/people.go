@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"watchtower/internal/analysis"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
-	"watchtower/internal/digest"
+	"watchtower/internal/guide"
 	"watchtower/internal/ui"
 
 	"github.com/spf13/cobra"
@@ -29,22 +28,22 @@ var (
 
 var peopleCmd = &cobra.Command{
 	Use:   "people",
-	Short: "Show user communication analysis",
-	Long:  "Displays AI-generated communication analysis for workspace users. Analysis covers a 7-day sliding window and includes communication style, decision participation, and red flags.",
+	Short: "Show people cards (unified analysis + coaching)",
+	Long:  "Displays AI-generated people cards combining communication analysis and coaching advice. Cards are generated from behavioral signals observed in channel digests.",
 	RunE:  runPeople,
 }
 
 var peopleGenerateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate people analysis from existing data",
-	Long:  "Runs the people analysis pipeline on already-synced messages. Analyzes communication patterns for all active users in a 7-day window.",
+	Short: "Generate people cards from existing data",
+	Long:  "Runs the people card pipeline (REDUCE phase) on signals from channel digests.",
 	RunE:  runPeopleGenerate,
 }
 
 func init() {
 	rootCmd.AddCommand(peopleCmd)
 	peopleCmd.AddCommand(peopleGenerateCmd)
-	peopleCmd.Flags().StringVar(&peopleFlagUser, "user", "", "show analysis for a specific user (@username)")
+	peopleCmd.Flags().StringVar(&peopleFlagUser, "user", "", "show card for a specific user (@username)")
 	peopleCmd.Flags().BoolVar(&peopleFlagPrevious, "previous", false, "show previous 7-day window")
 	peopleCmd.Flags().IntVar(&peopleFlagWeeks, "weeks", 1, "number of weeks to show")
 	peopleGenerateCmd.Flags().IntVar(&peopleFlagWorkers, "workers", 10, "number of parallel workers")
@@ -71,7 +70,6 @@ func runPeople(cmd *cobra.Command, args []string) error {
 
 	out := cmd.OutOrStdout()
 
-	// If a specific user was requested via args (e.g., `watchtower people @john`)
 	userFilter := peopleFlagUser
 	if len(args) > 0 && userFilter == "" {
 		userFilter = args[0]
@@ -112,26 +110,26 @@ func runPeople(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func showPeopleList(cmd *cobra.Command, out io.Writer, database *db.DB, cfg *config.Config, fromUnix, toUnix float64, from, to time.Time) error {
-	analyses, err := database.GetUserAnalysesForWindow(fromUnix, toUnix)
+func showPeopleList(_ *cobra.Command, out io.Writer, database *db.DB, _ *config.Config, fromUnix, toUnix float64, from, to time.Time) error {
+	cards, err := database.GetPeopleCardsForWindow(fromUnix, toUnix)
 	if err != nil {
-		return fmt.Errorf("querying analyses: %w", err)
+		return fmt.Errorf("querying people cards: %w", err)
 	}
 
-	if len(analyses) == 0 {
-		fmt.Fprintf(out, "No people analysis available for %s to %s.\n",
+	if len(cards) == 0 {
+		fmt.Fprintf(out, "No people cards available for %s to %s.\n",
 			from.Format("2006-01-02"), to.Format("2006-01-02"))
-		fmt.Fprintln(out, "Run 'watchtower people generate' to create one.")
+		fmt.Fprintln(out, "Run 'watchtower people generate' to create them.")
 		return nil
 	}
 
 	var buf strings.Builder
-	fmt.Fprintf(&buf, "## People Analysis — %s to %s\n\n",
+	fmt.Fprintf(&buf, "## People Cards — %s to %s\n\n",
 		from.Format("2006-01-02"), to.Format("2006-01-02"))
-	fmt.Fprintf(&buf, "%d users analyzed\n\n", len(analyses))
+	fmt.Fprintf(&buf, "%d users\n\n", len(cards))
 
-	// Period summary (team-wide)
-	if ps, err := database.GetPeriodSummary(fromUnix, toUnix); err == nil && ps != nil {
+	// Team summary
+	if ps, err := database.GetPeopleCardSummary(fromUnix, toUnix); err == nil && ps != nil {
 		fmt.Fprintln(&buf, "### Team Summary")
 		fmt.Fprintln(&buf)
 		fmt.Fprintf(&buf, "%s\n\n", ps.Summary)
@@ -145,54 +143,53 @@ func showPeopleList(cmd *cobra.Command, out io.Writer, database *db.DB, cfg *con
 			}
 			fmt.Fprintln(&buf)
 		}
+
+		var tips []string
+		if err := json.Unmarshal([]byte(ps.Tips), &tips); err == nil && len(tips) > 0 {
+			fmt.Fprintln(&buf, "**Tips:**")
+			fmt.Fprintln(&buf)
+			for _, tip := range tips {
+				fmt.Fprintf(&buf, "- %s\n", tip)
+			}
+			fmt.Fprintln(&buf)
+		}
 		fmt.Fprintln(&buf, "---")
 		fmt.Fprintln(&buf)
 	}
 
-	for _, a := range analyses {
-		userName := a.UserID
-		if u, err := database.GetUserByID(a.UserID); err == nil && u != nil {
+	for _, c := range cards {
+		userName := c.UserID
+		if u, err := database.GetUserByID(c.UserID); err == nil && u != nil {
 			userName = displayName(u)
 		}
 
-		// Style + role badges
-		badges := formatBadges(a.CommunicationStyle, a.DecisionRole)
+		badges := formatBadges(c.CommunicationStyle, c.DecisionRole)
 
 		fmt.Fprintf(&buf, "### @%s %s\n", userName, badges)
-		fmt.Fprintf(&buf, "%d msgs | %d channels | %d threads started | %d threads replied",
-			a.MessageCount, a.ChannelsActive, a.ThreadsInitiated, a.ThreadsReplied)
-		if a.VolumeChangePct != 0 {
-			fmt.Fprintf(&buf, " | volume: %+.0f%%", a.VolumeChangePct)
+		fmt.Fprintf(&buf, "%d msgs | %d channels", c.MessageCount, c.ChannelsActive)
+		if c.ThreadsInitiated > 0 || c.ThreadsReplied > 0 {
+			fmt.Fprintf(&buf, " | %d threads started | %d replied", c.ThreadsInitiated, c.ThreadsReplied)
+		}
+		if c.VolumeChangePct != 0 {
+			fmt.Fprintf(&buf, " | volume: %+.0f%%", c.VolumeChangePct)
 		}
 		fmt.Fprintln(&buf)
 		fmt.Fprintln(&buf)
 
-		if a.Summary != "" {
-			fmt.Fprintf(&buf, "%s\n\n", a.Summary)
+		if c.Summary != "" {
+			fmt.Fprintf(&buf, "%s\n\n", c.Summary)
 		}
 
-		// Red flags
 		var redFlags []string
-		if err := json.Unmarshal([]byte(a.RedFlags), &redFlags); err == nil && len(redFlags) > 0 {
+		if err := json.Unmarshal([]byte(c.RedFlags), &redFlags); err == nil && len(redFlags) > 0 {
 			for _, rf := range redFlags {
 				fmt.Fprintf(&buf, "- **!** %s\n", rf)
 			}
 			fmt.Fprintln(&buf)
 		}
 
-		// Concerns
-		var concerns []string
-		if err := json.Unmarshal([]byte(a.Concerns), &concerns); err == nil && len(concerns) > 0 {
-			fmt.Fprintln(&buf, "**Concerns:**")
-			for _, c := range concerns {
-				fmt.Fprintf(&buf, "- %s\n", c)
-			}
-			fmt.Fprintln(&buf)
-		}
-
-		// Highlights
 		var highlights []string
-		if err := json.Unmarshal([]byte(a.Highlights), &highlights); err == nil && len(highlights) > 0 {
+		if err := json.Unmarshal([]byte(c.Highlights), &highlights); err == nil && len(highlights) > 0 {
 			for _, h := range highlights {
 				fmt.Fprintf(&buf, "- + %s\n", h)
 			}
@@ -205,7 +202,6 @@ func showPeopleList(cmd *cobra.Command, out io.Writer, database *db.DB, cfg *con
 }
 
 func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, toUnix float64) error {
-	// Look up user by name
 	user, err := database.GetUserByName(username)
 	if err != nil {
 		return fmt.Errorf("looking up user: %w", err)
@@ -214,52 +210,55 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 		return fmt.Errorf("user @%s not found", username)
 	}
 
-	// Get analyses for this user
-	analyses, err := database.GetUserAnalyses(db.UserAnalysisFilter{
+	cards, err := database.GetPeopleCards(db.PeopleCardFilter{
 		UserID:   user.ID,
 		FromUnix: fromUnix,
 		ToUnix:   toUnix,
 	})
 	if err != nil {
-		return fmt.Errorf("querying user analyses: %w", err)
+		return fmt.Errorf("querying people cards: %w", err)
 	}
 
-	if len(analyses) == 0 {
-		fmt.Fprintf(out, "No analysis available for @%s in this period.\n", username)
+	if len(cards) == 0 {
+		fmt.Fprintf(out, "No people card available for @%s in this period.\n", username)
 		fmt.Fprintln(out, "Run 'watchtower people generate' to create one.")
 		return nil
 	}
 
 	var buf strings.Builder
-	for _, a := range analyses {
-		from := time.Unix(int64(a.PeriodFrom), 0).UTC()
-		to := time.Unix(int64(a.PeriodTo), 0).UTC()
+	for _, c := range cards {
+		from := time.Unix(int64(c.PeriodFrom), 0).UTC()
+		to := time.Unix(int64(c.PeriodTo), 0).UTC()
 
 		fmt.Fprintf(&buf, "## @%s — %s to %s\n\n", displayName(user), from.Format("2006-01-02"), to.Format("2006-01-02"))
 
 		// Stats table
 		fmt.Fprintln(&buf, "| Metric | Value |")
 		fmt.Fprintln(&buf, "|--------|-------|")
-		fmt.Fprintf(&buf, "| Messages | %d |\n", a.MessageCount)
-		fmt.Fprintf(&buf, "| Channels active | %d |\n", a.ChannelsActive)
-		fmt.Fprintf(&buf, "| Threads started | %d |\n", a.ThreadsInitiated)
-		fmt.Fprintf(&buf, "| Threads replied | %d |\n", a.ThreadsReplied)
-		fmt.Fprintf(&buf, "| Avg message length | %.0f chars |\n", a.AvgMessageLength)
-		fmt.Fprintf(&buf, "| Volume change | %+.0f%% |\n", a.VolumeChangePct)
-		fmt.Fprintf(&buf, "| Style | %s |\n", a.CommunicationStyle)
-		fmt.Fprintf(&buf, "| Decision role | %s |\n", a.DecisionRole)
+		fmt.Fprintf(&buf, "| Messages | %d |\n", c.MessageCount)
+		fmt.Fprintf(&buf, "| Channels active | %d |\n", c.ChannelsActive)
+		fmt.Fprintf(&buf, "| Threads started | %d |\n", c.ThreadsInitiated)
+		fmt.Fprintf(&buf, "| Threads replied | %d |\n", c.ThreadsReplied)
+		fmt.Fprintf(&buf, "| Avg message length | %.0f chars |\n", c.AvgMessageLength)
+		fmt.Fprintf(&buf, "| Volume change | %+.0f%% |\n", c.VolumeChangePct)
+		fmt.Fprintf(&buf, "| Style | %s |\n", c.CommunicationStyle)
+		fmt.Fprintf(&buf, "| Decision role | %s |\n", c.DecisionRole)
 		fmt.Fprintln(&buf)
 
-		if a.Summary != "" {
-			fmt.Fprintf(&buf, "**Summary:** %s\n\n", a.Summary)
+		if c.Summary != "" {
+			fmt.Fprintf(&buf, "**Summary:** %s\n\n", c.Summary)
 		}
 
-		if a.StyleDetails != "" {
-			fmt.Fprintf(&buf, "**Communication Style Analysis:** %s\n\n", a.StyleDetails)
+		if c.HowToCommunicate != "" {
+			fmt.Fprintf(&buf, "**How to Communicate:** %s\n\n", c.HowToCommunicate)
+		}
+
+		if c.DecisionStyle != "" {
+			fmt.Fprintf(&buf, "**Decision Style:** %s\n\n", c.DecisionStyle)
 		}
 
 		var redFlags []string
-		if err := json.Unmarshal([]byte(a.RedFlags), &redFlags); err == nil && len(redFlags) > 0 {
+		if err := json.Unmarshal([]byte(c.RedFlags), &redFlags); err == nil && len(redFlags) > 0 {
 			fmt.Fprintln(&buf, "**Red Flags:**")
 			fmt.Fprintln(&buf)
 			for _, rf := range redFlags {
@@ -268,18 +267,8 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 			fmt.Fprintln(&buf)
 		}
 
-		var concerns []string
-		if err := json.Unmarshal([]byte(a.Concerns), &concerns); err == nil && len(concerns) > 0 {
-			fmt.Fprintln(&buf, "**Concerns:**")
-			fmt.Fprintln(&buf)
-			for _, c := range concerns {
-				fmt.Fprintf(&buf, "- %s\n", c)
-			}
-			fmt.Fprintln(&buf)
-		}
-
 		var highlights []string
-		if err := json.Unmarshal([]byte(a.Highlights), &highlights); err == nil && len(highlights) > 0 {
+		if err := json.Unmarshal([]byte(c.Highlights), &highlights); err == nil && len(highlights) > 0 {
 			fmt.Fprintln(&buf, "**Highlights:**")
 			fmt.Fprintln(&buf)
 			for _, h := range highlights {
@@ -289,7 +278,7 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 		}
 
 		var accomplishments []string
-		if err := json.Unmarshal([]byte(a.Accomplishments), &accomplishments); err == nil && len(accomplishments) > 0 {
+		if err := json.Unmarshal([]byte(c.Accomplishments), &accomplishments); err == nil && len(accomplishments) > 0 {
 			fmt.Fprintln(&buf, "**Accomplishments:**")
 			fmt.Fprintln(&buf)
 			for _, item := range accomplishments {
@@ -298,12 +287,12 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 			fmt.Fprintln(&buf)
 		}
 
-		var recommendations []string
-		if err := json.Unmarshal([]byte(a.Recommendations), &recommendations); err == nil && len(recommendations) > 0 {
-			fmt.Fprintln(&buf, "**Recommendations:**")
+		var tactics []string
+		if err := json.Unmarshal([]byte(c.Tactics), &tactics); err == nil && len(tactics) > 0 {
+			fmt.Fprintln(&buf, "**Tactics:**")
 			fmt.Fprintln(&buf)
-			for _, r := range recommendations {
-				fmt.Fprintf(&buf, "- %s\n", r)
+			for _, t := range tactics {
+				fmt.Fprintf(&buf, "- %s\n", t)
 			}
 			fmt.Fprintln(&buf)
 		}
@@ -345,8 +334,9 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
-	pipe := analysis.New(database, cfg, gen, logger)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
+	pipe := guide.New(database, cfg, gen, logger)
 	pipe.ForceRegenerate = true
 	pipe.Workers = peopleFlagWorkers
 
@@ -404,18 +394,18 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "\r\033[K[%s] %.0f%% (%d/%d)%s  %s", bar, pct, completed, total, eta, status)
 	}
 
-	fmt.Fprintf(out, "Analyzing user communication patterns (7-day window) using %s...\n", cfg.Digest.Model)
+	fmt.Fprintf(out, "Generating people cards (7-day window) using %s...\n", cfg.Digest.Model)
 
 	n, err := pipe.Run(cmd.Context())
-	fmt.Fprintln(out) // newline after progress
+	fmt.Fprintln(out)
 	if err != nil {
-		return fmt.Errorf("analysis pipeline: %w", err)
+		return fmt.Errorf("people card pipeline: %w", err)
 	}
 
 	if n == 0 {
 		fmt.Fprintln(out, "No users with enough messages to analyze.")
 	} else {
-		fmt.Fprintf(out, "Analyzed %d user(s).\n", n)
+		fmt.Fprintf(out, "Generated %d people card(s).\n", n)
 		fmt.Fprintln(out, "Run 'watchtower people' to view results.")
 	}
 

@@ -15,6 +15,7 @@ final class DigestViewModel {
     // M9: pre-fetched caches (avoids DB read per row in view body)
     private var channelNameCache: [String: String] = [:]
     private(set) var workspaceDomain: String?
+    private(set) var workspaceTeamID: String?
     private(set) var starredChannelIDs: Set<String> = []
     private(set) var currentUserID: String?
     private let dbManager: DatabaseManager
@@ -28,6 +29,7 @@ final class DigestViewModel {
         let withDecisions: [Digest]
         let channelNames: [String: String]
         let domain: String?
+        let teamID: String?
         let readIndices: [Int: Set<Int>]
         let unreadDigests: Int
         let importanceCorrections: [String: String]
@@ -86,6 +88,7 @@ final class DigestViewModel {
                     withDecisions: withDecisions,
                     channelNames: nameMap,
                     domain: ws?.domain,
+                    teamID: ws?.id,
                     readIndices: readIndices,
                     unreadDigests: unreadDigests,
                     importanceCorrections: importanceCorrections,
@@ -96,6 +99,7 @@ final class DigestViewModel {
             digests = result.digests
             channelNameCache = result.channelNames
             workspaceDomain = result.domain
+            workspaceTeamID = result.teamID
             starredChannelIDs = result.starredChannels
             currentUserID = result.currentUserID
             decisionEntries = buildDecisionEntries(from: result.withDecisions, readIndices: result.readIndices, importanceCorrections: result.importanceCorrections)
@@ -360,17 +364,16 @@ final class DigestViewModel {
         }
     }
 
-    /// Build Slack channel URL
+    /// Build Slack channel deep link (opens Slack app directly)
     func slackChannelURL(channelID: String) -> URL? {
-        guard let domain = workspaceDomain, !domain.isEmpty else { return nil }
-        return URL(string: "https://\(domain).slack.com/archives/\(channelID)")
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)")
     }
 
-    /// Build Slack message permalink from channel ID and message timestamp
+    /// Build Slack message deep link (opens Slack app directly)
     func slackMessageURL(channelID: String, messageTS: String) -> URL? {
-        guard let domain = workspaceDomain, !domain.isEmpty else { return nil }
-        let tsForURL = "p" + messageTS.replacingOccurrences(of: ".", with: "")
-        return URL(string: "https://\(domain).slack.com/archives/\(channelID)/\(tsForURL)")
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)&message=\(messageTS)")
     }
 
     // MARK: - Starred Channels Management

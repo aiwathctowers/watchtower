@@ -1,46 +1,38 @@
-// Package sessions manages Claude CLI session pooling for efficient reuse.
+// Package sessions manages concurrency limiting for Claude CLI calls.
 package sessions
 
 import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 )
 
-// Worker represents a single reusable Claude session.
-type Worker struct {
-	SessionID string
-	CreatedAt time.Time
-}
+// Worker represents a slot in the concurrency pool.
+type Worker struct{}
 
-// SessionPool manages a fixed number of reusable Claude sessions.
-// Workers are distributed on-demand and must be returned after use.
+// SessionPool manages a fixed number of worker slots to limit parallel
+// Claude CLI invocations. Each call acquires a slot and releases it when done.
 type SessionPool struct {
 	workers chan *Worker
 	mu      sync.Mutex
 	closed  bool
 }
 
-// NewSessionPool creates a pool with size workers.
-// Each worker starts with an empty SessionID (created on first use).
+// NewSessionPool creates a pool with the given number of worker slots.
 func NewSessionPool(size int) *SessionPool {
 	if size <= 0 {
 		size = 1
 	}
 	workers := make(chan *Worker, size)
 	for i := 0; i < size; i++ {
-		workers <- &Worker{
-			SessionID: "",
-			CreatedAt: time.Now(),
-		}
+		workers <- &Worker{}
 	}
 	return &SessionPool{
 		workers: workers,
 	}
 }
 
-// Acquire waits for a free worker. Returns error if pool is closed.
+// Acquire waits for a free worker slot. Returns error if pool is closed.
 func (p *SessionPool) Acquire(ctx context.Context) (*Worker, error) {
 	p.mu.Lock()
 	if p.closed {
@@ -57,8 +49,7 @@ func (p *SessionPool) Acquire(ctx context.Context) (*Worker, error) {
 	}
 }
 
-// Release returns a worker to the pool after use.
-// Updates the worker's SessionID if a new one was obtained.
+// Release returns a worker slot to the pool.
 func (p *SessionPool) Release(w *Worker) {
 	p.mu.Lock()
 	if p.closed {
@@ -70,12 +61,10 @@ func (p *SessionPool) Release(w *Worker) {
 	select {
 	case p.workers <- w:
 	default:
-		// Channel full — should not happen, but prevent goroutine leak
 	}
 }
 
 // Close closes the pool and stops accepting new acquire requests.
-// Already-acquired workers must still be released.
 func (p *SessionPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -84,11 +73,8 @@ func (p *SessionPool) Close() {
 		return
 	}
 	p.closed = true
-
-	// Drain workers without blocking
 	close(p.workers)
 	for range p.workers {
-		// Just drain
 	}
 }
 

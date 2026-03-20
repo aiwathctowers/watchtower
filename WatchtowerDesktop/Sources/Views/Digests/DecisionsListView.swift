@@ -113,10 +113,20 @@ struct DecisionsListView: View {
             VStack(alignment: .leading, spacing: 4) {
                 // Channel + importance badge + expand chevron
                 HStack {
-                    Text(entry.channelName.map { "#\($0)" } ?? "Cross-channel")
-                        .font(.caption)
-                        .fontWeight(entry.isRead ? .regular : .medium)
-                        .foregroundStyle(.secondary)
+                    if let chName = entry.channelName,
+                       let url = viewModel.slackChannelURL(channelID: entry.channelID) {
+                        Link(destination: url) {
+                            Text("#\(chName)")
+                                .font(.caption)
+                                .fontWeight(entry.isRead ? .regular : .medium)
+                        }
+                        .buttonStyle(.borderless)
+                    } else {
+                        Text(entry.channelName.map { "#\($0)" } ?? "Cross-channel")
+                            .font(.caption)
+                            .fontWeight(entry.isRead ? .regular : .medium)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Spacer()
 

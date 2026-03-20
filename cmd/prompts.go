@@ -7,7 +7,6 @@ import (
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
-	"watchtower/internal/digest"
 	"watchtower/internal/prompts"
 
 	"github.com/spf13/cobra"
@@ -215,11 +214,11 @@ func runTune(cmd *cobra.Command, args []string) error {
 	if model == "" {
 		model = "haiku"
 	}
-	gen := digest.NewClaudeGenerator(model, cfg.ClaudePath)
+	gen := cliGenerator(cfg)
 
 	// Wrap digest.Generator as prompts.TextGenerator
 	tuneGen := prompts.GenerateFunc(func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-		raw, _, err := gen.Generate(ctx, systemPrompt, userMessage)
+		raw, _, _, err := gen.Generate(ctx, systemPrompt, userMessage, "")
 		return raw, err
 	})
 
@@ -234,7 +233,7 @@ func runTune(cmd *cobra.Command, args []string) error {
 		targetIDs = []string{args[0]}
 	} else {
 		// Tune the 3 main prompts
-		targetIDs = []string{prompts.DigestChannel, prompts.TracksExtract, prompts.AnalysisUser}
+		targetIDs = []string{prompts.DigestChannel, prompts.TracksExtract, prompts.PeopleReduce}
 	}
 
 	for _, id := range targetIDs {
