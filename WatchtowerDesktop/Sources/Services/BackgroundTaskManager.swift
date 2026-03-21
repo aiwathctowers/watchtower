@@ -43,12 +43,26 @@ final class BackgroundTaskManager {
         case error(String)
     }
 
+    struct StepRecord: Identifiable, Equatable {
+        let id = UUID()
+        let timestamp: Date
+        let pipeline: String
+        let step: Int
+        let total: Int
+        let status: String
+        let inputTokens: Int
+        let outputTokens: Int
+        let costUsd: Double
+    }
+
     struct TaskState {
         var status: TaskStatus = .pending
         var progress: InsightProgressData?
         var startedAt: Date?
         /// Estimated seconds remaining, nil if unknown.
         var etaSeconds: Double?
+        /// Log of completed steps for this task.
+        var stepHistory: [StepRecord] = []
     }
 
     /// Current state of each background task.
@@ -79,6 +93,27 @@ final class BackgroundTaskManager {
             case .error: return true
             case .done: return false
             }
+        }
+    }
+
+    /// Total input tokens across all tasks.
+    var totalInputTokens: Int {
+        tasks.values.reduce(0) { sum, state in
+            sum + state.stepHistory.reduce(0) { $0 + $1.inputTokens }
+        }
+    }
+
+    /// Total output tokens across all tasks.
+    var totalOutputTokens: Int {
+        tasks.values.reduce(0) { sum, state in
+            sum + state.stepHistory.reduce(0) { $0 + $1.outputTokens }
+        }
+    }
+
+    /// Total cost across all tasks.
+    var totalCostUsd: Double {
+        tasks.values.reduce(0.0) { sum, state in
+            sum + state.stepHistory.reduce(0.0) { $0 + $1.costUsd }
         }
     }
 
@@ -166,8 +201,23 @@ final class BackgroundTaskManager {
                     if let data = line.data(using: .utf8),
                        let json = try? decoder.decode(InsightProgressData.self, from: data) {
                         await MainActor.run {
+                            let prevDone = self.tasks[kind]?.progress?.done ?? 0
                             self.tasks[kind]?.progress = json
                             self.updateETA(kind: kind, progress: json)
+                            // Record completed step
+                            if json.done > prevDone {
+                                let record = StepRecord(
+                                    timestamp: Date(),
+                                    pipeline: json.pipeline,
+                                    step: json.done,
+                                    total: json.total,
+                                    status: json.status ?? "",
+                                    inputTokens: json.inputTokens,
+                                    outputTokens: json.outputTokens,
+                                    costUsd: json.costUsd
+                                )
+                                self.tasks[kind]?.stepHistory.append(record)
+                            }
                         }
                         if json.finished == true {
                             lastFinished = json

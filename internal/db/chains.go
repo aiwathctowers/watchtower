@@ -205,7 +205,7 @@ func (db *DB) GetUnlinkedDecisions(sinceUnix float64) ([]UnlinkedDecision, error
 	// Parse decisions from each digest, skip already-linked ones.
 	var result []UnlinkedDecision
 	for _, d := range digests {
-		if d.Decisions == "" || d.Decisions == "[]" {
+		if d.Decisions == "" || d.Decisions == "[]" || d.Decisions == "null" {
 			continue
 		}
 		type jsonDecision struct {

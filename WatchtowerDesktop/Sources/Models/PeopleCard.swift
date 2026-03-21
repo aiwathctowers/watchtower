@@ -19,10 +19,11 @@ struct PeopleCard: FetchableRecord, Decodable, Identifiable, Equatable {
     var redFlags: String      // JSON array
     var highlights: String    // JSON array
     var accomplishments: String // JSON array
-    var howToCommunicate: String
+    var communicationGuide: String
     var decisionStyle: String
     var tactics: String       // JSON array
     var relationshipContext: String
+    var status: String
     var model: String
     var inputTokens: Int
     var outputTokens: Int
@@ -39,8 +40,8 @@ struct PeopleCard: FetchableRecord, Decodable, Identifiable, Equatable {
         case volumeChangePct = "volume_change_pct"
         case summary, communicationStyle = "communication_style", decisionRole = "decision_role"
         case redFlags = "red_flags", highlights, accomplishments
-        case howToCommunicate = "how_to_communicate", decisionStyle = "decision_style"
-        case tactics, relationshipContext = "relationship_context"
+        case communicationGuide = "communication_guide", decisionStyle = "decision_style"
+        case tactics, relationshipContext = "relationship_context", status
         case model, inputTokens = "input_tokens", outputTokens = "output_tokens"
         case costUSD = "cost_usd", promptVersion = "prompt_version", createdAt = "created_at"
     }
@@ -66,6 +67,10 @@ struct PeopleCard: FetchableRecord, Decodable, Identifiable, Equatable {
 
     var hasRedFlags: Bool {
         !parsedRedFlags.isEmpty
+    }
+
+    var isInsufficientData: Bool {
+        status == "insufficient_data"
     }
 
     var styleEmoji: String {

@@ -34,13 +34,17 @@ type Generator interface {
 
 // DigestResult is the structured output from Claude for a digest.
 type DigestResult struct {
-	Summary       string          `json:"summary"`
-	Topics        []string        `json:"topics"`
-	Decisions     []Decision      `json:"decisions"`
-	ActionItems   []ActionItem    `json:"action_items"`
-	KeyMessages   []string        `json:"key_messages"`
-	PeopleSignals []PersonSignals `json:"people_signals"`
+	Summary     string         `json:"summary"`
+	Topics      []string       `json:"topics"`
+	Decisions   []Decision     `json:"decisions"`
+	ActionItems []ActionItem   `json:"action_items"`
+	KeyMessages []string       `json:"key_messages"`
+	Situations  []db.Situation `json:"situations"`
 }
+
+// DigestSituationParticipant mirrors db.SituationParticipant for JSON parsing.
+// Re-exported here for convenience in tests that build DigestResults.
+type DigestSituationParticipant = db.SituationParticipant
 
 // PersonSignals holds signals for one person in a channel digest.
 type PersonSignals struct {
@@ -749,7 +753,7 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 	topics, _ := json.Marshal(result.Topics)
 	decisions, _ := json.Marshal(result.Decisions)
 	actionItems, _ := json.Marshal(result.ActionItems)
-	peopleSignals, _ := json.Marshal(result.PeopleSignals)
+	situations, _ := json.Marshal(result.Situations)
 
 	d := db.Digest{
 		ChannelID:     channelID,
@@ -760,7 +764,8 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 		Topics:        string(topics),
 		Decisions:     string(decisions),
 		ActionItems:   string(actionItems),
-		PeopleSignals: string(peopleSignals),
+		PeopleSignals: "[]",
+		Situations:    string(situations),
 		MessageCount:  msgCount,
 		Model:         p.cfg.Digest.Model,
 		PromptVersion: promptVersion,

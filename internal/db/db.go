@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 28"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 29"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -1268,6 +1268,57 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v28: %w", err)
 		}
 		version = 28
+	}
+
+	if version < 29 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("starting migration v29: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Add situations column to digests table (replaces people_signals in v2)
+		if !hasColumn(tx, "digests", "situations") {
+			if _, err := tx.Exec(`ALTER TABLE digests ADD COLUMN situations TEXT NOT NULL DEFAULT '[]'`); err != nil {
+				return fmt.Errorf("migration v29 add situations: %w", err)
+			}
+		}
+
+		// Create digest_participants table
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS digest_participants (
+			digest_id      INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+			user_id        TEXT NOT NULL,
+			situation_idx  INTEGER NOT NULL DEFAULT 0,
+			role           TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (digest_id, user_id, situation_idx)
+		)`); err != nil {
+			return fmt.Errorf("migration v29 create digest_participants: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_digest_participants_user ON digest_participants(user_id)`); err != nil {
+			return fmt.Errorf("migration v29 create index: %w", err)
+		}
+
+		// Rename how_to_communicate → communication_guide in people_cards
+		if hasColumn(tx, "people_cards", "how_to_communicate") && !hasColumn(tx, "people_cards", "communication_guide") {
+			if _, err := tx.Exec(`ALTER TABLE people_cards RENAME COLUMN how_to_communicate TO communication_guide`); err != nil {
+				return fmt.Errorf("migration v29 rename how_to_communicate: %w", err)
+			}
+		}
+
+		// Add status column to people_cards
+		if !hasColumn(tx, "people_cards", "status") {
+			if _, err := tx.Exec(`ALTER TABLE people_cards ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); err != nil {
+				return fmt.Errorf("migration v29 add status: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 29"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v29: %w", err)
+		}
+		version = 29
 	}
 
 	_ = version // silence unused variable if this is the last migration

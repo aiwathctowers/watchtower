@@ -6,31 +6,42 @@ struct PeopleListView: View {
     @State private var selectedUserID: String?
     @State private var searchText = ""
 
+    private static let teamSummaryID = "__team_summary__"
+
     var body: some View {
         HStack(spacing: 0) {
             if let vm = viewModel {
                 listPanel(vm)
 
-                if let userID = selectedUserID,
-                   let card = vm.cards.first(where: { $0.userID == userID }) {
+                if let userID = selectedUserID {
                     Divider()
-                    PersonDetailView(
-                        card: card,
-                        userName: vm.userName(for: userID),
-                        history: vm.cardHistory(userID: userID),
-                        userNameResolver: { vm.userName(for: $0) },
-                        onClose: { selectedUserID = nil },
-                        isCurrentUser: userID == vm.currentUserID,
-                        profile: userID == vm.currentUserID ? vm.currentProfile : nil,
-                        interactions: userID == vm.currentUserID ? vm.interactions : [],
-                        allCards: vm.cards,
-                        onUpdateConnections: { reports, peers, manager in
-                            vm.updateConnections(reports: reports, peers: peers, manager: manager)
-                        }
-                    )
-                    .id(userID)
-                    .frame(minWidth: 400, idealWidth: 500)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    if userID == Self.teamSummaryID, let cs = vm.cardSummary {
+                        TeamSummaryDetailView(
+                            summary: cs,
+                            onClose: { selectedUserID = nil }
+                        )
+                        .id(userID)
+                        .frame(minWidth: 400, idealWidth: 500)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    } else if let card = vm.cards.first(where: { $0.userID == userID }) {
+                        PersonDetailView(
+                            card: card,
+                            userName: vm.userName(for: userID),
+                            history: vm.cardHistory(userID: userID),
+                            userNameResolver: { vm.userName(for: $0) },
+                            onClose: { selectedUserID = nil },
+                            isCurrentUser: userID == vm.currentUserID,
+                            profile: userID == vm.currentUserID ? vm.currentProfile : nil,
+                            interactions: userID == vm.currentUserID ? vm.interactions : [],
+                            allCards: vm.cards,
+                            onUpdateConnections: { reports, peers, manager in
+                                vm.updateConnections(reports: reports, peers: peers, manager: manager)
+                            }
+                        )
+                        .id(userID)
+                        .frame(minWidth: 400, idealWidth: 500)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
             } else {
                 ProgressView()
@@ -138,43 +149,47 @@ struct PeopleListView: View {
                     // Card summary (team summary)
                     if let cs = vm.cardSummary, searchText.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Team Summary")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundStyle(.secondary)
+                            HStack {
+                                Image(systemName: "person.3.fill")
+                                    .foregroundStyle(.orange)
+                                    .font(.caption)
+                                Text("Team Summary")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
 
                             Text(cs.summary)
                                 .font(.subheadline)
-                                .lineLimit(4)
+                                .lineLimit(3)
 
                             let attention = cs.parsedAttention
                             if !attention.isEmpty {
-                                ForEach(attention, id: \.self) { item in
-                                    HStack(alignment: .top, spacing: 4) {
-                                        Image(systemName: "exclamationmark.circle.fill")
-                                            .foregroundStyle(.orange)
-                                            .font(.caption)
-                                        Text(item)
-                                            .font(.caption)
-                                    }
-                                }
-                            }
-
-                            let tips = cs.parsedTips
-                            if !tips.isEmpty {
-                                ForEach(tips, id: \.self) { tip in
-                                    HStack(alignment: .top, spacing: 4) {
-                                        Image(systemName: "lightbulb.fill")
-                                            .foregroundStyle(.yellow)
-                                            .font(.caption)
-                                        Text(tip)
-                                            .font(.caption)
-                                    }
+                                HStack(alignment: .top, spacing: 4) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption)
+                                    Text("\(attention.count) item\(attention.count == 1 ? "" : "s") need attention")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
                         .padding(10)
-                        .background(Color.orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedUserID = Self.teamSummaryID
+                        }
+                        .background(
+                            selectedUserID == Self.teamSummaryID
+                                ? Color.orange.opacity(0.15)
+                                : Color.orange.opacity(0.05),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
                         .padding(.horizontal, 8)
                         .padding(.bottom, 8)
 
@@ -295,7 +310,11 @@ struct PeopleListView: View {
 
                 Spacer()
 
-                if card.hasRedFlags {
+                if card.isInsufficientData {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                } else if card.hasRedFlags {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
                         .font(.caption)
@@ -334,6 +353,7 @@ struct PeopleListView: View {
             }
         }
         .padding(.vertical, 4)
+        .opacity(card.isInsufficientData ? 0.6 : 1.0)
     }
 }
 

@@ -82,6 +82,12 @@ struct WatchtowerApp: App {
         }
         .defaultSize(width: 1200, height: 800)
 
+        Window("Pipeline Progress", id: "progress-detail") {
+            ProgressDetailView()
+                .environment(appState)
+        }
+        .defaultSize(width: 600, height: 500)
+
         Settings {
             SettingsView()
                 .environment(appState)

@@ -164,6 +164,9 @@ func showPeopleList(_ *cobra.Command, out io.Writer, database *db.DB, _ *config.
 		}
 
 		badges := formatBadges(c.CommunicationStyle, c.DecisionRole)
+		if c.Status == "insufficient_data" {
+			badges += " [insufficient data]"
+		}
 
 		fmt.Fprintf(&buf, "### @%s %s\n", userName, badges)
 		fmt.Fprintf(&buf, "%d msgs | %d channels", c.MessageCount, c.ChannelsActive)
@@ -232,6 +235,10 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 
 		fmt.Fprintf(&buf, "## @%s — %s to %s\n\n", displayName(user), from.Format("2006-01-02"), to.Format("2006-01-02"))
 
+		if c.Status == "insufficient_data" {
+			fmt.Fprintln(&buf, "*Insufficient data for full analysis this period.*")
+		}
+
 		// Stats table
 		fmt.Fprintln(&buf, "| Metric | Value |")
 		fmt.Fprintln(&buf, "|--------|-------|")
@@ -249,8 +256,8 @@ func showUserDetail(out io.Writer, database *db.DB, username string, fromUnix, t
 			fmt.Fprintf(&buf, "**Summary:** %s\n\n", c.Summary)
 		}
 
-		if c.HowToCommunicate != "" {
-			fmt.Fprintf(&buf, "**How to Communicate:** %s\n\n", c.HowToCommunicate)
+		if c.CommunicationGuide != "" {
+			fmt.Fprintf(&buf, "**Communication Guide:** %s\n\n", c.CommunicationGuide)
 		}
 
 		if c.DecisionStyle != "" {

@@ -115,6 +115,48 @@ func filterThreadParentsByChannel(parents []db.Message, channels []string, datab
 	return filtered, nil
 }
 
+// syncOrphanThreads finds replies whose parent message is missing from the DB
+// (e.g. thread started before the sync window) and fetches the parent + initial
+// replies. This provides thread context without requiring a full history sync.
+// Non-blocking: errors are logged and skipped, limit caps API calls.
+func (o *Orchestrator) syncOrphanThreads(ctx context.Context) {
+	const limit = 100
+	orphans, err := o.db.GetOrphanThreadParents(limit)
+	if err != nil {
+		o.logger.Printf("warning: failed to find orphan threads: %v", err)
+		return
+	}
+	if len(orphans) == 0 {
+		return
+	}
+
+	o.logger.Printf("lazy thread loading: %d orphan thread(s) to backfill", len(orphans))
+
+	loaded := 0
+	for _, ot := range orphans {
+		if ctx.Err() != nil {
+			break
+		}
+		n, err := o.syncThread(ctx, ot.ChannelID, ot.ThreadTS)
+		if err != nil {
+			if isNonFatalError(err) {
+				o.logger.Printf("skipping orphan thread %s/%s: %v", ot.ChannelID, ot.ThreadTS, err)
+				continue
+			}
+			o.logger.Printf("warning: orphan thread %s/%s error: %v", ot.ChannelID, ot.ThreadTS, err)
+			continue
+		}
+		loaded++
+		if n > 0 {
+			o.logger.Printf("backfilled thread %s in %s: %d messages", ot.ThreadTS, o.channelName(ot.ChannelID), n)
+		}
+	}
+
+	if loaded > 0 {
+		o.logger.Printf("lazy thread loading complete: backfilled %d/%d thread(s)", loaded, len(orphans))
+	}
+}
+
 // syncThread fetches all replies for a single thread and upserts them.
 // Returns the number of replies synced and any error.
 func (o *Orchestrator) syncThread(ctx context.Context, channelID, threadTS string) (int, error) {

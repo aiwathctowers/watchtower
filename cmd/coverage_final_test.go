@@ -624,7 +624,7 @@ func TestRunPeople_UserArg(t *testing.T) {
 		RedFlags:           `[]`,
 		Highlights:         `[]`,
 		Accomplishments:    `["Shipped feature"]`,
-		HowToCommunicate:   "",
+		CommunicationGuide:   "",
 		DecisionStyle:      "",
 		Tactics:            `["Rest more"]`,
 		Model:              "haiku",

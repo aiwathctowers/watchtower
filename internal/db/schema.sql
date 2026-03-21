@@ -167,12 +167,23 @@ CREATE TABLE IF NOT EXISTS digests (
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     read_at         TEXT,  -- NULL = unread, ISO8601 = when read (local-only)
     prompt_version  INTEGER NOT NULL DEFAULT 0,  -- version of prompt used for generation
-    people_signals  TEXT NOT NULL DEFAULT '[]',   -- JSON array of PersonSignals from MAP phase
+    people_signals  TEXT NOT NULL DEFAULT '[]',   -- JSON array of PersonSignals from MAP phase (legacy)
+    situations      TEXT NOT NULL DEFAULT '[]',   -- JSON array of Situation objects from channel digest
     UNIQUE(channel_id, type, period_from, period_to)
 );
 CREATE INDEX IF NOT EXISTS idx_digests_channel ON digests(channel_id);
 CREATE INDEX IF NOT EXISTS idx_digests_type ON digests(type);
 CREATE INDEX IF NOT EXISTS idx_digests_period ON digests(period_from, period_to);
+
+-- Digest participants: which users were mentioned in each digest's situations
+CREATE TABLE IF NOT EXISTS digest_participants (
+    digest_id      INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+    user_id        TEXT NOT NULL,
+    situation_idx  INTEGER NOT NULL DEFAULT 0,
+    role           TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (digest_id, user_id, situation_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_digest_participants_user ON digest_participants(user_id);
 
 -- Per-decision read tracking (local-only, Desktop app)
 CREATE TABLE IF NOT EXISTS decision_reads (
@@ -500,11 +511,13 @@ CREATE TABLE IF NOT EXISTS people_cards (
     highlights          TEXT NOT NULL DEFAULT '[]',
     accomplishments     TEXT NOT NULL DEFAULT '[]',
     -- Guide (coaching framing)
-    how_to_communicate  TEXT NOT NULL DEFAULT '',
+    communication_guide TEXT NOT NULL DEFAULT '',
     decision_style      TEXT NOT NULL DEFAULT '',
     tactics             TEXT NOT NULL DEFAULT '[]',
     -- Context
     relationship_context TEXT NOT NULL DEFAULT '',
+    -- Status
+    status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'insufficient_data')),
     -- Metadata
     model               TEXT NOT NULL DEFAULT '',
     input_tokens        INTEGER NOT NULL DEFAULT 0,

@@ -7,7 +7,7 @@ const (
 	DefaultAIModel         = "claude-sonnet-4-6"
 	DefaultAIContextBudget = 150000
 	DefaultSyncWorkers     = 1
-	DefaultInitialHistDays = 30
+	DefaultInitialHistDays = 2
 	DefaultPollInterval    = 15 * time.Minute
 	DefaultSyncThreads     = true
 	DefaultSyncOnWake      = true

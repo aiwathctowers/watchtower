@@ -186,6 +186,10 @@ func (o *Orchestrator) runSearchSync(ctx context.Context, opts SyncOptions) erro
 		return fmt.Errorf("user profile sync: %w", err)
 	}
 
+	// Phase 5: lazy thread loading — backfill parent messages for orphan replies.
+	// Non-blocking: errors are logged and skipped, does not fail the sync.
+	o.syncOrphanThreads(ctx)
+
 	return o.finishSync()
 }
 

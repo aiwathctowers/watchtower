@@ -256,13 +256,16 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if syncFlagDaemon {
 		d := daemon.New(orch, cfg)
 		d.SetLogger(logger)
+		d.SetDB(database)
 		d.SetPIDPath(pidFilePath(cfg))
 		if cfg.Digest.Enabled {
 			gen, cleanupPool := cliPooledGenerator(cfg, logger)
 		defer cleanupPool()
 			pipe := digest.New(database, cfg, gen, logger)
+			chainsPipe := chains.New(database, cfg, gen, logger)
+			pipe.ChainLinker = chainsPipe
 			d.SetDigestPipeline(pipe)
-			d.SetChainsPipeline(chains.New(database, cfg, gen, logger))
+			d.SetChainsPipeline(chainsPipe)
 			d.SetTracksPipeline(tracks.New(database, cfg, gen, logger))
 			d.SetPeoplePipeline(guide.New(database, cfg, gen, logger))
 		}

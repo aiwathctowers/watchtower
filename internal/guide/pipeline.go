@@ -33,7 +33,7 @@ type PeopleCardResult struct {
 	RedFlags           []string `json:"red_flags"`
 	Highlights         []string `json:"highlights"`
 	Accomplishments    []string `json:"accomplishments"`
-	HowToCommunicate   string   `json:"how_to_communicate"`
+	CommunicationGuide string   `json:"communication_guide"`
 	DecisionStyle      string   `json:"decision_style"`
 	Tactics            []string `json:"tactics"`
 }
@@ -54,11 +54,6 @@ type TeamNorms struct {
 	TotalUsers      int
 }
 
-// SignalNorms holds signal type frequency across the team.
-type SignalNorms struct {
-	TypeCounts map[string]int
-	TotalUsers int
-}
 
 // ProgressFunc is called during generation to report progress.
 type ProgressFunc func(completed, totalUsers int, status string)
@@ -145,18 +140,17 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 		return 0, nil
 	}
 
-	// Load all signals for team norms
-	allSignals, err := p.db.GetAllPeopleSignals(from, to)
+	// Load all situations for v2 pipeline
+	allSituations, err := p.db.GetSituationsForWindow(from, to)
 	if err != nil {
-		p.logger.Printf("people: warning: failed to load signals: %v", err)
-		allSignals = make(map[string][]db.ChannelSignals)
+		p.logger.Printf("people: warning: failed to load situations: %v", err)
+		allSituations = make(map[string][]db.ChannelSituations)
 	}
 
 	teamNorms := computeTeamNorms(allStats)
-	signalNorms := computeSignalNorms(allSignals)
 
-	p.logger.Printf("people: team norms: %d users, %.0f avg msgs, %d signal types",
-		teamNorms.TotalUsers, teamNorms.AvgMessages, len(signalNorms.TypeCounts))
+	p.logger.Printf("people: team norms: %d users, %.0f avg msgs, %d users with situations",
+		teamNorms.TotalUsers, teamNorms.AvgMessages, len(allSituations))
 
 	totalUsers := len(allStats)
 	workers := p.Workers
@@ -191,8 +185,8 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 				c := int(completed.Load())
 				p.progress(c, totalUsers, fmt.Sprintf("@%s (%d msgs)...", userName, stats.MessageCount))
 
-				userSignals := allSignals[stats.UserID]
-				if err := p.processUser(ctx, stats, from, to, userSignals, teamNorms, signalNorms); err != nil {
+				userSituations := allSituations[stats.UserID]
+				if err := p.processUser(ctx, stats, from, to, userSituations, teamNorms); err != nil {
 					p.logger.Printf("people: error for @%s: %v", userName, err)
 				}
 				newVal := int(completed.Add(1))
@@ -217,13 +211,58 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 	return total, nil
 }
 
-func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to float64,
-	userSignals []db.ChannelSignals, teamNorms *TeamNorms, signalNorms *SignalNorms) error {
+// MinSituations is the minimum number of situations required for a full AI-powered card.
+// Below this threshold (AND below MinSituationMessages), a card gets insufficient_data status.
+const MinSituations = 3
 
-	signalsBlock := p.formatSignals(userSignals)
+// MinSituationMessages is the alternative threshold: if the user has this many messages,
+// generate a full card even without enough situations.
+const MinSituationMessages = 10
+
+func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to float64,
+	userSituations []db.ChannelSituations,
+	teamNorms *TeamNorms) error {
+
+	// Count total situations for this user
+	totalSituations := 0
+	for _, cs := range userSituations {
+		totalSituations += len(cs.Situations)
+	}
+
+	// Check if we have enough data for a full card
+	hasEnoughData := totalSituations >= MinSituations || stats.MessageCount >= MinSituationMessages
+
+	if !hasEnoughData {
+		// Create an insufficient_data card with stats only
+		card := db.PeopleCard{
+			UserID:           stats.UserID,
+			PeriodFrom:       from,
+			PeriodTo:         to,
+			MessageCount:     stats.MessageCount,
+			ChannelsActive:   stats.ChannelsActive,
+			ThreadsInitiated: stats.ThreadsInitiated,
+			ThreadsReplied:   stats.ThreadsReplied,
+			AvgMessageLength: stats.AvgMessageLength,
+			ActiveHoursJSON:  stats.ActiveHoursJSON,
+			VolumeChangePct:  stats.VolumeChangePct,
+			Summary:          "Insufficient data for analysis this period.",
+			RedFlags:         "[]",
+			Highlights:       "[]",
+			Accomplishments:  "[]",
+			Tactics:          "[]",
+			Status:           "insufficient_data",
+			Model:            p.cfg.Digest.Model,
+		}
+		_, err := p.db.UpsertPeopleCard(card)
+		return err
+	}
+
+	situationsBlock := p.formatSituations(userSituations)
 	statsBlock := p.formatStats(stats)
-	normsBlock := p.formatTeamNorms(teamNorms, signalNorms)
+	normsBlock := p.formatTeamNorms(teamNorms)
 	relCtx := p.relationshipContext(stats.UserID)
+	prevCardBlock := p.formatPreviousCard(stats.UserID)
+	rawMsgsBlock := p.formatRawMessages(stats.UserID, to)
 
 	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02")
 	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02")
@@ -234,9 +273,11 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 		p.formatProfileContext(),
 		relCtx,
 		p.languageInstruction(),
-		signalsBlock,
+		situationsBlock,
 		statsBlock,
 		normsBlock,
+		prevCardBlock,
+		rawMsgsBlock,
 	)
 
 	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "people.reduce"), "", prompt, "")
@@ -277,10 +318,11 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 		RedFlags:            string(redFlags),
 		Highlights:          string(highlights),
 		Accomplishments:     string(accomplishments),
-		HowToCommunicate:    result.HowToCommunicate,
+		CommunicationGuide:  result.CommunicationGuide,
 		DecisionStyle:       result.DecisionStyle,
 		Tactics:             string(tactics),
 		RelationshipContext: relCtx,
+		Status:              "active",
 		Model:               p.cfg.Digest.Model,
 		PromptVersion:       pv,
 	}
@@ -361,19 +403,34 @@ func (p *Pipeline) generateTeamSummary(ctx context.Context, from, to float64) er
 	return p.db.UpsertPeopleCardSummary(s)
 }
 
-func (p *Pipeline) formatSignals(channelSignals []db.ChannelSignals) string {
-	if len(channelSignals) == 0 {
-		return "(No signals observed for this user in the current period.)"
+
+func (p *Pipeline) formatSituations(channelSituations []db.ChannelSituations) string {
+	if len(channelSituations) == 0 {
+		return "(No notable situations involving this user in the current period.)"
 	}
 	var sb strings.Builder
-	for _, cs := range channelSignals {
+	for _, cs := range channelSituations {
 		fmt.Fprintf(&sb, "#%s:\n", cs.ChannelName)
-		for _, sig := range cs.Signals {
-			detail := sanitize(sig.Detail)
-			if sig.EvidenceTS != "" {
-				fmt.Fprintf(&sb, "  - [%s] %s (ts: %s)\n", sig.Type, detail, sig.EvidenceTS)
-			} else {
-				fmt.Fprintf(&sb, "  - [%s] %s\n", sig.Type, detail)
+		for _, sit := range cs.Situations {
+			fmt.Fprintf(&sb, "  - [%s] %s\n", sit.Type, sanitize(sit.Topic))
+			if sit.Dynamic != "" {
+				fmt.Fprintf(&sb, "    Dynamic: %s\n", sanitize(sit.Dynamic))
+			}
+			if sit.Outcome != "" {
+				fmt.Fprintf(&sb, "    Outcome: %s\n", sanitize(sit.Outcome))
+			}
+			if len(sit.Participants) > 0 {
+				var parts []string
+				for _, p := range sit.Participants {
+					parts = append(parts, fmt.Sprintf("%s (%s)", p.UserID, p.Role))
+				}
+				fmt.Fprintf(&sb, "    Participants: %s\n", strings.Join(parts, ", "))
+			}
+			if len(sit.RedFlags) > 0 {
+				fmt.Fprintf(&sb, "    Red flags: %s\n", strings.Join(sit.RedFlags, "; "))
+			}
+			if len(sit.Observations) > 0 {
+				fmt.Fprintf(&sb, "    Observations: %s\n", strings.Join(sit.Observations, "; "))
 			}
 		}
 	}
@@ -393,19 +450,54 @@ func (p *Pipeline) formatStats(stats db.UserStats) string {
 	return sb.String()
 }
 
-func (p *Pipeline) formatTeamNorms(tn *TeamNorms, sn *SignalNorms) string {
+func (p *Pipeline) formatPreviousCard(userID string) string {
+	card, err := p.db.GetLatestPeopleCard(userID)
+	if err != nil || card == nil {
+		return "(No previous card available.)"
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Summary: %s\n", sanitize(card.Summary))
+	if card.CommunicationStyle != "" {
+		fmt.Fprintf(&sb, "Style: %s | Decision role: %s\n", card.CommunicationStyle, card.DecisionRole)
+	}
+	if card.CommunicationGuide != "" {
+		fmt.Fprintf(&sb, "Communication guide: %s\n", sanitize(card.CommunicationGuide))
+	}
+	if card.RedFlags != "" && card.RedFlags != "[]" {
+		fmt.Fprintf(&sb, "Red flags: %s\n", sanitize(card.RedFlags))
+	}
+	if card.Highlights != "" && card.Highlights != "[]" {
+		fmt.Fprintf(&sb, "Highlights: %s\n", sanitize(card.Highlights))
+	}
+	return sb.String()
+}
+
+func (p *Pipeline) formatRawMessages(userID string, to float64) string {
+	oneDayAgo := to - 86400
+	msgs, err := p.db.GetMessages(db.MessageOpts{
+		UserID:   userID,
+		FromUnix: oneDayAgo,
+		ToUnix:   to,
+		Limit:    50,
+	})
+	if err != nil || len(msgs) == 0 {
+		return "(No recent messages available.)"
+	}
+	var sb strings.Builder
+	for _, m := range msgs {
+		text := sanitize(m.Text)
+		if len(text) > 200 {
+			text = text[:200] + "..."
+		}
+		fmt.Fprintf(&sb, "[%s] %s\n", m.TS, text)
+	}
+	return sb.String()
+}
+
+func (p *Pipeline) formatTeamNorms(tn *TeamNorms) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Team averages (%d people): %.0f msgs/person, %.0f channels, %.0f char avg msg, %.0f threads started\n",
 		tn.TotalUsers, tn.AvgMessages, tn.AvgChannels, tn.AvgMsgLength, tn.AvgThreadsStart)
-	if len(sn.TypeCounts) > 0 {
-		sb.WriteString("Signal distribution: ")
-		parts := make([]string, 0, len(sn.TypeCounts))
-		for sigType, count := range sn.TypeCounts {
-			parts = append(parts, fmt.Sprintf("%s %d/%d", sigType, count, sn.TotalUsers))
-		}
-		sb.WriteString(strings.Join(parts, ", "))
-		sb.WriteString("\n")
-	}
 	return sb.String()
 }
 
@@ -428,25 +520,6 @@ func computeTeamNorms(allStats []db.UserStats) *TeamNorms {
 	return tn
 }
 
-func computeSignalNorms(allSignals map[string][]db.ChannelSignals) *SignalNorms {
-	sn := &SignalNorms{
-		TypeCounts: make(map[string]int),
-		TotalUsers: len(allSignals),
-	}
-	// Count users who have each signal type (not total signal count)
-	for _, channelSignals := range allSignals {
-		userTypes := make(map[string]bool)
-		for _, cs := range channelSignals {
-			for _, sig := range cs.Signals {
-				userTypes[sig.Type] = true
-			}
-		}
-		for sigType := range userTypes {
-			sn.TypeCounts[sigType]++
-		}
-	}
-	return sn
-}
 
 // relationshipContext determines the relationship between the current user and
 // the analyzed user based on the user profile (reports, peers, manager).

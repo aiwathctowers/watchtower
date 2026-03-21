@@ -2,6 +2,8 @@ package digest
 
 const channelDigestPrompt = `You are analyzing Slack messages from channel #%s for the period %s to %s.
 
+%s
+
 Analyze the messages below and return ONLY a JSON object (no markdown fences, no explanation) with this exact structure:
 
 {
@@ -9,7 +11,8 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
   "topics": ["topic1", "topic2"],
   "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
   "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
-  "key_messages": ["1234567890.123456", "1234567891.123456"]
+  "key_messages": ["1234567890.123456", "1234567891.123456"],
+  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}]
 }
 
 %s
@@ -30,6 +33,16 @@ Rules:
   If only 0-1 true decisions exist, return an empty or single-item array. Do NOT inflate the list.
 - action_items: Tasks mentioned or assigned. status is always "open" for new items
 - key_messages: Timestamps of the most important messages (max 5)
+- situations: Notable INTERACTIONS between people (max 3-5). Capture dynamics BETWEEN people, not individual behavior. Each situation has:
+  * topic: Short label for the topic/project (e.g. "Auth refactor ownership", "Sprint planning conflict")
+  * type: "bottleneck", "conflict", "collaboration", "knowledge_transfer", "decision_deadlock", "mentoring", "escalation", "handoff", "misalignment"
+  * participants: Each person involved with their role ("blocker", "affected", "initiator", "resolver", "mediator", "mentor", "mentee", "decision_maker", "contributor")
+  * dynamic: What happened between the participants (1-2 sentences)
+  * outcome: Result or current state (1 sentence)
+  * red_flags: Specific concerns from this situation (empty [] if none)
+  * observations: Notable patterns or behaviors observed (empty [] if none)
+  * message_refs: Slack timestamps of key messages (e.g. ["1234567890.123456"])
+  Use Slack user IDs (e.g. U123456) for participant user_id. Only include situations where the interaction pattern is noteworthy — skip routine exchanges. If no notable situations, return empty array [].
 - If a field has no items, use an empty array []
 - Return valid JSON only, no other text
 
@@ -37,6 +50,8 @@ Rules:
 %s`
 
 const dailyRollupPrompt = `You are creating a daily summary of Slack activity for %s.
+
+%s
 
 Below are per-channel digests from today, including their extracted decisions. Create a cross-channel rollup.
 
@@ -67,6 +82,8 @@ Rules:
 
 const weeklyTrendsPrompt = `You are analyzing a week of Slack workspace activity for %s (%s to %s).
 
+%s
+
 Below are daily summaries for the week. Create a weekly trends analysis.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
@@ -92,6 +109,8 @@ Rules:
 %s`
 
 const periodSummaryPrompt = `You are creating a summary of Slack workspace activity for the period %s to %s.
+
+%s
 
 Below are individual digests (channel-level and daily rollups) from that period. Create a comprehensive summary.
 

@@ -50,9 +50,10 @@ struct PersonDetailView: View {
                 header
                 statsGrid
                 if isCurrentUser { profileContextSection }
+                insufficientDataBanner
                 summarySection
                 accomplishmentsSection
-                howToCommunicateSection
+                communicationGuideSection
                 decisionStyleSection
                 tacticsSection
                 redFlagsSection
@@ -177,18 +178,35 @@ struct PersonDetailView: View {
         }
     }
 
-    // MARK: - How to Communicate
+    // MARK: - Insufficient Data Banner
 
     @ViewBuilder
-    private var howToCommunicateSection: some View {
-        if !card.howToCommunicate.isEmpty {
+    private var insufficientDataBanner: some View {
+        if card.isInsufficientData {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(.orange)
+                Text("Not enough data for full analysis. Results will improve as more messages are collected.")
+                    .font(.subheadline)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: - Communication Guide
+
+    @ViewBuilder
+    private var communicationGuideSection: some View {
+        if !card.communicationGuide.isEmpty {
             GroupBox {
-                Text(card.howToCommunicate)
+                Text(card.communicationGuide)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(4)
             } label: {
-                Label("How to Communicate", systemImage: "bubble.left.and.text.bubble.right")
+                Label("Communication Guide", systemImage: "bubble.left.and.text.bubble.right")
                     .foregroundStyle(.blue)
             }
         }

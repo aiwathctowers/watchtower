@@ -1702,3 +1702,97 @@ final class ChainModelTests: XCTestCase {
         XCTAssertFalse(digestRef.isTrack)
     }
 }
+
+// MARK: - BackgroundTaskManager
+
+final class BackgroundTaskManagerTests: XCTestCase {
+
+    @MainActor
+    func testStepRecordEquality() {
+        let r1 = BackgroundTaskManager.StepRecord(
+            timestamp: Date(timeIntervalSince1970: 1000),
+            pipeline: "digests", step: 1, total: 10,
+            status: "Processing #general", inputTokens: 100, outputTokens: 50, costUsd: 0.001
+        )
+        let r2 = BackgroundTaskManager.StepRecord(
+            timestamp: Date(timeIntervalSince1970: 1000),
+            pipeline: "digests", step: 1, total: 10,
+            status: "Processing #general", inputTokens: 100, outputTokens: 50, costUsd: 0.001
+        )
+        // Different UUIDs, so not equal
+        XCTAssertNotEqual(r1, r2)
+        // But same id is equal
+        XCTAssertEqual(r1, r1)
+    }
+
+    @MainActor
+    func testTotalTokensAndCost() {
+        let manager = BackgroundTaskManager()
+        var digestState = BackgroundTaskManager.TaskState()
+        digestState.stepHistory = [
+            .init(timestamp: Date(), pipeline: "digests", step: 1, total: 5,
+                  status: "", inputTokens: 100, outputTokens: 50, costUsd: 0.001),
+            .init(timestamp: Date(), pipeline: "digests", step: 2, total: 5,
+                  status: "", inputTokens: 200, outputTokens: 100, costUsd: 0.002),
+        ]
+        var tracksState = BackgroundTaskManager.TaskState()
+        tracksState.stepHistory = [
+            .init(timestamp: Date(), pipeline: "tracks", step: 1, total: 3,
+                  status: "", inputTokens: 300, outputTokens: 150, costUsd: 0.003),
+        ]
+        manager.tasks[.digests] = digestState
+        manager.tasks[.tracks] = tracksState
+
+        XCTAssertEqual(manager.totalInputTokens, 600)
+        XCTAssertEqual(manager.totalOutputTokens, 300)
+        XCTAssertEqual(manager.totalCostUsd, 0.006, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testTotalTokensEmptyTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertEqual(manager.totalInputTokens, 0)
+        XCTAssertEqual(manager.totalOutputTokens, 0)
+        XCTAssertEqual(manager.totalCostUsd, 0.0)
+    }
+
+    @MainActor
+    func testHasActiveTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertFalse(manager.hasActiveTasks)
+
+        manager.tasks[.digests] = .init(status: .running)
+        XCTAssertTrue(manager.hasActiveTasks)
+
+        manager.tasks[.digests] = .init(status: .done)
+        XCTAssertFalse(manager.hasActiveTasks)
+    }
+
+    @MainActor
+    func testAllFinished() {
+        let manager = BackgroundTaskManager()
+        XCTAssertTrue(manager.allFinished) // empty is finished
+
+        manager.tasks[.digests] = .init(status: .done)
+        manager.tasks[.tracks] = .init(status: .error("fail"))
+        XCTAssertTrue(manager.allFinished)
+
+        manager.tasks[.people] = .init(status: .running)
+        XCTAssertFalse(manager.allFinished)
+    }
+
+    @MainActor
+    func testHasVisibleTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertFalse(manager.hasVisibleTasks)
+
+        manager.tasks[.digests] = .init(status: .done)
+        XCTAssertFalse(manager.hasVisibleTasks)
+
+        manager.tasks[.tracks] = .init(status: .error("oops"))
+        XCTAssertTrue(manager.hasVisibleTasks)
+
+        manager.tasks[.people] = .init(status: .pending)
+        XCTAssertTrue(manager.hasVisibleTasks)
+    }
+}

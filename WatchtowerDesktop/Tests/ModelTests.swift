@@ -291,6 +291,115 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(p.decodedPeers, [])
     }
 
+    // MARK: - PeopleCard
+
+    func testPeopleCardFromDB() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertPeopleCard(
+                db,
+                userID: "U001",
+                summary: "Active contributor",
+                communicationStyle: "driver",
+                redFlags: #"["Low engagement"]"#,
+                highlights: #"["Great leadership"]"#,
+                accomplishments: #"["Shipped v2"]"#,
+                tactics: #"["Be direct"]"#,
+                status: "active"
+            )
+        }
+        let card = try db.read { db in
+            try PeopleCard.fetchOne(db, sql: "SELECT * FROM people_cards LIMIT 1")!
+        }
+        XCTAssertEqual(card.userID, "U001")
+        XCTAssertEqual(card.summary, "Active contributor")
+        XCTAssertEqual(card.communicationStyle, "driver")
+        XCTAssertEqual(card.parsedRedFlags, ["Low engagement"])
+        XCTAssertTrue(card.hasRedFlags)
+        XCTAssertEqual(card.parsedHighlights, ["Great leadership"])
+        XCTAssertEqual(card.parsedAccomplishments, ["Shipped v2"])
+        XCTAssertEqual(card.parsedTactics, ["Be direct"])
+        XCTAssertFalse(card.isInsufficientData)
+        XCTAssertEqual(card.styleEmoji, "🚀")
+    }
+
+    func testPeopleCardInsufficientData() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertPeopleCard(db, status: "insufficient_data")
+        }
+        let card = try db.read { db in
+            try PeopleCard.fetchOne(db, sql: "SELECT * FROM people_cards LIMIT 1")!
+        }
+        XCTAssertTrue(card.isInsufficientData)
+    }
+
+    func testPeopleCardStyleEmojis() throws {
+        let db = try TestDatabase.create()
+        let cases: [(String, String)] = [
+            ("driver", "🚀"), ("collaborator", "🤝"), ("executor", "⚡"),
+            ("observer", "👀"), ("facilitator", "🎯"), ("other", "💬"),
+        ]
+        for (i, (style, emoji)) in cases.enumerated() {
+            try db.write { db in
+                try TestDatabase.insertPeopleCard(
+                    db, userID: "U\(i)", communicationStyle: style
+                )
+            }
+            let card = try db.read { db in
+                try PeopleCard.fetchOne(db, sql: "SELECT * FROM people_cards WHERE user_id = ?", arguments: ["U\(i)"])!
+            }
+            XCTAssertEqual(card.styleEmoji, emoji, "Style \(style) should have emoji \(emoji)")
+        }
+    }
+
+    // MARK: - PeopleCardSummary
+
+    func testPeopleCardSummaryFromDB() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertPeopleCardSummary(
+                db,
+                summary: "Team is doing great",
+                attention: #"["Alice is overloaded","Bob missing meetings"]"#,
+                tips: #"["Redistribute tasks","Schedule 1-on-1s"]"#
+            )
+        }
+        let cs = try db.read { db in
+            try PeopleCardSummary.fetchOne(db, sql: "SELECT * FROM people_card_summaries LIMIT 1")!
+        }
+        XCTAssertEqual(cs.summary, "Team is doing great")
+        XCTAssertEqual(cs.parsedAttention, ["Alice is overloaded", "Bob missing meetings"])
+        XCTAssertEqual(cs.parsedTips, ["Redistribute tasks", "Schedule 1-on-1s"])
+        XCTAssertEqual(cs.model, "haiku")
+        XCTAssertEqual(cs.inputTokens, 500)
+        XCTAssertEqual(cs.outputTokens, 200)
+    }
+
+    func testPeopleCardSummaryEmptyArrays() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertPeopleCardSummary(db, attention: "[]", tips: "[]")
+        }
+        let cs = try db.read { db in
+            try PeopleCardSummary.fetchOne(db, sql: "SELECT * FROM people_card_summaries LIMIT 1")!
+        }
+        XCTAssertTrue(cs.parsedAttention.isEmpty)
+        XCTAssertTrue(cs.parsedTips.isEmpty)
+    }
+
+    func testPeopleCardSummaryInvalidJSON() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertPeopleCardSummary(db, attention: "not json", tips: "invalid")
+        }
+        let cs = try db.read { db in
+            try PeopleCardSummary.fetchOne(db, sql: "SELECT * FROM people_card_summaries LIMIT 1")!
+        }
+        XCTAssertTrue(cs.parsedAttention.isEmpty)
+        XCTAssertTrue(cs.parsedTips.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func makeUser(

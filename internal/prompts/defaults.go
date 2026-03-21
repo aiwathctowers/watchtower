@@ -58,7 +58,7 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
   "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
   "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
   "key_messages": ["1234567890.123456", "1234567891.123456"],
-  "people_signals": [{"user_id": "U123456", "signals": [{"type": "bottleneck", "detail": "specific observation with evidence", "evidence_ts": "1234567890.123456"}]}]
+  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}]
 }
 
 %s
@@ -79,21 +79,16 @@ Rules:
   If only 0-1 true decisions exist, return an empty or single-item array. Do NOT inflate the list.
 - action_items: Tasks mentioned or assigned. status is always "open" for new items
 - key_messages: Timestamps of the most important messages (max 5)
-- people_signals: For each person who STOOD OUT in this channel (max 5-7), emit typed signals based on their behavior IN CONTEXT of the conversation. Only notable behavior — skip routine participants. Each signal MUST cite specific evidence from messages. Use the Slack user ID (e.g. U123456) from the message headers, NOT the display name.
-  Signal types:
-  * "bottleneck" — blocked a decision, process, or other people
-  * "accomplishment" — delivered, resolved, shipped something concrete
-  * "initiative" — proposed new ideas, started discussions, drove change
-  * "mediator" — resolved conflicts, coordinated between parties
-  * "conflict" — unconstructive behavior, tension with others
-  * "disengagement" — ignored questions, went silent, minimal responses
-  * "dropped_ball" — committed to something but didn't follow through
-  * "rubber_stamping" — approved without meaningful review
-  * "overloaded" — too many threads, fragmented responses
-  * "after_hours" — significant activity outside business hours
-  * "knowledge_hub" — multiple people asked them for help/answers
-  * "blocker" — explicitly blocked without providing alternatives
-  If no one stood out, return empty array [].
+- situations: Notable INTERACTIONS between people (max 3-5). Capture dynamics BETWEEN people, not individual behavior. Each situation has:
+  * topic: Short label for the topic/project (e.g. "Auth refactor ownership", "Sprint planning conflict")
+  * type: "bottleneck", "conflict", "collaboration", "knowledge_transfer", "decision_deadlock", "mentoring", "escalation", "handoff", "misalignment"
+  * participants: Each person involved with their role ("blocker", "affected", "initiator", "resolver", "mediator", "mentor", "mentee", "decision_maker", "contributor")
+  * dynamic: What happened between the participants (1-2 sentences)
+  * outcome: Result or current state (1 sentence)
+  * red_flags: Specific concerns from this situation (empty [] if none)
+  * observations: Notable patterns or behaviors observed (empty [] if none)
+  * message_refs: Slack timestamps of key messages (e.g. ["1234567890.123456"])
+  Use Slack user IDs (e.g. U123456) for participant user_id. Only include situations where the interaction pattern is noteworthy — skip routine exchanges. If no notable situations, return empty array [].
 - If a field has no items, use an empty array []
 - Return valid JSON only, no other text
 
@@ -432,7 +427,7 @@ const defaultPeopleReduce = `You are creating a unified profile card for @%s bas
 
 %s
 
-Below are TYPED SIGNALS observed in channel context (by the digest pipeline), plus computed statistics and team norms. Your job is to synthesize these into a single card that combines:
+Below are SITUATIONS observed in channel context (by the digest pipeline), plus computed statistics and team norms. Your job is to synthesize these into a single card that combines:
 1. ANALYSIS — classify their communication style, role in decisions, flag concerns
 2. COACHING — actionable advice for the viewer on how to work with this person
 
@@ -447,7 +442,7 @@ Return ONLY a JSON object (no markdown fences, no explanation):
   "red_flags": ["Specific concerns backed by signals. Empty [] if none."],
   "highlights": ["Positive contributions backed by signals. Empty [] if none."],
   "accomplishments": ["Concrete things delivered/resolved this period from signals."],
-  "how_to_communicate": "Paragraph: communication preferences, timing, format. ONLY what is specific to this person vs team norms. If they match the norm, say so briefly and focus on exceptions.",
+  "communication_guide": "Paragraph: communication preferences, timing, format. ONLY what is specific to this person vs team norms. If they match the norm, say so briefly and focus on exceptions.",
   "decision_style": "How they participate in decisions — based on bottleneck/rubber_stamping/initiative/blocker signals. If no decision signals, say 'No notable decision patterns this period.'",
   "tactics": ["If X, then Y — specific actionable tactics based on observed signals. Max 3-4."]
 }
@@ -455,24 +450,31 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 %s
 
 Rules:
-- Base ALL analysis on the signals provided. Do NOT invent patterns not supported by evidence.
-- If a signal appears in multiple channels, it is a PATTERN — emphasize it.
-- If conflicting signals exist (e.g., initiative in one channel, disengagement in another), note the CONTRAST.
+- Base ALL analysis on the situations provided. Do NOT invent patterns not supported by evidence.
+- If a situation type appears in multiple channels, it is a PATTERN — emphasize it.
+- If conflicting situations exist (e.g., collaboration in one channel, conflict in another), note the CONTRAST.
 - Compare stats to team norms: only mention stats that deviate significantly (>30%% from avg).
 - Coaching framing: frame guide sections as advice FOR THE VIEWER, not judgments ABOUT the person.
 - If relationship is manager->report: be more direct about concerns and accountability.
 - If relationship is report->manager: frame tactically (managing up).
-- If too few signals for meaningful analysis, say so in summary.
+- If too few situations for meaningful analysis, say so in summary.
+- If a PREVIOUS CARD is provided, note trends and changes vs the prior period. Don't just repeat it.
 - %s
 - Return valid JSON only
 
-=== SIGNALS FROM CHANNELS ===
+=== SITUATIONS ===
 %s
 
 === COMPUTED STATS ===
 %s
 
 === TEAM NORMS ===
+%s
+
+=== PREVIOUS CARD ===
+%s
+
+=== RAW MESSAGES (last 24h sample) ===
 %s`
 
 const defaultPeopleTeam = `You are creating a team communication summary for %s to %s.

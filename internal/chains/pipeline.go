@@ -63,11 +63,15 @@ func (p *Pipeline) Run(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("getting unlinked decisions: %w", err)
 	}
 
+	p.logger.Printf("chains: found %d unlinked decision(s)", len(unlinked))
+
 	// 1b. Get unlinked digests for richer context.
 	unlinkedDigests, err := p.db.GetUnlinkedDigests(cutoff)
 	if err != nil {
 		p.logger.Printf("chains: failed to get unlinked digests (continuing without): %v", err)
 	}
+
+	p.logger.Printf("chains: found %d unlinked digest(s)", len(unlinkedDigests))
 
 	if len(unlinked) == 0 && len(unlinkedDigests) == 0 {
 		// Mark stale chains and return.

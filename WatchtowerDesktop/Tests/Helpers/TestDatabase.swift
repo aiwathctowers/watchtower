@@ -329,8 +329,18 @@ enum TestDatabase {
         created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         read_at       TEXT,
         prompt_version INTEGER NOT NULL DEFAULT 0,
+        people_signals TEXT NOT NULL DEFAULT '[]',
+        situations     TEXT NOT NULL DEFAULT '[]',
         UNIQUE(channel_id, type, period_from, period_to)
     );
+    CREATE TABLE IF NOT EXISTS digest_participants (
+        digest_id      INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+        user_id        TEXT NOT NULL,
+        situation_idx  INTEGER NOT NULL DEFAULT 0,
+        role           TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (digest_id, user_id, situation_idx)
+    );
+    CREATE INDEX IF NOT EXISTS idx_digest_participants_user ON digest_participants(user_id);
     CREATE TABLE IF NOT EXISTS decision_reads (
         digest_id    INTEGER NOT NULL,
         decision_idx INTEGER NOT NULL,
@@ -463,6 +473,7 @@ enum TestDatabase {
     CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
     CREATE TABLE IF NOT EXISTS chains (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id   INTEGER DEFAULT NULL,
         title       TEXT NOT NULL,
         slug        TEXT NOT NULL,
         status      TEXT NOT NULL DEFAULT 'active',
@@ -471,6 +482,7 @@ enum TestDatabase {
         first_seen  REAL NOT NULL,
         last_seen   REAL NOT NULL,
         item_count  INTEGER NOT NULL DEFAULT 0,
+        read_at     TEXT,
         created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
@@ -502,6 +514,14 @@ enum TestDatabase {
         thread_replies_to   INTEGER NOT NULL DEFAULT 0,
         thread_replies_from INTEGER NOT NULL DEFAULT 0,
         shared_channel_ids  TEXT NOT NULL DEFAULT '[]',
+        dm_messages_to      INTEGER NOT NULL DEFAULT 0,
+        dm_messages_from    INTEGER NOT NULL DEFAULT 0,
+        mentions_to         INTEGER NOT NULL DEFAULT 0,
+        mentions_from       INTEGER NOT NULL DEFAULT 0,
+        reactions_to        INTEGER NOT NULL DEFAULT 0,
+        reactions_from      INTEGER NOT NULL DEFAULT 0,
+        interaction_score   REAL NOT NULL DEFAULT 0,
+        connection_type     TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (user_a, user_b, period_from, period_to)
     );
     CREATE INDEX IF NOT EXISTS idx_user_interactions_a ON user_interactions(user_a, period_from, period_to);
@@ -524,10 +544,11 @@ enum TestDatabase {
         red_flags           TEXT NOT NULL DEFAULT '[]',
         highlights          TEXT NOT NULL DEFAULT '[]',
         accomplishments     TEXT NOT NULL DEFAULT '[]',
-        how_to_communicate  TEXT NOT NULL DEFAULT '',
+        communication_guide TEXT NOT NULL DEFAULT '',
         decision_style      TEXT NOT NULL DEFAULT '',
         tactics             TEXT NOT NULL DEFAULT '[]',
         relationship_context TEXT NOT NULL DEFAULT '',
+        status              TEXT NOT NULL DEFAULT 'active',
         model               TEXT NOT NULL DEFAULT '',
         input_tokens        INTEGER NOT NULL DEFAULT 0,
         output_tokens       INTEGER NOT NULL DEFAULT 0,
@@ -623,22 +644,46 @@ enum TestDatabase {
         redFlags: String = "[]",
         highlights: String = #"["Great leadership"]"#,
         accomplishments: String = "[]",
-        howToCommunicate: String = "",
+        communicationGuide: String = "",
         decisionStyle: String = "",
         tactics: String = "[]",
         relationshipContext: String = "",
+        status: String = "ok",
         model: String = "haiku"
     ) throws {
         try db.execute(sql: """
             INSERT INTO people_cards (user_id, period_from, period_to, message_count, channels_active,
                 threads_initiated, threads_replied, avg_message_length, active_hours_json,
                 volume_change_pct, summary, communication_style, decision_role, red_flags, highlights,
-                accomplishments, how_to_communicate, decision_style, tactics, relationship_context, model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                accomplishments, communication_guide, decision_style, tactics, relationship_context, status, model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: [userID, periodFrom, periodTo, messageCount, channelsActive,
                              threadsInitiated, threadsReplied, avgMessageLength, activeHoursJSON,
                              volumeChangePct, summary, communicationStyle, decisionRole, redFlags, highlights,
-                             accomplishments, howToCommunicate, decisionStyle, tactics, relationshipContext, model])
+                             accomplishments, communicationGuide, decisionStyle, tactics, relationshipContext, status, model])
+    }
+
+    // MARK: - People Card Summary Fixtures
+
+    static func insertPeopleCardSummary(
+        _ db: Database,
+        periodFrom: Double = 1700000000,
+        periodTo: Double = 1700604800,
+        summary: String = "Team is collaborating well",
+        attention: String = #"["Alice is overloaded"]"#,
+        tips: String = #"["Consider redistributing tasks"]"#,
+        model: String = "haiku",
+        inputTokens: Int = 500,
+        outputTokens: Int = 200,
+        costUSD: Double = 0.001,
+        promptVersion: Int = 1
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO people_card_summaries (period_from, period_to, summary, attention, tips,
+                model, input_tokens, output_tokens, cost_usd, prompt_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [periodFrom, periodTo, summary, attention, tips,
+                             model, inputTokens, outputTokens, costUSD, promptVersion])
     }
 
     // MARK: - Chain Fixtures

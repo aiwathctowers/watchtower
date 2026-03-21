@@ -9,14 +9,17 @@ import (
 
 // UpsertPeopleCard inserts or replaces a people card.
 func (db *DB) UpsertPeopleCard(card PeopleCard) (int64, error) {
+	if card.Status == "" {
+		card.Status = "active"
+	}
 	_, err := db.Exec(`INSERT INTO people_cards
 		(user_id, period_from, period_to,
 		 message_count, channels_active, threads_initiated, threads_replied,
 		 avg_message_length, active_hours_json, volume_change_pct,
 		 summary, communication_style, decision_role, red_flags, highlights, accomplishments,
-		 how_to_communicate, decision_style, tactics, relationship_context,
+		 communication_guide, decision_style, tactics, relationship_context, status,
 		 model, input_tokens, output_tokens, cost_usd, prompt_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, period_from, period_to) DO UPDATE SET
 			message_count = excluded.message_count,
 			channels_active = excluded.channels_active,
@@ -31,10 +34,11 @@ func (db *DB) UpsertPeopleCard(card PeopleCard) (int64, error) {
 			red_flags = excluded.red_flags,
 			highlights = excluded.highlights,
 			accomplishments = excluded.accomplishments,
-			how_to_communicate = excluded.how_to_communicate,
+			communication_guide = excluded.communication_guide,
 			decision_style = excluded.decision_style,
 			tactics = excluded.tactics,
 			relationship_context = excluded.relationship_context,
+			status = excluded.status,
 			model = excluded.model,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
@@ -46,7 +50,7 @@ func (db *DB) UpsertPeopleCard(card PeopleCard) (int64, error) {
 		card.AvgMessageLength, card.ActiveHoursJSON, card.VolumeChangePct,
 		card.Summary, card.CommunicationStyle, card.DecisionRole,
 		card.RedFlags, card.Highlights, card.Accomplishments,
-		card.HowToCommunicate, card.DecisionStyle, card.Tactics, card.RelationshipContext,
+		card.CommunicationGuide, card.DecisionStyle, card.Tactics, card.RelationshipContext, card.Status,
 		card.Model, card.InputTokens, card.OutputTokens, card.CostUSD, card.PromptVersion)
 	if err != nil {
 		return 0, fmt.Errorf("upserting people card: %w", err)
@@ -284,6 +288,148 @@ func (db *DB) GetAllPeopleSignals(from, to float64) (map[string][]ChannelSignals
 	return result, rows.Err()
 }
 
+// ChannelSituations groups situations for one user from one channel digest.
+type ChannelSituations struct {
+	ChannelID   string
+	ChannelName string
+	PeriodFrom  float64
+	PeriodTo    float64
+	Situations  []Situation
+}
+
+// GetSituationsForUser returns all situations involving a specific user
+// from channel digests within the given time window.
+func (db *DB) GetSituationsForUser(userID string, from, to float64) ([]ChannelSituations, error) {
+	channelNames := make(map[string]string)
+	chRows, err := db.Query(`SELECT id, name FROM channels`)
+	if err == nil {
+		defer chRows.Close()
+		for chRows.Next() {
+			var id, name string
+			if chRows.Scan(&id, &name) == nil {
+				channelNames[id] = name
+			}
+		}
+	}
+
+	// Use digest_participants to efficiently find digests involving this user
+	rows, err := db.Query(`SELECT d.channel_id, d.period_from, d.period_to, d.situations
+		FROM digests d
+		INNER JOIN digest_participants dp ON dp.digest_id = d.id
+		WHERE dp.user_id = ?
+		  AND d.type = 'channel'
+		  AND d.period_from >= ?
+		  AND d.period_to <= ?
+		  AND d.situations != '[]'`, userID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("querying situations for user: %w", err)
+	}
+	defer rows.Close()
+
+	var result []ChannelSituations
+	for rows.Next() {
+		var channelID, situationsJSON string
+		var pFrom, pTo float64
+		if err := rows.Scan(&channelID, &pFrom, &pTo, &situationsJSON); err != nil {
+			return nil, fmt.Errorf("scanning situations row: %w", err)
+		}
+
+		var allSituations []Situation
+		if err := json.Unmarshal([]byte(situationsJSON), &allSituations); err != nil {
+			continue
+		}
+
+		// Filter situations where this user is a participant
+		var userSituations []Situation
+		for _, s := range allSituations {
+			for _, p := range s.Participants {
+				if p.UserID == userID {
+					userSituations = append(userSituations, s)
+					break
+				}
+			}
+		}
+
+		if len(userSituations) > 0 {
+			chName := channelID
+			if name, ok := channelNames[channelID]; ok {
+				chName = name
+			}
+			result = append(result, ChannelSituations{
+				ChannelID:   channelID,
+				ChannelName: chName,
+				PeriodFrom:  pFrom,
+				PeriodTo:    pTo,
+				Situations:  userSituations,
+			})
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetSituationsForWindow returns all situations from all channel digests
+// in the given time window, grouped by user.
+func (db *DB) GetSituationsForWindow(from, to float64) (map[string][]ChannelSituations, error) {
+	channelNames := make(map[string]string)
+	chRows, err := db.Query(`SELECT id, name FROM channels`)
+	if err == nil {
+		defer chRows.Close()
+		for chRows.Next() {
+			var id, name string
+			if chRows.Scan(&id, &name) == nil {
+				channelNames[id] = name
+			}
+		}
+	}
+
+	rows, err := db.Query(`SELECT channel_id, period_from, period_to, situations
+		FROM digests
+		WHERE type = 'channel'
+		  AND period_from >= ?
+		  AND period_to <= ?
+		  AND situations != '[]'`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("querying situations for window: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]ChannelSituations)
+	for rows.Next() {
+		var channelID, situationsJSON string
+		var pFrom, pTo float64
+		if err := rows.Scan(&channelID, &pFrom, &pTo, &situationsJSON); err != nil {
+			return nil, fmt.Errorf("scanning situations row: %w", err)
+		}
+
+		var allSituations []Situation
+		if err := json.Unmarshal([]byte(situationsJSON), &allSituations); err != nil {
+			continue
+		}
+
+		chName := channelID
+		if name, ok := channelNames[channelID]; ok {
+			chName = name
+		}
+
+		// Group by participant user_id
+		for _, s := range allSituations {
+			for _, p := range s.Participants {
+				if p.UserID == "" {
+					continue
+				}
+				result[p.UserID] = append(result[p.UserID], ChannelSituations{
+					ChannelID:   channelID,
+					ChannelName: chName,
+					PeriodFrom:  pFrom,
+					PeriodTo:    pTo,
+					Situations:  []Situation{s},
+				})
+			}
+		}
+	}
+	return result, rows.Err()
+}
+
 // UpsertPeopleCardSummary inserts or replaces a people card summary.
 func (db *DB) UpsertPeopleCardSummary(s PeopleCardSummary) error {
 	_, err := db.Exec(`INSERT INTO people_card_summaries
@@ -343,7 +489,7 @@ const peopleCardSelectCols = `SELECT id, user_id, period_from, period_to,
 	message_count, channels_active, threads_initiated, threads_replied,
 	avg_message_length, active_hours_json, volume_change_pct,
 	summary, communication_style, decision_role, red_flags, highlights, accomplishments,
-	how_to_communicate, decision_style, tactics, relationship_context,
+	communication_guide, decision_style, tactics, relationship_context, status,
 	model, input_tokens, output_tokens, cost_usd, prompt_version, created_at`
 
 func scanPeopleCard(row *sql.Row, card *PeopleCard) error {
@@ -353,7 +499,7 @@ func scanPeopleCard(row *sql.Row, card *PeopleCard) error {
 		&card.AvgMessageLength, &card.ActiveHoursJSON, &card.VolumeChangePct,
 		&card.Summary, &card.CommunicationStyle, &card.DecisionRole,
 		&card.RedFlags, &card.Highlights, &card.Accomplishments,
-		&card.HowToCommunicate, &card.DecisionStyle, &card.Tactics, &card.RelationshipContext,
+		&card.CommunicationGuide, &card.DecisionStyle, &card.Tactics, &card.RelationshipContext, &card.Status,
 		&card.Model, &card.InputTokens, &card.OutputTokens, &card.CostUSD, &card.PromptVersion, &card.CreatedAt,
 	)
 }
@@ -368,7 +514,7 @@ func scanPeopleCards(rows *sql.Rows) ([]PeopleCard, error) {
 			&card.AvgMessageLength, &card.ActiveHoursJSON, &card.VolumeChangePct,
 			&card.Summary, &card.CommunicationStyle, &card.DecisionRole,
 			&card.RedFlags, &card.Highlights, &card.Accomplishments,
-			&card.HowToCommunicate, &card.DecisionStyle, &card.Tactics, &card.RelationshipContext,
+			&card.CommunicationGuide, &card.DecisionStyle, &card.Tactics, &card.RelationshipContext, &card.Status,
 			&card.Model, &card.InputTokens, &card.OutputTokens, &card.CostUSD, &card.PromptVersion, &card.CreatedAt,
 		)
 		if err != nil {

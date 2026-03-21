@@ -13,6 +13,7 @@ import (
 
 	"watchtower/internal/chains"
 	"watchtower/internal/config"
+	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	"watchtower/internal/sync"
@@ -31,6 +32,7 @@ type Daemon struct {
 	logger       *log.Logger
 	wakeCh       <-chan struct{}
 	pidPath      string
+	db           *db.DB
 	digestPipe   *digest.Pipeline
 	chainsPipe   *chains.Pipeline
 	tracksPipe   *tracks.Pipeline
@@ -51,6 +53,11 @@ func New(orchestrator *sync.Orchestrator, cfg *config.Config) *Daemon {
 // SetLogger replaces the daemon's logger.
 func (d *Daemon) SetLogger(l *log.Logger) {
 	d.logger = l
+}
+
+// SetDB sets the database for post-pipeline operations like auto-marking read status.
+func (d *Daemon) SetDB(database *db.DB) {
+	d.db = database
 }
 
 // SetDigestPipeline sets the digest pipeline for post-sync digest generation.
@@ -187,6 +194,11 @@ func (d *Daemon) runSync(ctx context.Context) {
 		}
 	}
 
+	// Auto-mark channel digests as read based on Slack read cursors.
+	// Must run AFTER channel digests are generated so newly created digests
+	// can be marked read if the user already read those messages in Slack.
+	d.autoMarkRead()
+
 	// Phase 2: Chains (depends on channel digests being generated).
 	// Links decisions from channel digests into thematic chains.
 	if d.chainsPipe != nil {
@@ -214,6 +226,11 @@ func (d *Daemon) runSync(ctx context.Context) {
 			d.logger.Printf("rollup error: %v", err)
 		}
 	}
+
+	// Auto-mark rollup digests (daily/weekly) as read.
+	// Rollup digests are read when ALL their child channel digests are read,
+	// so this must run after rollups are generated.
+	d.autoMarkRead()
 
 	// Phase 4: People REDUCE (reads signals from Phase 1, generates people_cards).
 	// Must run AFTER channel digests because it reads people_signals from them.
@@ -265,6 +282,20 @@ func (d *Daemon) runSync(ctx context.Context) {
 		}
 	}
 
+}
+
+// autoMarkRead marks digests as read based on Slack read cursors.
+// Safe to call when db is nil (no-op).
+func (d *Daemon) autoMarkRead() {
+	if d.db == nil {
+		return
+	}
+	digestsMarked, _, err := d.db.AutoMarkReadFromSlack()
+	if err != nil {
+		d.logger.Printf("auto-mark read error: %v", err)
+	} else if digestsMarked > 0 {
+		d.logger.Printf("auto-marked %d digest(s) as read", digestsMarked)
+	}
 }
 
 func (d *Daemon) lastPeoplePath() string {

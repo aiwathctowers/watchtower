@@ -76,6 +76,16 @@ func seedMessage(t *testing.T, database *db.DB, channelID, ts, userID, text stri
 
 func seedDigestWithSignals(t *testing.T, database *db.DB, channelID string, from, to float64, signals string) {
 	t.Helper()
+	seedDigestFull(t, database, channelID, from, to, signals, "[]")
+}
+
+func seedDigestWithSituations(t *testing.T, database *db.DB, channelID string, from, to float64, signals, situations string) {
+	t.Helper()
+	seedDigestFull(t, database, channelID, from, to, signals, situations)
+}
+
+func seedDigestFull(t *testing.T, database *db.DB, channelID string, from, to float64, signals, situations string) {
+	t.Helper()
 	_, err := database.UpsertDigest(db.Digest{
 		ChannelID:     channelID,
 		Type:          "channel",
@@ -86,6 +96,7 @@ func seedDigestWithSignals(t *testing.T, database *db.DB, channelID string, from
 		Decisions:     "[]",
 		ActionItems:   "[]",
 		PeopleSignals: signals,
+		Situations:    situations,
 		MessageCount:  10,
 		Model:         "haiku",
 	})
@@ -112,9 +123,10 @@ func TestPipeline_Run(t *testing.T) {
 		seedMessage(t, database, "C1", tsStr, "U1", "test message "+string(rune('a'+i)))
 	}
 
-	// Seed channel digest with signals for U1
-	seedDigestWithSignals(t, database, "C1", from, to,
-		`[{"user_id":"U1","signals":[{"type":"initiative","detail":"Started auth refactor discussion"}]}]`)
+	// Seed channel digest with situations for U1
+	seedDigestWithSituations(t, database, "C1", from, to,
+		`[]`,
+		`[{"topic":"Auth refactor","type":"collaboration","participants":[{"user_id":"U1","role":"lead"}],"dynamic":"Led auth refactor with team","outcome":"Refactor completed","red_flags":[],"observations":["proactive"],"message_refs":[]},{"topic":"Deployment docs","type":"knowledge_transfer","participants":[{"user_id":"U1","role":"author"}],"dynamic":"Shared deployment docs","outcome":"Docs published","red_flags":[],"observations":[],"message_refs":[]},{"topic":"API versioning","type":"decision_deadlock","participants":[{"user_id":"U1","role":"mediator"}],"dynamic":"Resolved API versioning debate","outcome":"Agreement reached","red_flags":[],"observations":[],"message_refs":[]}]`)
 
 	mockResp := `{
 		"summary": "Alice is a proactive contributor",
@@ -123,7 +135,7 @@ func TestPipeline_Run(t *testing.T) {
 		"red_flags": [],
 		"highlights": ["Led auth refactor"],
 		"accomplishments": ["Shipped auth module"],
-		"how_to_communicate": "Be direct, send structured asks",
+		"communication_guide": "Be direct, send structured asks",
 		"decision_style": "Quick decisions with data backing",
 		"tactics": ["If blocked, send data-backed proposal"]
 	}`
@@ -145,7 +157,7 @@ func TestPipeline_Run(t *testing.T) {
 	assert.Equal(t, "Alice is a proactive contributor", card.Summary)
 	assert.Equal(t, "driver", card.CommunicationStyle)
 	assert.Equal(t, "decision-maker", card.DecisionRole)
-	assert.Equal(t, "Be direct, send structured asks", card.HowToCommunicate)
+	assert.Equal(t, "Be direct, send structured asks", card.CommunicationGuide)
 	assert.Equal(t, 5, card.MessageCount)
 
 	var tactics []string
@@ -174,7 +186,7 @@ func TestPipeline_SkipsExistingWindow(t *testing.T) {
 		seedMessage(t, database, "C1", tsStr, "U1", "message "+string(rune('a'+i)))
 	}
 
-	gen := &mockGenerator{response: `{"summary":"test","communication_style":"","decision_role":"","red_flags":[],"highlights":[],"accomplishments":[],"how_to_communicate":"","decision_style":"","tactics":[]}`}
+	gen := &mockGenerator{response: `{"summary":"test","communication_style":"","decision_role":"","red_flags":[],"highlights":[],"accomplishments":[],"communication_guide":"","decision_style":"","tactics":[]}`}
 	pipe := New(database, cfg, gen, logger)
 	pipe.ForceRegenerate = true
 	pipe.Workers = 1
@@ -212,7 +224,7 @@ func TestParsePeopleCardResult(t *testing.T) {
 		"red_flags": ["Missed deadline"],
 		"highlights": ["Led deployment"],
 		"accomplishments": ["Shipped v2"],
-		"how_to_communicate": "Be concise",
+		"communication_guide": "Be concise",
 		"decision_style": "Data-driven",
 		"tactics": ["If blocked, escalate"]
 	}`
@@ -224,7 +236,7 @@ func TestParsePeopleCardResult(t *testing.T) {
 }
 
 func TestParsePeopleCardResult_WithMarkdownFences(t *testing.T) {
-	raw := "```json\n{\"summary\":\"test\",\"communication_style\":\"\",\"decision_role\":\"\",\"red_flags\":[],\"highlights\":[],\"accomplishments\":[],\"how_to_communicate\":\"\",\"decision_style\":\"\",\"tactics\":[]}\n```"
+	raw := "```json\n{\"summary\":\"test\",\"communication_style\":\"\",\"decision_role\":\"\",\"red_flags\":[],\"highlights\":[],\"accomplishments\":[],\"communication_guide\":\"\",\"decision_style\":\"\",\"tactics\":[]}\n```"
 	result, err := parsePeopleCardResult(raw)
 	require.NoError(t, err)
 	assert.Equal(t, "test", result.Summary)
@@ -254,7 +266,7 @@ func TestDBPeopleCardOperations(t *testing.T) {
 		RedFlags:           `["flag1"]`,
 		Highlights:         `["highlight1"]`,
 		Accomplishments:    `["shipped v2"]`,
-		HowToCommunicate:   "Be direct",
+		CommunicationGuide:   "Be direct",
 		DecisionStyle:      "Quick",
 		Tactics:            `["tactic1"]`,
 		ActiveHoursJSON:    `{"9":5}`,
@@ -270,7 +282,7 @@ func TestDBPeopleCardOperations(t *testing.T) {
 	require.NotNil(t, latest)
 	assert.Equal(t, "Test card", latest.Summary)
 	assert.Equal(t, "driver", latest.CommunicationStyle)
-	assert.Equal(t, "Be direct", latest.HowToCommunicate)
+	assert.Equal(t, "Be direct", latest.CommunicationGuide)
 
 	cards, err := database.GetPeopleCardsForWindow(1000, 2000)
 	require.NoError(t, err)
@@ -352,19 +364,3 @@ func TestComputeTeamNorms(t *testing.T) {
 	assert.InDelta(t, 5, norms.AvgThreadsStart, 0.01)
 }
 
-func TestComputeSignalNorms(t *testing.T) {
-	allSignals := map[string][]db.ChannelSignals{
-		"U1": {
-			{Signals: []db.SignalEntry{{Type: "initiative"}, {Type: "accomplishment"}}},
-			{Signals: []db.SignalEntry{{Type: "initiative"}}}, // same type, same user
-		},
-		"U2": {
-			{Signals: []db.SignalEntry{{Type: "bottleneck"}}},
-		},
-	}
-	norms := computeSignalNorms(allSignals)
-	assert.Equal(t, 2, norms.TotalUsers)
-	assert.Equal(t, 1, norms.TypeCounts["initiative"])  // U1 only
-	assert.Equal(t, 1, norms.TypeCounts["accomplishment"]) // U1 only
-	assert.Equal(t, 1, norms.TypeCounts["bottleneck"])  // U2 only
-}

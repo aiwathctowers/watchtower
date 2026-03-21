@@ -3,6 +3,7 @@ import SwiftUI
 /// Shows background task progress panels in the sidebar.
 struct SidebarProgressView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let manager = appState.backgroundTaskManager
@@ -95,6 +96,10 @@ struct SidebarProgressView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            openWindow(id: "progress-detail")
+        }
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color(nsColor: .controlBackgroundColor))

@@ -1755,3 +1755,29 @@ func TestRunChannelDigests_WorkersDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 }
+
+func TestFallbackPromptFormatVerbs(t *testing.T) {
+	// Verify that hardcoded fallback prompts have the correct number of %s
+	// placeholders matching the fmt.Sprintf calls in pipeline.go.
+	// This prevents regressions where prompts and Sprintf args go out of sync,
+	// which causes messages to silently disappear from prompts.
+
+	tests := []struct {
+		name     string
+		prompt   string
+		expected int // number of %s placeholders expected
+	}{
+		{"channelDigestPrompt", channelDigestPrompt, 6},   // channelName, fromStr, toStr, profileCtx, langInstr, messages
+		{"dailyRollupPrompt", dailyRollupPrompt, 4},       // dateStr, profileCtx, langInstr, channelInput
+		{"weeklyTrendsPrompt", weeklyTrendsPrompt, 6},     // date, fromStr, toStr, profileCtx, langInstr, dailies
+		{"periodSummaryPrompt", periodSummaryPrompt, 5},   // fromStr, toStr, profileCtx, langInstr, digests
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count := strings.Count(tt.prompt, "%s")
+			assert.Equal(t, tt.expected, count,
+				"%s has %d %%s placeholders, expected %d", tt.name, count, tt.expected)
+		})
+	}
+}

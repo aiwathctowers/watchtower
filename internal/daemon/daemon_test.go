@@ -486,6 +486,71 @@ func TestDaemon_RunSyncWithAllPipelines(t *testing.T) {
 	assert.GreaterOrEqual(t, syncCount.Load(), int32(1))
 }
 
+func TestDaemon_AutoMarkReadAfterDigests(t *testing.T) {
+	// AutoMarkReadFromSlack must run AFTER digest generation so that
+	// newly created digests are marked read when the user has already
+	// read those messages in Slack.
+	var syncCount atomic.Int32
+	orch, _ := newTestOrchestrator(t, &syncCount)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	wsDir := dir + "/.local/share/watchtower/test-ws"
+	os.MkdirAll(wsDir, 0o755)
+
+	database, err := db.Open(wsDir + "/watchtower.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Seed a channel with last_read ahead of the digest period.
+	require.NoError(t, database.EnsureChannel("C1", "general", "public", ""))
+	// Set last_read to a timestamp after the digest period_to.
+	require.NoError(t, database.UpdateChannelLastRead("C1", "9999999999.000000"))
+
+	// Insert a channel digest whose period_to is before last_read.
+	_, err = database.UpsertDigest(db.Digest{
+		ChannelID:  "C1",
+		Type:       "channel",
+		PeriodFrom: 1000000000,
+		PeriodTo:   1000086400,
+		Summary:    "test digest",
+		Topics:     `["testing"]`,
+		Decisions:  `[{"text":"test decision","by":"@alice","importance":"high"}]`,
+	})
+	require.NoError(t, err)
+
+	// Verify digest is unread initially.
+	digests, err := database.GetDigests(db.DigestFilter{Type: "channel"})
+	require.NoError(t, err)
+	require.Len(t, digests, 1)
+	assert.False(t, digests[0].ReadAt.Valid, "digest should be unread before daemon run")
+
+	cfg := &config.Config{
+		ActiveWorkspace: "test-ws",
+		Workspaces: map[string]*config.WorkspaceConfig{
+			"test-ws": {SlackToken: "xoxp-test"},
+		},
+		Sync: config.SyncConfig{
+			PollInterval: 10 * time.Second,
+			SyncOnWake:   false,
+		},
+		Digest: config.DigestConfig{Enabled: true, MinMessages: 1},
+	}
+
+	d := New(orch, cfg)
+	d.SetLogger(log.New(os.Stderr, "[test-daemon] ", 0))
+	d.SetDB(database)
+
+	// Call runSync directly (not Run which starts a loop).
+	d.runSync(context.Background())
+
+	// Verify digest is now marked as read.
+	digests, err = database.GetDigests(db.DigestFilter{Type: "channel"})
+	require.NoError(t, err)
+	require.Len(t, digests, 1)
+	assert.True(t, digests[0].ReadAt.Valid, "digest should be marked read after daemon runSync")
+}
+
 func TestDaemon_RunSyncContextCancelled(t *testing.T) {
 	// When context is cancelled during sync, pipelines should be skipped.
 	var syncCount atomic.Int32
