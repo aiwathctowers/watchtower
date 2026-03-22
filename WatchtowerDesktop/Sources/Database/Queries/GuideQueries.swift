@@ -7,11 +7,15 @@ enum GuideQueries {
         periodFrom: Double,
         periodTo: Double
     ) throws -> [CommunicationGuide] {
-        try CommunicationGuide.fetchAll(db, sql: """
-            SELECT * FROM communication_guides
-            WHERE period_from = ? AND period_to = ?
-            ORDER BY message_count DESC
-            """, arguments: [periodFrom, periodTo])
+        try CommunicationGuide.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM communication_guides
+                WHERE period_from = ? AND period_to = ?
+                ORDER BY message_count DESC
+                """,
+            arguments: [periodFrom, periodTo]
+        )
     }
 
     /// Fetch the latest guide window available.
@@ -36,11 +40,15 @@ enum GuideQueries {
         userID: String,
         limit: Int = 10
     ) throws -> [CommunicationGuide] {
-        try CommunicationGuide.fetchAll(db, sql: """
-            SELECT * FROM communication_guides
-            WHERE user_id = ?
-            ORDER BY period_to DESC LIMIT ?
-            """, arguments: [userID, limit])
+        try CommunicationGuide.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM communication_guides
+                WHERE user_id = ?
+                ORDER BY period_to DESC LIMIT ?
+                """,
+            arguments: [userID, limit]
+        )
     }
 
     /// Fetch available guide windows (distinct period ranges).
@@ -58,9 +66,13 @@ enum GuideQueries {
         periodFrom: Double,
         periodTo: Double
     ) throws -> GuideSummary? {
-        try GuideSummary.fetchOne(db, sql: """
-            SELECT * FROM guide_summaries
-            WHERE period_from = ? AND period_to = ?
-            """, arguments: [periodFrom, periodTo])
+        try GuideSummary.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM guide_summaries
+                WHERE period_from = ? AND period_to = ?
+                """,
+            arguments: [periodFrom, periodTo]
+        )
     }
 }

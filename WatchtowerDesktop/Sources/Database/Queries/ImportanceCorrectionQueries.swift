@@ -42,10 +42,14 @@ enum ImportanceCorrectionQueries {
         decisionIdx: Int
     ) throws -> String? {
         guard try db.tableExists("decision_importance_corrections") else { return nil }
-        return try String.fetchOne(db, sql: """
-            SELECT new_importance FROM decision_importance_corrections
-            WHERE digest_id = ? AND decision_idx = ?
-            """, arguments: [digestID, decisionIdx])
+        return try String.fetchOne(
+            db,
+            sql: """
+                SELECT new_importance FROM decision_importance_corrections
+                WHERE digest_id = ? AND decision_idx = ?
+                """,
+            arguments: [digestID, decisionIdx]
+        )
     }
 
     /// Get all corrected importances as a map of "digestID:decisionIdx" -> newImportance.

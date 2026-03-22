@@ -22,13 +22,14 @@ enum SlackService {
         let token = try readToken()
         let markTS = ts ?? String(format: "%.6f", Date().timeIntervalSince1970)
 
-        var request = URLRequest(url: URL(string: "https://slack.com/api/conversations.mark")!)
+        guard let url = URL(string: "https://slack.com/api/conversations.mark") else { return }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode([
             "channel": channelID,
-            "ts": markTS,
+            "ts": markTS
         ])
 
         let (data, _) = try await URLSession.shared.data(for: request)
@@ -37,7 +38,9 @@ enum SlackService {
             // M14: conversations.mark requires channels:write/groups:write/im:write/mpim:write scopes
             let error = resp.error ?? "unknown"
             if error == "missing_scope" {
-                throw SlackError.apiError("missing_scope — conversations.mark requires write scopes (channels:write, etc.) which may not be granted to this token")
+                let msg = "missing_scope — conversations.mark requires write scopes "
+                    + "(channels:write, etc.) which may not be granted to this token"
+                throw SlackError.apiError(msg)
             }
             throw SlackError.apiError(error)
         }

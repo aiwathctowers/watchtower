@@ -112,8 +112,8 @@ final class OnboardingChatViewModel {
         guard messages.isEmpty else { return }
         addAssistantBubble(loc("q1"))
         quickReplies = [
-            QuickReply(label: loc("yes"), action: { [weak self] in self?.answerRoleQ1(reportsToThem: true) }),
-            QuickReply(label: loc("no"), action: { [weak self] in self?.answerRoleQ1(reportsToThem: false) }),
+            QuickReply(label: loc("yes")) { [weak self] in self?.answerRoleQ1(reportsToThem: true) },
+            QuickReply(label: loc("no")) { [weak self] in self?.answerRoleQ1(reportsToThem: false) }
         ]
     }
 
@@ -124,14 +124,14 @@ final class OnboardingChatViewModel {
         if reportsToThem {
             addAssistantBubble(loc("q2a"))
             quickReplies = [
-                QuickReply(label: loc("yes"), action: { [weak self] in self?.answerRoleQ2a(setStrategy: true) }),
-                QuickReply(label: loc("no"), action: { [weak self] in self?.answerRoleQ2a(setStrategy: false) }),
+                QuickReply(label: loc("yes")) { [weak self] in self?.answerRoleQ2a(setStrategy: true) },
+                QuickReply(label: loc("no")) { [weak self] in self?.answerRoleQ2a(setStrategy: false) }
             ]
         } else {
             addAssistantBubble(loc("q2b"))
             quickReplies = [
-                QuickReply(label: loc("expertise"), action: { [weak self] in self?.answerRoleQ2b(influenceType: "expertise") }),
-                QuickReply(label: loc("tasks"), action: { [weak self] in self?.answerRoleQ2b(influenceType: "tasks") }),
+                QuickReply(label: loc("expertise")) { [weak self] in self?.answerRoleQ2b(influenceType: "expertise") },
+                QuickReply(label: loc("tasks")) { [weak self] in self?.answerRoleQ2b(influenceType: "tasks") }
             ]
         }
     }
@@ -144,8 +144,8 @@ final class OnboardingChatViewModel {
             // Need Q3
             addAssistantBubble(loc("q3"))
             quickReplies = [
-                QuickReply(label: loc("yes"), action: { [weak self] in self?.answerRoleQ3(manageManagers: true) }),
-                QuickReply(label: loc("no"), action: { [weak self] in self?.answerRoleQ3(manageManagers: false) }),
+                QuickReply(label: loc("yes")) { [weak self] in self?.answerRoleQ3(manageManagers: true) },
+                QuickReply(label: loc("no")) { [weak self] in self?.answerRoleQ3(manageManagers: false) }
             ]
         } else {
             finishQuestionnaire()
@@ -186,56 +186,17 @@ final class OnboardingChatViewModel {
         let roleName = determinedRole?.displayName ?? "unknown"
         let roleDesc = determinedRole?.shortDescription ?? ""
         let langInstruction = language != "English" ? " Respond in \(language)." : ""
-        let hiddenPrompt = "The user completed the role questionnaire. Role level: \(roleName) (\(roleDesc)). " +
-            "Greet them briefly (1 sentence), acknowledge their role, and ask your first question about their team and domain." + langInstruction
+        let hiddenPrompt = "The user completed the role questionnaire. "
+            + "Role level: \(roleName) (\(roleDesc)). "
+            + "Greet them briefly (1 sentence), acknowledge their role, "
+            + "and ask your first question about their team and domain."
+            + langInstruction
 
-        let assistantMsg = ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true)
-        messages.append(assistantMsg)
-        isStreaming = true
-
-        streamTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let stream = claudeService.stream(
-                    prompt: hiddenPrompt,
-                    systemPrompt: Self.onboardingSystemPrompt(language: self.language),
-                    sessionID: nil,
-                    dbPath: nil
-                )
-                var sawTurnComplete = false
-                for try await event in stream {
-                    switch event {
-                    case .text(let chunk):
-                        if let idx = self.messages.indices.last {
-                            if sawTurnComplete {
-                                self.messages[idx].text = chunk
-                                sawTurnComplete = false
-                            } else {
-                                self.messages[idx].text += chunk
-                            }
-                        }
-                    case .turnComplete(let fullText):
-                        if let idx = self.messages.indices.last {
-                            self.messages[idx].text = fullText
-                        }
-                        sawTurnComplete = true
-                    case .sessionID(let sid):
-                        self.sessionID = sid
-                    case .done:
-                        break
-                    }
-                }
-            } catch {
-                if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
-                }
-            }
-
-            if let idx = self.messages.indices.last {
-                self.messages[idx].isStreaming = false
-            }
-            self.isStreaming = false
-        }
+        beginStreaming(
+            prompt: hiddenPrompt,
+            systemPrompt: Self.onboardingSystemPrompt(language: language),
+            sessionID: nil
+        )
     }
 
     func send() {
@@ -246,66 +207,100 @@ final class OnboardingChatViewModel {
         inputText = ""
         userMessageCount += 1
 
-        let userMsg = ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false)
+        let userMsg = ChatMessage(
+            id: UUID(),
+            role: .user,
+            text: text,
+            timestamp: Date(),
+            isStreaming: false
+        )
         messages.append(userMsg)
 
-        let assistantMsg = ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true)
-        messages.append(assistantMsg)
-        isStreaming = true
-
-        let currentSessionID = sessionID
-
-        streamTask = Task { [weak self] in
+        beginStreaming(
+            prompt: text,
+            systemPrompt: Self.onboardingSystemPrompt(language: language),
+            sessionID: sessionID
+        ) { [weak self] in
             guard let self else { return }
-
-            // Always use onboarding system prompt throughout the conversation
-            let systemPrompt = Self.onboardingSystemPrompt(language: self.language)
-
-            do {
-                let stream = claudeService.stream(
-                    prompt: text,
-                    systemPrompt: systemPrompt,
-                    sessionID: currentSessionID,
-                    dbPath: nil
-                )
-                var sawTurnComplete = false
-                for try await event in stream {
-                    switch event {
-                    case .text(let chunk):
-                        if let idx = self.messages.indices.last {
-                            if sawTurnComplete {
-                                self.messages[idx].text = chunk
-                                sawTurnComplete = false
-                            } else {
-                                self.messages[idx].text += chunk
-                            }
-                        }
-                    case .turnComplete(let fullText):
-                        if let idx = self.messages.indices.last {
-                            self.messages[idx].text = fullText
-                        }
-                        sawTurnComplete = true
-                    case .sessionID(let sid):
-                        self.sessionID = sid
-                    case .done:
-                        break
-                    }
-                }
-            } catch {
-                if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
-                }
-            }
-
             if let idx = self.messages.indices.last {
-                self.messages[idx].isStreaming = false
                 self.stripReadyMarker(at: idx)
             }
-            // Fallback: if AI didn't send [READY] but user answered enough questions, allow proceeding
             if !self.chatReady && self.userMessageCount >= Self.fallbackMessageCount {
                 self.chatReady = true
             }
+        }
+    }
+
+    private func beginStreaming(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        onComplete: (() -> Void)? = nil
+    ) {
+        let assistantMsg = ChatMessage(
+            id: UUID(),
+            role: .assistant,
+            text: "",
+            timestamp: Date(),
+            isStreaming: true
+        )
+        messages.append(assistantMsg)
+        isStreaming = true
+
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.processStream(
+                prompt: prompt,
+                systemPrompt: systemPrompt,
+                sessionID: sessionID
+            )
+            if let idx = self.messages.indices.last {
+                self.messages[idx].isStreaming = false
+            }
+            onComplete?()
             self.isStreaming = false
+        }
+    }
+
+    private func processStream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?
+    ) async {
+        do {
+            let stream = claudeService.stream(
+                prompt: prompt,
+                systemPrompt: systemPrompt,
+                sessionID: sessionID,
+                dbPath: nil
+            )
+            var sawTurnComplete = false
+            for try await event in stream {
+                switch event {
+                case .text(let chunk):
+                    if let idx = messages.indices.last {
+                        if sawTurnComplete {
+                            messages[idx].text = chunk
+                            sawTurnComplete = false
+                        } else {
+                            messages[idx].text += chunk
+                        }
+                    }
+                case .turnComplete(let fullText):
+                    if let idx = messages.indices.last {
+                        messages[idx].text = fullText
+                    }
+                    sawTurnComplete = true
+                case .sessionID(let sid):
+                    self.sessionID = sid
+                case .done:
+                    break
+                }
+            }
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -321,46 +316,44 @@ final class OnboardingChatViewModel {
     }
 
     /// Record role determination answer from UI questions.
-    func recordRoleAnswer(reportsToThem: Bool? = nil, setStrategy: Bool? = nil, manageManagers: Bool? = nil, influenceType: String? = nil) {
-        if let reportsToThem {
-            roleDetermination = RoleDetermination(
-                reportsToThem: reportsToThem,
-                setStrategy: roleDetermination?.setStrategy ?? false,
-                manageManagers: roleDetermination?.manageManagers,
-                influenceType: roleDetermination?.influenceType
-            )
-            hasAnsweredRoleQ1 = true
-        }
+    func recordRoleAnswer(reportsToThem: Bool) {
+        roleDetermination = RoleDetermination(
+            reportsToThem: reportsToThem,
+            setStrategy: roleDetermination?.setStrategy ?? false,
+            manageManagers: roleDetermination?.manageManagers ?? false,
+            influenceType: roleDetermination?.influenceType
+        )
+        hasAnsweredRoleQ1 = true
+    }
 
-        if let setStrategy {
-            roleDetermination = RoleDetermination(
-                reportsToThem: roleDetermination?.reportsToThem ?? false,
-                setStrategy: setStrategy,
-                manageManagers: roleDetermination?.manageManagers,
-                influenceType: roleDetermination?.influenceType
-            )
-            hasAnsweredRoleQ2 = true
-        }
+    func recordRoleAnswer(setStrategy: Bool) {
+        roleDetermination = RoleDetermination(
+            reportsToThem: roleDetermination?.reportsToThem ?? false,
+            setStrategy: setStrategy,
+            manageManagers: roleDetermination?.manageManagers ?? false,
+            influenceType: roleDetermination?.influenceType
+        )
+        hasAnsweredRoleQ2 = true
+    }
 
-        if let manageManagers {
-            roleDetermination = RoleDetermination(
-                reportsToThem: roleDetermination?.reportsToThem ?? false,
-                setStrategy: roleDetermination?.setStrategy ?? false,
-                manageManagers: manageManagers,
-                influenceType: roleDetermination?.influenceType
-            )
-            hasAnsweredRoleQ3 = true
-        }
+    func recordRoleAnswer(manageManagers: Bool) {
+        roleDetermination = RoleDetermination(
+            reportsToThem: roleDetermination?.reportsToThem ?? false,
+            setStrategy: roleDetermination?.setStrategy ?? false,
+            manageManagers: manageManagers,
+            influenceType: roleDetermination?.influenceType
+        )
+        hasAnsweredRoleQ3 = true
+    }
 
-        if let influenceType {
-            roleDetermination = RoleDetermination(
-                reportsToThem: roleDetermination?.reportsToThem ?? false,
-                setStrategy: roleDetermination?.setStrategy ?? false,
-                manageManagers: roleDetermination?.manageManagers,
-                influenceType: influenceType
-            )
-            hasAnsweredRoleQ2 = true
-        }
+    func recordRoleAnswer(influenceType: String) {
+        roleDetermination = RoleDetermination(
+            reportsToThem: roleDetermination?.reportsToThem ?? false,
+            setStrategy: roleDetermination?.setStrategy ?? false,
+            manageManagers: roleDetermination?.manageManagers ?? false,
+            influenceType: influenceType
+        )
+        hasAnsweredRoleQ2 = true
 
         // Role string will be extracted from AI conversation in parseProfileFromChat()
     }
@@ -369,31 +362,61 @@ final class OnboardingChatViewModel {
 
     /// Generate custom_prompt_context via LLM based on the full onboarding conversation.
     func generatePromptContext() async {
-        let conversationTranscript = messages
+        let contextText = await extractContextFromConversation()
+        await saveProfileWithContext(contextText)
+    }
+
+    private func extractContextFromConversation() async -> String {
+        let transcript = messages
             .filter { $0.role == .user || $0.role == .assistant }
             .map { "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)" }
             .joined(separator: "\n")
 
+        let prompt = buildContextPrompt(transcript: transcript)
+
+        var contextText = ""
+        do {
+            let stream = claudeService.stream(
+                prompt: prompt,
+                systemPrompt: nil,
+                sessionID: nil,
+                dbPath: nil
+            )
+            for try await event in stream {
+                switch event {
+                case .text(let chunk): contextText += chunk
+                case .turnComplete(let text): contextText = text
+                case .sessionID, .done: break
+                }
+            }
+        } catch {
+            contextText = buildProfileSummary()
+        }
+        return contextText
+    }
+
+    private func buildContextPrompt(transcript: String) -> String {
         let roleName = determinedRole?.displayName ?? role
         let roleDesc = determinedRole?.shortDescription ?? ""
-
-        let prompt = """
-        Based on the onboarding conversation below, generate a detailed profile context that will be \
-        injected into AI prompts to personalize Slack workspace analysis for this user.
+        return """
+        Based on the onboarding conversation below, generate a
+        detailed profile context that will be injected into AI
+        prompts to personalize Slack workspace analysis.
 
         The context will be used by 4 AI features:
-        1. Digests — daily/weekly Slack summaries (what to prioritize, what to skip)
-        2. Tracks — personal task extraction from Slack (what counts as a task for this user)
-        3. People Analytics — team communication analysis (what patterns to watch for)
-        4. Action Items — requests/tasks needing attention (what's actionable for this user)
+        1. Digests — daily/weekly Slack summaries
+        2. Tracks — personal task extraction from Slack
+        3. People Analytics — team communication analysis
+        4. Action Items — requests/tasks needing attention
 
-        Write a comprehensive profile context (5-10 sentences) in English that covers:
+        Write a comprehensive profile context (5-10 sentences)
+        in English that covers:
         - Who this person is (role, team, domain)
-        - What they're responsible for and what decisions they make
+        - What they're responsible for and decisions they make
         - What information is most important to them
         - What they want prioritized vs filtered out
         - What team dynamics they care about
-        - What kind of tasks/tracks are relevant for them
+        - What tasks/tracks are relevant for them
 
         ADDITIONAL INFO:
         Role level: \(roleName) (\(roleDesc))
@@ -404,24 +427,11 @@ final class OnboardingChatViewModel {
         Return ONLY the context text, no explanation or formatting.
 
         === ONBOARDING CONVERSATION ===
-        \(conversationTranscript)
+        \(transcript)
         """
+    }
 
-        var contextText = ""
-        do {
-            for try await event in claudeService.stream(prompt: prompt, systemPrompt: nil, sessionID: nil, dbPath: nil) {
-                switch event {
-                case .text(let chunk): contextText += chunk
-                case .turnComplete(let text): contextText = text
-                case .sessionID, .done: break
-                }
-            }
-        } catch {
-            // Fallback: use the conversation transcript directly
-            contextText = buildProfileSummary()
-        }
-
-        // Save profile
+    private func saveProfileWithContext(_ contextText: String) async {
         let currentUserID = getCurrentUserID()
         guard !currentUserID.isEmpty else { return }
         guard let dbManager else {
@@ -429,7 +439,6 @@ final class OnboardingChatViewModel {
             return
         }
 
-        // Read existing profile to preserve onboardingDone state.
         let existingProfile: UserProfile? = try? await dbManager.dbPool.read { db in
             try ProfileQueries.fetchProfile(db, slackUserID: currentUserID)
         }
@@ -528,46 +537,60 @@ final class OnboardingChatViewModel {
             .map { "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)" }
             .joined(separator: "\n")
 
+        let prompt = buildExtractionPrompt(transcript: transcript)
+        let responseText = await collectStreamText(prompt: prompt)
+        guard !responseText.isEmpty else { return }
+        applyExtractedProfile(responseText)
+    }
+
+    private func buildExtractionPrompt(transcript: String) -> String {
         let roleLevelHint = determinedRole?.displayName ?? "unknown"
+        return """
+        Extract the user's job title and team name from this
+        onboarding conversation.
 
-        let extractionPrompt = """
-        Extract the user's job title and team name from this onboarding conversation.
+        Organizational level: \(roleLevelHint) (from questionnaire).
+        This is NOT their job title — extract the ACTUAL title
+        they mentioned (e.g. "Engineering Manager",
+        "Staff Backend Engineer").
 
-        The user's organizational level is: \(roleLevelHint) (from a questionnaire).
-        This is NOT their job title — extract the ACTUAL job title they mentioned (e.g. "Engineering Manager", \
-        "Staff Backend Engineer", "Head of Platform", "Product Designer").
-
-        If the user never explicitly stated their job title, infer the most likely one from context \
-        (their responsibilities, what they manage, their domain).
-
-        Return ONLY valid JSON, no markdown, no explanation:
-        {"role": "their job title", "team": "their team name", "pain_points": ["point1", "point2"]}
+        Return ONLY valid JSON:
+        {"role": "title", "team": "team", "pain_points": ["..."]}
 
         Rules:
-        - "role": The user's actual job title / position. NOT the organizational level.
-        - "team": The team or department name. Empty string if not mentioned.
-        - "pain_points": List of specific problems they want Watchtower to solve. Empty array if none mentioned.
-        - All values in English regardless of conversation language.
+        - "role": actual job title, NOT organizational level
+        - "team": team/department name, "" if not mentioned
+        - "pain_points": problems they want solved, [] if none
+        - All values in English
 
         === CONVERSATION ===
         \(transcript)
         """
+    }
 
-        var responseText = ""
+    private func collectStreamText(prompt: String) async -> String {
+        var text = ""
         do {
-            for try await event in claudeService.stream(prompt: extractionPrompt, systemPrompt: nil, sessionID: nil, dbPath: nil) {
+            let stream = claudeService.stream(
+                prompt: prompt,
+                systemPrompt: nil,
+                sessionID: nil,
+                dbPath: nil
+            )
+            for try await event in stream {
                 switch event {
-                case .text(let chunk): responseText += chunk
-                case .turnComplete(let text): responseText = text
+                case .text(let chunk): text += chunk
+                case .turnComplete(let full): text = full
                 case .sessionID, .done: break
                 }
             }
         } catch {
-            // Fallback: keep whatever we have from questionnaire
-            return
+            return ""
         }
+        return text
+    }
 
-        // Parse JSON response
+    private func applyExtractedProfile(_ responseText: String) {
         let cleaned = responseText
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "```json", with: "")
@@ -579,14 +602,10 @@ final class OnboardingChatViewModel {
             return
         }
 
-        if let extractedRole = json["role"] as? String, !extractedRole.isEmpty {
-            role = extractedRole
-        }
-        if let extractedTeam = json["team"] as? String, !extractedTeam.isEmpty {
-            team = extractedTeam
-        }
-        if let extractedPainPoints = json["pain_points"] as? [String] {
-            for point in extractedPainPoints where !painPoints.contains(point) {
+        if let r = json["role"] as? String, !r.isEmpty { role = r }
+        if let teamVal = json["team"] as? String, !teamVal.isEmpty { team = teamVal }
+        if let pp = json["pain_points"] as? [String] {
+            for point in pp where !painPoints.contains(point) {
                 painPoints.append(point)
             }
         }
@@ -622,7 +641,7 @@ final class OnboardingChatViewModel {
             "tasks": "Solving tasks",
             "header": "Tell us about yourself",
             "subtitle": "Watchtower will personalize your experience based on your role and needs.",
-            "continue": "Continue",
+            "continue": "Continue"
         ],
         "Russian": [
             "q1": "Давайте определим вашу роль. Вам кто-то подчиняется?",
@@ -635,7 +654,7 @@ final class OnboardingChatViewModel {
             "tasks": "Решении задач",
             "header": "Расскажите о себе",
             "subtitle": "Watchtower персонализирует ваш опыт на основе вашей роли и потребностей.",
-            "continue": "Продолжить",
+            "continue": "Продолжить"
         ],
         "Ukrainian": [
             "q1": "Давайте визначимо вашу роль. Вам хтось підпорядковується?",
@@ -648,60 +667,71 @@ final class OnboardingChatViewModel {
             "tasks": "Вирішенні завдань",
             "header": "Розкажіть про себе",
             "subtitle": "Watchtower персоналізує ваш досвід на основі вашої ролі та потреб.",
-            "continue": "Продовжити",
-        ],
+            "continue": "Продовжити"
+        ]
     ]
 
     /// Look up a localized string, falling back to English.
     func loc(_ key: String) -> String {
-        Self.strings[language]?[key] ?? Self.strings["English"]![key]!
+        Self.strings[language]?[key] ?? Self.strings["English"]?[key] ?? key
     }
 
     // MARK: - System Prompt
 
     static func onboardingSystemPrompt(language: String) -> String {
-        let langRule: String
+        let langRule = languageRule(for: language)
+        return onboardingPromptBody + "\n\n\(langRule)"
+    }
+
+    private static func languageRule(for language: String) -> String {
         switch language {
         case "Russian":
-            langRule = "- LANGUAGE: Respond in Russian (Русский). All your messages MUST be in Russian."
+            return "LANGUAGE: Respond in Russian. All messages MUST be in Russian."
         case "Ukrainian":
-            langRule = "- LANGUAGE: Respond in Ukrainian (Українська). All your messages MUST be in Ukrainian."
+            return "LANGUAGE: Respond in Ukrainian. All messages MUST be in Ukrainian."
         default:
-            langRule = "- LANGUAGE: Respond in English."
+            return "LANGUAGE: Respond in English."
         }
-
-        return """
-        You are the onboarding assistant for Watchtower — a tool that monitors a Slack workspace and provides:
-
-        1. **Digests** — daily/weekly summaries of what happened in channels: key decisions, topics, action items
-        2. **Tracks** — personal task tracker extracted from Slack: requests directed at the user, assignments, commitments, follow-ups
-        3. **People Analytics** — communication pattern analysis for team members: engagement, decision-making style, red flags, accomplishments
-        4. **Action Items** — tasks and requests that need the user's attention, extracted from messages
-
-        The user's ROLE has already been determined via a questionnaire. Do NOT ask about their role level.
-
-        YOUR TASK: Conduct a brief interview (4-6 questions) to understand the user well enough to personalize ALL of the above features. Ask ONE question at a time. Be concise (1-3 sentences per message).
-
-        You need to learn:
-        1. **Team & domain**: What team are they on? What does the team do? What projects/products do they own?
-        2. **Responsibilities**: What are they personally responsible for? What decisions do they make? What do they delegate?
-        3. **Information needs**: What do they currently miss in Slack? What's the most important information they need but struggle to find? (e.g., decisions made while AFK, tasks assigned in threads, status of delegated work)
-        4. **Priorities**: What should Watchtower prioritize for them? (e.g., blockers and deadlines vs strategic decisions vs team health signals)
-        5. **Team dynamics**: What do they watch for in their team? (e.g., someone going silent, unresolved conflicts, missed commitments, workload imbalance)
-
-        ADAPT your questions to the user's role:
-        - For managers: focus on delegation, team oversight, decision tracking, people signals
-        - For ICs: focus on personal task tracking, code reviews, blocking requests, staying informed
-
-        DO NOT ask generic questions. DO NOT ask about tools (JIRA, etc.) — Watchtower only works with Slack.
-        DO NOT ask more than 6 questions total. Keep it conversational and natural.
-
-        WHEN DONE: After you have enough information (4+ answers), write a brief summary of what you learned, then on a NEW LINE write exactly:
-        [READY]
-
-        You MUST write [READY] after the summary. Do not skip it. Do not continue asking after it.
-
-        \(langRule)
-        """
     }
+
+    // swiftlint has a 50-line function limit; this is a static constant.
+    private static let onboardingPromptBody = """
+    You are the onboarding assistant for Watchtower — a tool that
+    monitors a Slack workspace and provides:
+    1. Digests — daily/weekly summaries of channels
+    2. Tracks — personal task tracker extracted from Slack
+    3. People Analytics — communication pattern analysis
+    4. Action Items — requests needing attention
+
+    The user's ROLE has already been determined via a questionnaire.
+    Do NOT ask about their role level.
+
+    YOUR TASK: Conduct a brief interview (4-6 questions) to understand
+    the user well enough to personalize ALL features.
+    Ask ONE question at a time. Be concise (1-3 sentences).
+
+    You need to learn:
+    1. Team & domain: What team? What projects/products?
+    2. Responsibilities: What are they responsible for?
+       What decisions do they make? What do they delegate?
+    3. Information needs: What do they miss in Slack?
+       What info is hard to find? (decisions while AFK,
+       tasks in threads, delegated work status)
+    4. Priorities: What should Watchtower prioritize?
+       (blockers vs strategic decisions vs team health)
+    5. Team dynamics: What do they watch for?
+       (silence, unresolved conflicts, missed commitments)
+
+    ADAPT questions to role:
+    - Managers: delegation, oversight, decision tracking, people
+    - ICs: task tracking, code reviews, blockers, staying informed
+
+    DO NOT ask generic questions. Watchtower only works with Slack.
+    DO NOT ask more than 6 questions total.
+
+    WHEN DONE: After 4+ answers, write a brief summary then:
+    [READY]
+
+    You MUST write [READY] after the summary.
+    """
 }

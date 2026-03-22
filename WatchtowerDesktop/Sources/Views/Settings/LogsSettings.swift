@@ -38,113 +38,118 @@ struct LogsSettings: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
-            HStack(spacing: 12) {
-                Picker("", selection: $selectedLog) {
-                    ForEach(LogFile.allCases) { log in
-                        Label(log.label, systemImage: log.icon).tag(log)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 250)
-
-                Spacer()
-
-                if !logLines.isEmpty {
-                    Text("\(logLines.count)\(hasMore ? "+" : "") of \(totalLineCount) lines")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-
-                if let size = fileSizeText {
-                    Text(size)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-
-                Button {
-                    loadLog()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Reload")
-
-                Button {
-                    openInEditor()
-                } label: {
-                    Image(systemName: "doc.richtext")
-                }
-                .help("Open in Default Editor")
-                .disabled(logPath(for: selectedLog) == nil)
-
-                Button {
-                    revealInFinder()
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .help("Open Log Folder")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
+            logToolbar
             Divider()
+            logContent
+        }
+        .onChange(of: selectedLog) { loadLog() }
+        .onAppear { loadLog() }
+    }
 
-            // Log content
-            if isLoading {
-                Spacer()
-                ProgressView()
-                Spacer()
-            } else if logLines.isEmpty {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "doc.text")
-                        .font(.largeTitle)
-                        .foregroundStyle(.quaternary)
-                    Text(logPath(for: selectedLog).map { "No content in \($0)" } ?? "Log file not found")
-                        .foregroundStyle(.secondary)
+    private var logToolbar: some View {
+        HStack(spacing: 12) {
+            Picker("", selection: $selectedLog) {
+                ForEach(LogFile.allCases) { log in
+                    Label(log.label, systemImage: log.icon).tag(log)
                 }
-                Spacer()
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView([.horizontal, .vertical]) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            if hasMore {
-                                if isLoadingMore {
-                                    ProgressView()
-                                        .frame(maxWidth: .infinity)
-                                        .padding(4)
-                                } else {
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("loadMoreSentinel")
-                                        .onAppear { loadMore() }
-                                }
-                            }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 250)
 
-                            ForEach(Array(logLines.enumerated()), id: \.offset) { index, line in
-                                Text(line)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 0.5)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(index)
+            Spacer()
+
+            if !logLines.isEmpty {
+                Text("\(logLines.count)\(hasMore ? "+" : "") of \(totalLineCount) lines")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            if let size = fileSizeText {
+                Text(size)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Button {
+                loadLog()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Reload")
+
+            Button {
+                openInEditor()
+            } label: {
+                Image(systemName: "doc.richtext")
+            }
+            .help("Open in Default Editor")
+            .disabled(logPath(for: selectedLog) == nil)
+
+            Button {
+                revealInFinder()
+            } label: {
+                Image(systemName: "folder")
+            }
+            .help("Open Log Folder")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var logContent: some View {
+        if isLoading {
+            Spacer()
+            ProgressView()
+            Spacer()
+        } else if logLines.isEmpty {
+            Spacer()
+            VStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.largeTitle)
+                    .foregroundStyle(.quaternary)
+                Text(logPath(for: selectedLog).map { "No content in \($0)" } ?? "Log file not found")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if hasMore {
+                            if isLoadingMore {
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+                                    .padding(4)
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("loadMoreSentinel")
+                                    .onAppear { loadMore() }
                             }
+                        }
+
+                        ForEach(Array(logLines.enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 0.5)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
                         }
                     }
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .onChange(of: logLines.count) {
-                        if autoScroll {
-                            proxy.scrollTo(logLines.count - 1, anchor: .bottom)
-                        }
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+                .onChange(of: logLines.count) {
+                    if autoScroll {
+                        proxy.scrollTo(logLines.count - 1, anchor: .bottom)
                     }
                 }
             }
         }
-        .onChange(of: selectedLog) { loadLog() }
-        .onAppear { loadLog() }
     }
 
     private func loadLog() {
@@ -193,7 +198,7 @@ struct LogsSettings: View {
         }
     }
 
-    private nonisolated static func readTail(path: String, lineCount: Int) -> TailResult {
+    nonisolated private static func readTail(path: String, lineCount: Int) -> TailResult {
         let fileSizeText: String?
         let totalLines: Int
 
@@ -214,7 +219,7 @@ struct LogsSettings: View {
         )
     }
 
-    private nonisolated static func tailLines(path: String, count: Int) -> [String] {
+    nonisolated private static func tailLines(path: String, count: Int) -> [String] {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
@@ -235,7 +240,7 @@ struct LogsSettings: View {
         }
     }
 
-    private nonisolated static func countLines(path: String) -> Int {
+    nonisolated private static func countLines(path: String) -> Int {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/wc")

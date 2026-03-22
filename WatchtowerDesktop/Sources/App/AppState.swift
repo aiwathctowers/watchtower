@@ -71,7 +71,11 @@ final class AppState {
         selectedDestination = .chains
     }
 
+    private var isInitializing = false
+
     func initialize() {
+        guard !isInitializing else { return }
+        isInitializing = true
         isLoading = true
         Task {
             do {
@@ -150,7 +154,10 @@ final class AppState {
     func resetLLMData() async throws {
         guard let db = databaseManager else { return }
 
-        // 1. Stop daemon
+        // 1. Stop running pipelines (if any)
+        backgroundTaskManager.stopAll()
+
+        // 2. Stop daemon
         let daemon = DaemonManager()
         daemon.resolvePathIfNeeded()
         if DaemonManager.checkDaemonRunning() {
@@ -158,10 +165,10 @@ final class AppState {
             try? await Task.sleep(for: .milliseconds(500))
         }
 
-        // 2. Wipe LLM-generated tables
+        // 3. Wipe LLM-generated tables
         try db.wipeLLMData()
 
-        // 3. Reset pipelines flag and re-run
+        // 4. Reset pipelines flag and re-run
         UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
         backgroundTaskManager.tasks.removeAll()
         backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)

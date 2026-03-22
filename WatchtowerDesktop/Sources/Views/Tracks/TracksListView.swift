@@ -12,7 +12,7 @@ struct TracksListView: View {
 
                 if let id = selectedItemID, let item = vm.itemByID(id) {
                     Divider()
-                    TrackDetailView(item: item, viewModel: vm, onClose: { selectedItemID = nil })
+                    TrackDetailView(item: item, viewModel: vm) { selectedItemID = nil }
                         .id(id)
                         .frame(minWidth: 400, idealWidth: 500)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -25,14 +25,22 @@ struct TracksListView: View {
         .animation(.easeInOut(duration: 0.25), value: selectedItemID)
         .onAppear {
             if viewModel == nil, let db = appState.databaseManager {
-                viewModel = TracksViewModel(dbManager: db)
+                let vm = TracksViewModel(dbManager: db)
+                viewModel = vm
+                vm.statusFilter = appState.trackStatusFilter
+                vm.ownershipFilter = appState.trackOwnershipFilter
+                vm.startObserving()
+            } else {
+                syncFilterAndLoad()
             }
-            syncFilterAndLoad()
         }
         .onChange(of: appState.isDBAvailable) {
             if viewModel == nil, let db = appState.databaseManager {
-                viewModel = TracksViewModel(dbManager: db)
-                syncFilterAndLoad()
+                let vm = TracksViewModel(dbManager: db)
+                viewModel = vm
+                vm.statusFilter = appState.trackStatusFilter
+                vm.ownershipFilter = appState.trackOwnershipFilter
+                vm.startObserving()
             }
         }
         .onChange(of: appState.trackStatusFilter) {
@@ -182,131 +190,171 @@ struct TrackRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                priorityIcon
-                if item.hasUpdates {
-                    Image(systemName: "bell.badge.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
-                if item.isDelegated {
-                    Text("Delegated")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.indigo, in: Capsule())
-                } else if item.isWatching {
-                    Text("Watching")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.teal, in: Capsule())
-                }
-                if !item.sourceChannelName.isEmpty {
-                    if let url = viewModel.slackChannelURL(channelID: item.channelID) {
-                        Link(destination: url) {
-                            Text("#\(item.sourceChannelName)")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                    } else {
-                        Text("#\(item.sourceChannelName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if item.isOverdue {
-                    Text("OVERDUE")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.red, in: Capsule())
-                }
-                Spacer()
-                Text(item.sourceDate, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Text(item.text)
-                .font(.subheadline)
-                .fontWeight((item.isInbox || item.isActive) ? .medium : .regular)
-                .strikethrough(item.isDone)
-                .foregroundStyle(item.isDone || item.isDismissed ? .secondary : .primary)
-                .lineLimit(2)
-
-            HStack(spacing: 6) {
-                if !item.categoryLabel.isEmpty {
-                    Text(item.categoryLabel)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                }
-                if !item.requesterName.isEmpty {
-                    Text("from \(item.requesterName)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            let subProgress = item.subItemsProgress
-            if subProgress.total > 0 {
-                HStack(spacing: 4) {
-                    Image(systemName: "checklist")
-                        .font(.system(size: 9))
-                        .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
-                    Text("\(subProgress.done)/\(subProgress.total)")
-                        .font(.caption2)
-                        .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
-                    ProgressView(value: Double(subProgress.done), total: Double(subProgress.total))
-                        .frame(width: 50)
-                }
-            }
-
-            if !item.context.isEmpty {
-                Text(item.context)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
-            }
-
-            if !item.blocking.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.orange)
-                    Text(item.blocking)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                }
-            }
-
-            let people = item.decodedParticipants
-            if !people.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    Text(people.map(\.name).joined(separator: ", "))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            if item.status == "snoozed", let snoozeText = item.snoozeUntilFormatted {
-                Label("Snoozed until \(snoozeText)", systemImage: "moon.zzz.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.purple)
-            }
+            topRow
+            trackText
+            metadataRow
+            subItemsRow
+            contextRow
+            blockingRow
+            participantsRow
+            snoozeRow
         }
         .padding(.vertical, 4)
+    }
+
+    private var topRow: some View {
+        HStack(spacing: 6) {
+            priorityIcon
+            if item.hasUpdates {
+                Image(systemName: "bell.badge.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+            }
+            ownershipBadge
+            channelLink
+            if item.isOverdue {
+                Text("OVERDUE")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.red, in: Capsule())
+            }
+            Spacer()
+            Text(item.sourceDate, style: .relative)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    private var ownershipBadge: some View {
+        if item.isDelegated {
+            Text("Delegated")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(.indigo, in: Capsule())
+        } else if item.isWatching {
+            Text("Watching")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(.teal, in: Capsule())
+        }
+    }
+
+    @ViewBuilder
+    private var channelLink: some View {
+        if !item.sourceChannelName.isEmpty {
+            if let url = viewModel.slackChannelURL(channelID: item.channelID) {
+                Link(destination: url) {
+                    Text("#\(item.sourceChannelName)")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                Text("#\(item.sourceChannelName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var trackText: some View {
+        Text(item.text)
+            .font(.subheadline)
+            .fontWeight((item.isInbox || item.isActive) ? .medium : .regular)
+            .strikethrough(item.isDone)
+            .foregroundStyle(item.isDone || item.isDismissed ? .secondary : .primary)
+            .lineLimit(2)
+    }
+
+    private var metadataRow: some View {
+        HStack(spacing: 6) {
+            if !item.categoryLabel.isEmpty {
+                Text(item.categoryLabel)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+            }
+            if !item.requesterName.isEmpty {
+                Text("from \(item.requesterName)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var subItemsRow: some View {
+        let subProgress = item.subItemsProgress
+        if subProgress.total > 0 {
+            HStack(spacing: 4) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 9))
+                    .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
+                Text("\(subProgress.done)/\(subProgress.total)")
+                    .font(.caption2)
+                    .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
+                ProgressView(value: Double(subProgress.done), total: Double(subProgress.total))
+                    .frame(width: 50)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var contextRow: some View {
+        if !item.context.isEmpty {
+            Text(item.context)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .lineLimit(2)
+        }
+    }
+
+    @ViewBuilder
+    private var blockingRow: some View {
+        if !item.blocking.isEmpty {
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange)
+                Text(item.blocking)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var participantsRow: some View {
+        let people = item.decodedParticipants
+        if !people.isEmpty {
+            HStack(spacing: 4) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                Text(people.map(\.name).joined(separator: ", "))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var snoozeRow: some View {
+        if item.status == "snoozed", let snoozeText = item.snoozeUntilFormatted {
+            Label("Snoozed until \(snoozeText)", systemImage: "moon.zzz.fill")
+                .font(.caption2)
+                .foregroundStyle(.purple)
+        }
     }
 
     @ViewBuilder

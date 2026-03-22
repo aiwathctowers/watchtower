@@ -27,8 +27,8 @@ final class SearchViewModel {
 
     func search() {
         searchTask?.cancel()
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             results = []
             return
         }
@@ -41,7 +41,7 @@ final class SearchViewModel {
             self.isSearching = true
             do {
                 self.results = try await dbManager.dbPool.read { db in
-                    try SearchQueries.search(db, query: q)
+                    try SearchQueries.search(db, query: trimmed)
                 }
                 self.errorMessage = nil
             } catch {

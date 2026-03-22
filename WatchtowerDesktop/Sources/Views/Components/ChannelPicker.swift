@@ -35,7 +35,7 @@ struct ChannelPicker: View {
             } else {
                 ForEach(selectedIDs, id: \.self) { cid in
                     HStack {
-                        let channel = allChannels.first(where: { $0.id == cid })
+                        let channel = allChannels.first { $0.id == cid }
                         Text("#\(channel?.name ?? cid)")
                             .font(.subheadline)
                         Spacer()

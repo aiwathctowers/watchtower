@@ -19,7 +19,7 @@ struct DigestListView: View {
     @State private var checkedDigestIDs: Set<Int> = []
     @State private var checkedDecisionIDs: Set<String> = []
     @State private var checkedChainIDs: Set<Int> = []
-    @State private var chainStatusFilter: String? = nil
+    @State private var chainStatusFilter: String?
 
     enum ChainTab: String, CaseIterable {
         case chains = "Chains"
@@ -47,9 +47,9 @@ struct DigestListView: View {
         .onAppear {
             if let db = appState.databaseManager, viewModel == nil {
                 viewModel = DigestViewModel(dbManager: db)
-                viewModel?.load()
+                viewModel?.startObserving()
                 chainsViewModel = ChainsViewModel(dbManager: db)
-                chainsViewModel?.load()
+                chainsViewModel?.startObserving()
             }
             if let id = appState.pendingDigestID {
                 activeTab = .digests
@@ -92,7 +92,7 @@ struct DigestListView: View {
             if let chainsVM = chainsViewModel, let id = selectedChainID,
                let chain = chainsVM.chains.first(where: { $0.id == id }) {
                 Divider()
-                ChainDetailView(chain: chain, viewModel: chainsVM, onClose: { selectedChainID = nil })
+                ChainDetailView(chain: chain, viewModel: chainsVM) { selectedChainID = nil }
                     .id(id)
                     .frame(minWidth: 400, idealWidth: 500)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -103,9 +103,8 @@ struct DigestListView: View {
                 DigestDetailView(
                     digest: digest,
                     channelName: vm.channelName(for: digest),
-                    viewModel: vm,
-                    onClose: { selectedDigestID = nil }
-                )
+                    viewModel: vm
+                ) { selectedDigestID = nil }
                 .id(id)
                 .frame(minWidth: 400, idealWidth: 500)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -114,7 +113,7 @@ struct DigestListView: View {
             if let entryID = selectedDecisionEntryID,
                let entry = vm.decisionEntries.first(where: { $0.id == entryID }) {
                 Divider()
-                DecisionDetailView(entry: entry, viewModel: vm, onClose: { selectedDecisionEntryID = nil })
+                DecisionDetailView(entry: entry, viewModel: vm) { selectedDecisionEntryID = nil }
                     .id(entryID)
                     .frame(minWidth: 400, idealWidth: 500)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -129,11 +128,11 @@ struct DigestListView: View {
             items = items.filter { !$0.isRead }
         }
         if !searchText.isEmpty {
-            let q = searchText.lowercased()
+            let query = searchText.lowercased()
             items = items.filter { digest in
-                if digest.summary.lowercased().contains(q) { return true }
-                if let name = vm.channelName(for: digest), name.lowercased().contains(q) { return true }
-                if digest.parsedTopics.contains(where: { $0.lowercased().contains(q) }) { return true }
+                if digest.summary.lowercased().contains(query) { return true }
+                if let name = vm.channelName(for: digest), name.lowercased().contains(query) { return true }
+                if digest.parsedTopics.contains(where: { $0.lowercased().contains(query) }) { return true }
                 return false
             }
         }
@@ -147,11 +146,11 @@ struct DigestListView: View {
             items = items.filter { !$0.isRead }
         }
         if !searchText.isEmpty {
-            let q = searchText.lowercased()
+            let query = searchText.lowercased()
             items = items.filter {
-                $0.title.lowercased().contains(q) ||
-                $0.summary.lowercased().contains(q) ||
-                $0.slug.lowercased().contains(q)
+                $0.title.lowercased().contains(query) ||
+                $0.summary.lowercased().contains(query) ||
+                $0.slug.lowercased().contains(query)
             }
         }
         return items
@@ -539,79 +538,7 @@ struct DigestListView: View {
     @ViewBuilder
     private func selectionToolbar(_ vm: DigestViewModel) -> some View {
         if isSelectMode {
-            let count: Int = switch activeTab {
-            case .chains: checkedChainIDs.count
-            case .digests: checkedDigestIDs.count
-            case .decisions: checkedDecisionIDs.count
-            }
-            HStack(spacing: 8) {
-                Button {
-                    toggleSelectAll()
-                } label: {
-                    let allSelected: Bool = switch activeTab {
-                    case .chains: checkedChainIDs.count == filteredChains.count && !filteredChains.isEmpty
-                    case .digests: checkedDigestIDs.count == filteredDigests.count && !filteredDigests.isEmpty
-                    case .decisions: checkedDecisionIDs.count == (viewModel?.decisionEntries.count ?? 0)
-                    }
-                    Label(
-                        allSelected ? "Deselect All" : "Select All",
-                        systemImage: allSelected ? "checkmark.circle.fill" : "circle"
-                    )
-                    .font(.caption)
-                }
-                .buttonStyle(.borderless)
-
-                if count > 0 {
-                    Text("\(count) selected")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Button {
-                        markSelectedRead(vm)
-                    } label: {
-                        Label("Read", systemImage: "eye")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Mark selected as read")
-
-                    Button {
-                        submitSelectedFeedback(vm, rating: 1)
-                    } label: {
-                        Image(systemName: "hand.thumbsup")
-                            .foregroundStyle(.green)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Rate selected as good")
-
-                    Button {
-                        submitSelectedFeedback(vm, rating: -1)
-                    } label: {
-                        Image(systemName: "hand.thumbsdown")
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Rate selected as bad")
-                } else {
-                    Spacer()
-                }
-
-                Button {
-                    isSelectMode = false
-                    checkedDigestIDs.removeAll()
-                    checkedDecisionIDs.removeAll()
-                    checkedChainIDs.removeAll()
-                } label: {
-                    Text("Cancel")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.06))
+            activeSelectionBar(vm)
         } else {
             HStack {
                 Spacer()
@@ -626,6 +553,87 @@ struct DigestListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
         }
+    }
+
+    private func activeSelectionBar(_ vm: DigestViewModel) -> some View {
+        let count: Int = switch activeTab {
+        case .chains: checkedChainIDs.count
+        case .digests: checkedDigestIDs.count
+        case .decisions: checkedDecisionIDs.count
+        }
+        return HStack(spacing: 8) {
+            Button {
+                toggleSelectAll()
+            } label: {
+                let allSelected: Bool = switch activeTab {
+                case .chains: checkedChainIDs.count == filteredChains.count && !filteredChains.isEmpty
+                case .digests: checkedDigestIDs.count == filteredDigests.count && !filteredDigests.isEmpty
+                case .decisions: checkedDecisionIDs.count == (viewModel?.decisionEntries.count ?? 0)
+                }
+                Label(
+                    allSelected ? "Deselect All" : "Select All",
+                    systemImage: allSelected ? "checkmark.circle.fill" : "circle"
+                )
+                .font(.caption)
+            }
+            .buttonStyle(.borderless)
+
+            if count > 0 {
+                selectionActions(vm, count: count)
+            } else {
+                Spacer()
+            }
+
+            Button {
+                isSelectMode = false
+                checkedDigestIDs.removeAll()
+                checkedDecisionIDs.removeAll()
+                checkedChainIDs.removeAll()
+            } label: {
+                Text("Cancel")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.06))
+    }
+
+    @ViewBuilder
+    private func selectionActions(_ vm: DigestViewModel, count: Int) -> some View {
+        Text("\(count) selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+        Spacer()
+
+        Button {
+            markSelectedRead(vm)
+        } label: {
+            Label("Read", systemImage: "eye")
+                .font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .help("Mark selected as read")
+
+        Button {
+            submitSelectedFeedback(vm, rating: 1)
+        } label: {
+            Image(systemName: "hand.thumbsup")
+                .foregroundStyle(.green)
+        }
+        .buttonStyle(.borderless)
+        .help("Rate selected as good")
+
+        Button {
+            submitSelectedFeedback(vm, rating: -1)
+        } label: {
+            Image(systemName: "hand.thumbsdown")
+                .foregroundStyle(.red)
+        }
+        .buttonStyle(.borderless)
+        .help("Rate selected as bad")
     }
 
     private func toggleSelectAll() {

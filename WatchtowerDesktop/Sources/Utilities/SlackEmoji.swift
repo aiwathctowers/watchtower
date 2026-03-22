@@ -3,6 +3,8 @@ import Foundation
 /// Maps Slack emoji shortcodes to Unicode emoji characters.
 /// Generated from github/gemoji database.
 enum SlackEmoji {
+    private static let emojiPattern = try? NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+
     static let map: [String: String] = [
         // Activities
         "1st_place_medal": "🥇",
@@ -1948,12 +1950,12 @@ enum SlackEmoji {
         "thinking_face": "🤔",
         "white_frowning_face": "☹️",
         "woman-facepalming": "🤦‍♀️",
-        "woman-shrugging": "🤷‍♀️",
+        "woman-shrugging": "🤷‍♀️"
     ]
 
     /// Replace :emoji_name: shortcodes with Unicode emoji characters.
     static func resolve(_ text: String) -> String {
-        let pattern = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+        guard let pattern = emojiPattern else { return text }
         let nsText = text as NSString
         let matches = pattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
 

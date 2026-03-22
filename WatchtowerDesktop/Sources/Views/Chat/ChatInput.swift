@@ -5,7 +5,7 @@ struct ChatInput: View {
     @Binding var text: String
     let isStreaming: Bool
     let onSend: () -> Void
-    var onStop: (() -> Void)? = nil
+    var onStop: (() -> Void)?
     var placeholder: String = "Ask about your workspace..."
     @State private var inputHeight: CGFloat = 22
 
@@ -22,12 +22,11 @@ struct ChatInput: View {
 
                 ExpandingTextInput(
                     text: $text,
-                    height: $inputHeight,
-                    onSubmit: {
-                        guard canSend else { return }
-                        onSend()
-                    }
-                )
+                    height: $inputHeight
+                ) {
+                    guard canSend else { return }
+                    onSend()
+                }
                 .frame(height: inputHeight)
             }
             .padding(.horizontal, 8)
@@ -81,7 +80,7 @@ private struct ExpandingTextInput: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
 
         textView.delegate = context.coordinator
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -111,7 +110,7 @@ private struct ExpandingTextInput: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let textView = scrollView.documentView as! NSTextView
+        guard let textView = scrollView.documentView as? NSTextView else { return }
         if textView.string != text {
             textView.string = text
             DispatchQueue.main.async {

@@ -467,8 +467,8 @@ func TestAPIStatsAndReset(t *testing.T) {
 	c := newUnlimitedTestClient(t, mux)
 
 	// Make some requests across different tiers
-	_, _ = c.AuthTest(context.Background())  // Tier2
-	_, _ = c.AuthTest(context.Background())  // Tier2
+	_, _ = c.AuthTest(context.Background())            // Tier2
+	_, _ = c.AuthTest(context.Background())            // Tier2
 	_, _ = c.GetUserInfo(context.Background(), "U001") // Tier4
 
 	counts, retries := c.APIStats()

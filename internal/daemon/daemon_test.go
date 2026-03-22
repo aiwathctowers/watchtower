@@ -317,7 +317,7 @@ func testDaemonWithTempHome(t *testing.T) (*sync.Orchestrator, *config.Config, s
 	t.Setenv("HOME", dir)
 
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	orch, _ := newTestOrchestrator(t, new(atomic.Int32))
 	cfg := &config.Config{
@@ -376,7 +376,7 @@ func TestDaemon_LoadPeopleMissingFile(t *testing.T) {
 func TestDaemon_LoadPeopleInvalidContent(t *testing.T) {
 	orch, cfg, wsDir := testDaemonWithTempHome(t)
 
-	os.WriteFile(wsDir+"/last_people.txt", []byte("not-a-number"), 0o600)
+	require.NoError(t, os.WriteFile(wsDir+"/last_people.txt", []byte("not-a-number"), 0o600))
 
 	d := New(orch, cfg)
 	d.SetLogger(log.New(os.Stderr, "[test] ", 0))
@@ -398,7 +398,7 @@ func TestDaemon_RunSyncWithDigestPipeline(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	database, err := db.Open(wsDir + "/watchtower.db")
 	require.NoError(t, err)
@@ -441,7 +441,7 @@ func TestDaemon_RunSyncWithAllPipelines(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	database, err := db.Open(wsDir + "/watchtower.db")
 	require.NoError(t, err)
@@ -496,7 +496,7 @@ func TestDaemon_AutoMarkReadAfterDigests(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	database, err := db.Open(wsDir + "/watchtower.db")
 	require.NoError(t, err)
@@ -559,7 +559,7 @@ func TestDaemon_RunSyncContextCancelled(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	cfg := &config.Config{
 		ActiveWorkspace: "test-ws",
@@ -592,7 +592,7 @@ func TestDaemon_RunSyncWithPeopleThrottle(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	wsDir := dir + "/.local/share/watchtower/test-ws"
-	os.MkdirAll(wsDir, 0o755)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
 
 	database, err := db.Open(wsDir + "/watchtower.db")
 	require.NoError(t, err)

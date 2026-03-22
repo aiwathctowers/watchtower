@@ -13,9 +13,29 @@ final class DashboardViewModel {
     private(set) var workspaceTeamID: String?
 
     private let dbManager: DatabaseManager
+    private var observationTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    /// Start observing key tables for live dashboard updates.
+    func startObserving() {
+        guard observationTask == nil else { return }
+        Task { await load() }
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try WorkspaceStats.fetch(db)
+            }
+            .removeDuplicates()
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    await self?.load()
+                }
+            } catch {}
+        }
     }
 
     func slackChannelURL(channelID: String) -> URL? {

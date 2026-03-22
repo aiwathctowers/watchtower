@@ -332,7 +332,7 @@ func TestUpsertAndGetUserInteractions(t *testing.T) {
 			MessagesTo: 10, MessagesFrom: 5,
 			SharedChannels: 2, ThreadRepliesTo: 3, ThreadRepliesFrom: 1,
 			SharedChannelIDs: `["C1","C2"]`,
-			DMMessagesTo: 2, DMMessagesFrom: 1,
+			DMMessagesTo:     2, DMMessagesFrom: 1,
 			MentionsTo: 1, MentionsFrom: 0,
 			ReactionsTo: 3, ReactionsFrom: 2,
 			InteractionScore: 50.0, ConnectionType: "peer",
@@ -626,10 +626,10 @@ func TestComputeUserInteractions_ConnectionType(t *testing.T) {
 
 func TestClassifyConnection(t *testing.T) {
 	assert.Equal(t, "weak", classifyConnection(0, 0))
-	assert.Equal(t, "weak", classifyConnection(1, 1))       // total < 5
-	assert.Equal(t, "peer", classifyConnection(5, 5))        // balanced
-	assert.Equal(t, "peer", classifyConnection(6, 4))        // 60/40 within ±30%
-	assert.Equal(t, "i_depend", classifyConnection(8, 2))    // 80% outbound
+	assert.Equal(t, "weak", classifyConnection(1, 1))          // total < 5
+	assert.Equal(t, "peer", classifyConnection(5, 5))          // balanced
+	assert.Equal(t, "peer", classifyConnection(6, 4))          // 60/40 within ±30%
+	assert.Equal(t, "i_depend", classifyConnection(8, 2))      // 80% outbound
 	assert.Equal(t, "depends_on_me", classifyConnection(2, 8)) // 80% inbound
 }
 

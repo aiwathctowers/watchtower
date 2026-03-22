@@ -11,7 +11,7 @@ enum OnboardingStep: Int, CaseIterable, Comparable, Codable {
     case generating = 5   // Profile generation via AI
     case complete = 6     // Done
 
-    static func < (lhs: OnboardingStep, rhs: OnboardingStep) -> Bool {
+    static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
 
@@ -27,7 +27,7 @@ enum OnboardingStep: Int, CaseIterable, Comparable, Codable {
     }
 
     /// Steps shown in the visual indicator bar.
-    static let indicatorSteps: [OnboardingStep] = [.connect, .settings, .claude, .chat]
+    static let indicatorSteps: [Self] = [.connect, .settings, .claude, .chat]
 }
 
 /// Manages onboarding progress with UserDefaults persistence.

@@ -225,10 +225,9 @@ func TestTrustCert_NoCertFile(t *testing.T) {
 	tmpPath := certPath + ".bak"
 	require.NoError(t, os.Rename(certPath, tmpPath))
 	defer func() {
-		os.Rename(tmpPath, certPath)
-		// If rename fails, at least restore from backup data
-		if _, err := os.Stat(certPath); os.IsNotExist(err) {
-			os.WriteFile(certPath, origData, 0o644)
+		if err := os.Rename(tmpPath, certPath); err != nil {
+			// If rename fails, at least restore from backup data
+			_ = os.WriteFile(certPath, origData, 0o644)
 		}
 	}()
 
@@ -280,7 +279,6 @@ func TestTrustCert_Behavior(t *testing.T) {
 	err := TrustCert()
 	assert.NoError(t, err)
 }
-
 
 func TestCertDir_ReturnsConsistentPath(t *testing.T) {
 	dir1, err := CertDir()
@@ -449,8 +447,8 @@ func TestEnsureCert_RegeneratesRealCertWhenExpiring(t *testing.T) {
 
 	// Restore original cert/key when done
 	defer func() {
-		os.WriteFile(certPath, origCert, 0o644)
-		os.WriteFile(keyPath, origKey, 0o600)
+		_ = os.WriteFile(certPath, origCert, 0o644)
+		_ = os.WriteFile(keyPath, origKey, 0o600)
 	}()
 
 	// Load the key to create a near-expired cert

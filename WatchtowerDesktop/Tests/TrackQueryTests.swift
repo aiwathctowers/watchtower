@@ -218,7 +218,7 @@ final class TrackQueryTests: XCTestCase {
             try TrackQueries.markUpdateRead(db, id: 1)
         }
         let track = try db.read { try TrackQueries.fetchByID($0, id: 1) }
-        XCTAssertFalse(track!.hasUpdates)
+        XCTAssertFalse(try XCTUnwrap(track).hasUpdates)
     }
 
     // MARK: - Insert and history
@@ -227,13 +227,19 @@ final class TrackQueryTests: XCTestCase {
         let db = try TestDatabase.create()
         try db.write { db in
             try TrackQueries.insertTrack(
-                db, channelID: "C001", assigneeUserID: "U001", assigneeRaw: "alice",
-                text: "Do thing", context: "", sourceMessageTS: "", sourceChannelName: "general",
-                priority: "high", dueDate: nil, periodFrom: 100, periodTo: 200,
-                model: "haiku", inputTokens: 0, outputTokens: 0, costUSD: 0,
-                participants: "[]", sourceRefs: "[]", requesterName: "", requesterUserID: "",
-                category: "task", blocking: "", tags: "[]", decisionSummary: "",
-                decisionOptions: "[]", relatedDigestIDs: "[]", subItems: "[]"
+                db,
+                data: TrackInsertData(
+                    channelID: "C001",
+                    assigneeUserID: "U001",
+                    assigneeRaw: "alice",
+                    text: "Do thing",
+                    sourceChannelName: "general",
+                    priority: "high",
+                    periodFrom: 100,
+                    periodTo: 200,
+                    model: "haiku",
+                    category: "task"
+                )
             )
         }
         let history = try db.read { try TrackQueries.fetchHistory($0, trackID: 1) }

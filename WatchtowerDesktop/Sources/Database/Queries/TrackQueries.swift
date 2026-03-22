@@ -51,24 +51,36 @@ enum TrackQueries {
     }
 
     static func fetchOpenCount(_ db: Database, assigneeUserID: String) throws -> Int {
-        try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM tracks
-            WHERE assignee_user_id = ? AND status IN ('inbox', 'active')
-            """, arguments: [assigneeUserID]) ?? 0
+        try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM tracks
+                WHERE assignee_user_id = ? AND status IN ('inbox', 'active')
+                """,
+            arguments: [assigneeUserID]
+        ) ?? 0
     }
 
     static func fetchInboxCount(_ db: Database, assigneeUserID: String) throws -> Int {
-        try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM tracks
-            WHERE assignee_user_id = ? AND status = 'inbox'
-            """, arguments: [assigneeUserID]) ?? 0
+        try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM tracks
+                WHERE assignee_user_id = ? AND status = 'inbox'
+                """,
+            arguments: [assigneeUserID]
+        ) ?? 0
     }
 
     static func fetchUpdatedCount(_ db: Database, assigneeUserID: String) throws -> Int {
-        try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM tracks
-            WHERE assignee_user_id = ? AND has_updates = 1 AND status IN ('inbox', 'active')
-            """, arguments: [assigneeUserID]) ?? 0
+        try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM tracks
+                WHERE assignee_user_id = ? AND has_updates = 1 AND status IN ('inbox', 'active')
+                """,
+            arguments: [assigneeUserID]
+        ) ?? 0
     }
 
     static func updateStatus(_ db: Database, id: Int, status: String) throws {
@@ -138,10 +150,14 @@ enum TrackQueries {
 
     static func fetchHistory(_ db: Database, trackID: Int) throws -> [TrackHistoryEntry] {
         guard try db.tableExists("track_history") else { return [] }
-        return try TrackHistoryEntry.fetchAll(db, sql: """
-            SELECT * FROM track_history
-            WHERE track_id = ? ORDER BY created_at ASC
-            """, arguments: [trackID])
+        return try TrackHistoryEntry.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM track_history
+                WHERE track_id = ? ORDER BY created_at ASC
+                """,
+            arguments: [trackID]
+        )
     }
 
     static func updateSubItems(_ db: Database, id: Int, subItemsJSON: String) throws {
@@ -154,11 +170,15 @@ enum TrackQueries {
     }
 
     static func fetchStatusCounts(_ db: Database, assigneeUserID: String) throws -> [String: Int] {
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT status, COUNT(*) as cnt FROM tracks
-            WHERE assignee_user_id = ?
-            GROUP BY status
-            """, arguments: [assigneeUserID])
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT status, COUNT(*) as cnt FROM tracks
+                WHERE assignee_user_id = ?
+                GROUP BY status
+                """,
+            arguments: [assigneeUserID]
+        )
         var result: [String: Int] = [:]
         for row in rows {
             let status: String = row["status"]
@@ -169,11 +189,15 @@ enum TrackQueries {
     }
 
     static func fetchOwnershipCounts(_ db: Database, assigneeUserID: String) throws -> [String: Int] {
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT ownership, COUNT(*) as cnt FROM tracks
-            WHERE assignee_user_id = ? AND status IN ('inbox', 'active')
-            GROUP BY ownership
-            """, arguments: [assigneeUserID])
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT ownership, COUNT(*) as cnt FROM tracks
+                WHERE assignee_user_id = ? AND status IN ('inbox', 'active')
+                GROUP BY ownership
+                """,
+            arguments: [assigneeUserID]
+        )
         var result: [String: Int] = [:]
         for row in rows {
             let ownership: String = row["ownership"]
@@ -184,9 +208,13 @@ enum TrackQueries {
     }
 
     static func fetchTotalCount(_ db: Database, assigneeUserID: String) throws -> Int {
-        try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM tracks WHERE assignee_user_id = ?
-            """, arguments: [assigneeUserID]) ?? 0
+        try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM tracks WHERE assignee_user_id = ?
+                """,
+            arguments: [assigneeUserID]
+        ) ?? 0
     }
 
     static func fetchCurrentUserID(_ db: Database) throws -> String? {
@@ -195,38 +223,7 @@ enum TrackQueries {
 
     /// Insert a manually-created track (e.g. from a digest) and log history.
     @discardableResult
-    static func insertTrack(
-        _ db: Database,
-        channelID: String,
-        assigneeUserID: String,
-        assigneeRaw: String,
-        text: String,
-        context: String,
-        sourceMessageTS: String,
-        sourceChannelName: String,
-        priority: String,
-        dueDate: Double?,
-        periodFrom: Double,
-        periodTo: Double,
-        model: String,
-        inputTokens: Int,
-        outputTokens: Int,
-        costUSD: Double,
-        participants: String,
-        sourceRefs: String,
-        requesterName: String,
-        requesterUserID: String,
-        category: String,
-        blocking: String,
-        tags: String,
-        decisionSummary: String,
-        decisionOptions: String,
-        relatedDigestIDs: String,
-        subItems: String,
-        ownership: String = "mine",
-        ballOn: String = "",
-        ownerUserID: String = ""
-    ) throws -> Int {
+    static func insertTrack(_ db: Database, data: TrackInsertData) throws -> Int {
         try db.execute(sql: """
             INSERT INTO tracks (
                 channel_id, assignee_user_id, assignee_raw, text, context,
@@ -246,13 +243,13 @@ enum TrackQueries {
                 ?, ?, ?
             )
             """, arguments: [
-                channelID, assigneeUserID, assigneeRaw, text, context,
-                sourceMessageTS, sourceChannelName, priority,
-                dueDate, periodFrom, periodTo, model, inputTokens,
-                outputTokens, costUSD, participants, sourceRefs,
-                requesterName, requesterUserID, category, blocking,
-                tags, decisionSummary, decisionOptions, relatedDigestIDs, subItems,
-                ownership, ballOn, ownerUserID
+                data.channelID, data.assigneeUserID, data.assigneeRaw, data.text, data.context,
+                data.sourceMessageTS, data.sourceChannelName, data.priority,
+                data.dueDate, data.periodFrom, data.periodTo, data.model, data.inputTokens,
+                data.outputTokens, data.costUSD, data.participants, data.sourceRefs,
+                data.requesterName, data.requesterUserID, data.category, data.blocking,
+                data.tags, data.decisionSummary, data.decisionOptions, data.relatedDigestIDs, data.subItems,
+                data.ownership, data.ballOn, data.ownerUserID
             ])
         let rowID = Int(db.lastInsertedRowID)
         try db.execute(sql: """
@@ -261,4 +258,36 @@ enum TrackQueries {
             """, arguments: [rowID])
         return rowID
     }
+}
+
+struct TrackInsertData {
+    var channelID: String
+    var assigneeUserID: String
+    var assigneeRaw: String = ""
+    var text: String
+    var context: String = ""
+    var sourceMessageTS: String = ""
+    var sourceChannelName: String = ""
+    var priority: String = "medium"
+    var dueDate: Double?
+    var periodFrom: Double = 0
+    var periodTo: Double = 0
+    var model: String = ""
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var costUSD: Double = 0
+    var participants: String = "[]"
+    var sourceRefs: String = "[]"
+    var requesterName: String = ""
+    var requesterUserID: String = ""
+    var category: String = ""
+    var blocking: String = ""
+    var tags: String = "[]"
+    var decisionSummary: String = ""
+    var decisionOptions: String = "[]"
+    var relatedDigestIDs: String = "[]"
+    var subItems: String = "[]"
+    var ownership: String = "mine"
+    var ballOn: String = ""
+    var ownerUserID: String = ""
 }

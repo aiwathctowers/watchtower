@@ -19,9 +19,28 @@ final class DigestViewModel {
     private(set) var starredChannelIDs: Set<String> = []
     private(set) var currentUserID: String?
     private let dbManager: DatabaseManager
+    private var observationTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    /// Start observing the digests table for live updates.
+    func startObserving() {
+        guard observationTask == nil else { return }
+        load()
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM digests") ?? 0
+            }
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    self?.load()
+                }
+            } catch {}
+        }
     }
 
     private struct LoadResult {
@@ -41,24 +60,24 @@ final class DigestViewModel {
         isLoading = true
         do {
             let result = try dbManager.dbPool.read { db -> LoadResult in
-                let d = try DigestQueries.fetchAll(db, type: selectedType)
+                let digests = try DigestQueries.fetchAll(db, type: selectedType)
                 let withDecisions = try DigestQueries.fetchWithDecisions(db, limit: 200)
                 let ws = try WorkspaceQueries.fetchWorkspace(db)
 
                 // Pre-fetch user names for DM resolution
                 let users = try UserQueries.fetchAll(db, activeOnly: false)
                 var userNames: [String: String] = [:]
-                for u in users {
-                    let name = u.displayName.isEmpty ? u.name : u.displayName
-                    userNames[u.id] = name
+                for user in users {
+                    let name = user.displayName.isEmpty ? user.name : user.displayName
+                    userNames[user.id] = name
                 }
 
                 // Pre-fetch channel names, resolving DMs to user names
-                let allChannelIDs = Set((d + withDecisions).map(\.channelID).filter { !$0.isEmpty })
+                let allChannelIDs = Set((digests + withDecisions).map(\.channelID).filter { !$0.isEmpty })
                 var nameMap: [String: String] = [:]
                 for cid in allChannelIDs {
                     if let ch = try ChannelQueries.fetchByID(db, id: cid) {
-                        if (ch.type == "dm" || ch.type == "im") {
+                        if ch.type == "dm" || ch.type == "im" {
                             // Try dm_user_id first, then fall back to name if it looks like a user ID
                             let resolvedUID = ch.dmUserID ?? (ch.name.hasPrefix("U") ? ch.name : nil)
                             if let uid = resolvedUID, let userName = userNames[uid] {
@@ -84,7 +103,7 @@ final class DigestViewModel {
                 let uid = profile?.slackUserID
 
                 return LoadResult(
-                    digests: d,
+                    digests: digests,
                     withDecisions: withDecisions,
                     channelNames: nameMap,
                     domain: ws?.domain,
@@ -102,7 +121,11 @@ final class DigestViewModel {
             workspaceTeamID = result.teamID
             starredChannelIDs = result.starredChannels
             currentUserID = result.currentUserID
-            decisionEntries = buildDecisionEntries(from: result.withDecisions, readIndices: result.readIndices, importanceCorrections: result.importanceCorrections)
+            decisionEntries = buildDecisionEntries(
+                from: result.withDecisions,
+                readIndices: result.readIndices,
+                importanceCorrections: result.importanceCorrections
+            )
             unreadDigestCount = result.unreadDigests
             unreadDecisionCount = decisionEntries.filter { !$0.isRead }.count
             errorMessage = nil
@@ -114,7 +137,11 @@ final class DigestViewModel {
         isLoading = false
     }
 
-    private func buildDecisionEntries(from digests: [Digest], readIndices: [Int: Set<Int>], importanceCorrections: [String: String] = [:]) -> [DecisionEntry] {
+    private func buildDecisionEntries(
+        from digests: [Digest],
+        readIndices: [Int: Set<Int>],
+        importanceCorrections: [String: String] = [:]
+    ) -> [DecisionEntry] {
         // Separate digests by type: prefer higher-level (daily/weekly) over channel
         let dailyWeekly = digests.filter { $0.type == "daily" || $0.type == "weekly" }
         let channelOnly = digests.filter { $0.type == "channel" }
@@ -354,10 +381,10 @@ final class DigestViewModel {
                 try DigestQueries.fetchAll(db, type: "channel")
                     .filter { $0.periodFrom >= digest.periodFrom && $0.periodTo <= digest.periodTo }
             }
-            return channels.compactMap { d in
-                guard !d.channelID.isEmpty else { return nil }
-                let name = channelNameCache[d.channelID] ?? d.channelID
-                return (name: name, channelID: d.channelID)
+            return channels.compactMap { digest in
+                guard !digest.channelID.isEmpty else { return nil }
+                let name = channelNameCache[digest.channelID] ?? digest.channelID
+                return (name: name, channelID: digest.channelID)
             }
         } catch {
             return []

@@ -5,12 +5,12 @@ struct PersonDetailView: View {
     let userName: String
     let history: [PeopleCard]
     let userNameResolver: (String) -> String
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
     var isCurrentUser: Bool = false
-    var profile: UserProfile? = nil
+    var profile: UserProfile?
     var interactions: [UserInteraction] = []
+    var onUpdateConnections: (([String], [String], String) -> Void)?
     var allCards: [PeopleCard] = []
-    var onUpdateConnections: (([String], [String], String) -> Void)? = nil
 
     @State private var selectedTab = 0  // 0 = Overview, 1 = Connections
 
@@ -35,7 +35,7 @@ struct PersonDetailView: View {
                     profile: profile,
                     allCards: allCards,
                     userNameResolver: userNameResolver,
-                    onNavigateToPerson: { userID in
+                    onNavigateToPerson: { _ in
                         // Navigation is handled by parent (PeopleListView)
                     },
                     onUpdateConnections: onUpdateConnections
@@ -123,13 +123,16 @@ struct PersonDetailView: View {
         LazyVGrid(columns: [
             GridItem(.flexible()),
             GridItem(.flexible()),
-            GridItem(.flexible()),
+            GridItem(.flexible())
         ], spacing: 12) {
-            StatCard(title: "Messages", value: "\(card.messageCount)",
-                     detail: card.volumeChangePct != 0
-                        ? String(format: "%+.0f%% vs prev", card.volumeChangePct)
-                        : nil,
-                     detailColor: card.volumeChangePct < -30 ? .red : .secondary)
+            StatCard(
+                title: "Messages",
+                value: "\(card.messageCount)",
+                detail: card.volumeChangePct != 0
+                    ? String(format: "%+.0f%% vs prev", card.volumeChangePct)
+                    : nil,
+                detailColor: card.volumeChangePct < -30 ? .red : .secondary
+            )
             StatCard(title: "Channels", value: "\(card.channelsActive)", detail: nil)
             StatCard(title: "Avg Length", value: "\(Int(card.avgMessageLength))", detail: "chars")
             StatCard(title: "Threads Started", value: "\(card.threadsInitiated)", detail: nil)
@@ -359,7 +362,11 @@ struct PersonDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(history) { entry in
                         HStack {
-                            Text("\(entry.periodFromDate.formatted(.dateTime.month().day())) – \(entry.periodToDate.formatted(.dateTime.month().day()))")
+                            let from = entry.periodFromDate
+                                .formatted(.dateTime.month().day())
+                            let to = entry.periodToDate
+                                .formatted(.dateTime.month().day())
+                            Text("\(from) – \(to)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 

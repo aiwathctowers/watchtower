@@ -97,11 +97,11 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(byModel[0].model, "(unknown)")
     }
 
-    func testTokenUsageSummaryByModelSortedByCost() {
+    func testTokenUsageSummaryByModelSortedByCost() throws {
         let summary = TokenUsageSummary(rows: [
-            makeRow(source: "digests", model: "haiku", cost: 0.01),
-            makeRow(source: "people", model: "opus", cost: 0.10),
-            makeRow(source: "tracks", model: "sonnet", cost: 0.05),
+            try makeRow(source: "digests", model: "haiku", cost: 0.01),
+            try makeRow(source: "people", model: "opus", cost: 0.10),
+            try makeRow(source: "tracks", model: "sonnet", cost: 0.05)
         ])
         let byModel = summary.byModel
         XCTAssertEqual(byModel[0].model, "opus")
@@ -110,16 +110,16 @@ final class TokenUsageQueryTests: XCTestCase {
     }
 
     // Helper to create TokenUsageRow via DB roundtrip
-    private func makeRow(source: String, model: String, cost: Double) -> TokenUsageRow {
-        let db = try! TestDatabase.create()
-        try! db.write { db in
+    private func makeRow(source: String, model: String, cost: Double) throws -> TokenUsageRow {
+        let db = try TestDatabase.create()
+        try db.write { db in
             try db.execute(sql: """
                 INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
                     input_tokens, output_tokens, cost_usd)
                 VALUES ('C001', 100, 200, 'channel', 'T', 10, ?, 100, 50, ?)
                 """, arguments: [model, cost])
         }
-        let rows = try! db.read { try TokenUsageQueries.fetchUsage($0) }.rows
+        let rows = try db.read { try TokenUsageQueries.fetchUsage($0) }.rows
         return rows[0]
     }
 }

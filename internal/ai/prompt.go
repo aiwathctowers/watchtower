@@ -79,7 +79,7 @@ Rules:
 
 === RESPONSE STYLE ===
 - Be concise and direct
-- Match the user's language and tone
+%s
 - Use markdown for readability
 - Highlight: decisions, action items, unanswered questions, unusual activity`
 
@@ -88,8 +88,16 @@ var (
 	safeDomainRe = regexp.MustCompile(`[^a-zA-Z0-9_\-]`)    // domain: strict ASCII for URL context
 )
 
+// languageInstruction returns the response language directive for the system prompt.
+func languageInstruction(lang string) string {
+	if lang != "" && !strings.EqualFold(lang, "English") {
+		return fmt.Sprintf("IMPORTANT: Respond in %s. ALL text output MUST be in %s, not English.", lang, lang)
+	}
+	return "Match the user's language and tone"
+}
+
 // BuildSystemPrompt generates the system prompt with database access context.
-func BuildSystemPrompt(workspaceName, domain, teamID, dbPath, schema string) string {
+func BuildSystemPrompt(workspaceName, domain, teamID, dbPath, schema, language string) string {
 	// Sanitize workspace name and domain to prevent prompt injection
 	safeName := safeNameRe.ReplaceAllString(workspaceName, "")
 	safeDomain := safeDomainRe.ReplaceAllString(domain, "")
@@ -117,14 +125,16 @@ func BuildSystemPrompt(workspaceName, domain, teamID, dbPath, schema string) str
 	).Replace(dbPath)
 
 	now := time.Now().UTC().Format("2006-01-02 15:04 UTC")
+	langInstr := languageInstruction(language)
 	return fmt.Sprintf(systemPromptTemplate,
 		safeName, safeDomain, now,
 		safeDBPath, safeDBPath,
 		schema,
 		safeTeamID, safeTeamID, // deep link format + example
 		safeTeamID, safeTeamID, // channel link + example
-		safeTeamID,             // message link
+		safeTeamID,                         // message link
 		safeTeamID, safeTeamID, safeTeamID, // examples
+		langInstr,
 	)
 }
 

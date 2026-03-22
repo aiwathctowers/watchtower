@@ -6,6 +6,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     case chains
     case people
     case search
+    case usage
     case training
 
     var id: String { rawValue }
@@ -17,6 +18,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .chains: "Chains"
         case .people: "People"
         case .search: "Search"
+        case .usage: "Usage"
         case .training: "Training"
         }
     }
@@ -28,18 +30,19 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .chains: "link.circle"
         case .people: "person.2"
         case .search: "magnifyingglass"
+        case .usage: "chart.bar"
         case .training: "brain.head.profile"
         }
     }
 
     /// Main navigation items (shown above the separator).
-    static var mainItems: [SidebarDestination] {
+    static var mainItems: [Self] {
         [.chat, .tracks, .chains, .people, .search]
     }
 
     /// Tool items (shown below the separator).
-    static var toolItems: [SidebarDestination] {
-        [.training]
+    static var toolItems: [Self] {
+        [.usage, .training]
     }
 }
 
@@ -133,6 +136,8 @@ struct MainNavigationView: View {
             PeopleListView()
         case .search:
             SearchView()
+        case .usage:
+            UsageView()
         case .training:
             TrainingView()
         }
@@ -178,7 +183,6 @@ struct OnboardingView: View {
     private var cliPath: String? { Constants.findCLIPath() }
     private var claudePath: String? { Constants.findClaudePath() }
     private var hasCLI: Bool { cliPath != nil }
-
 
     var body: some View {
         VStack(spacing: 24) {
@@ -265,203 +269,14 @@ struct OnboardingView: View {
     private var claudeStepView: some View {
         VStack(spacing: 20) {
             if !hasClaudeCLI {
-                // Claude CLI not found — show installation instructions
-                Image(systemName: "terminal")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.orange)
-
-                Text("Claude Code CLI Required")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("Watchtower uses Claude Code for AI-powered digests,\npeople analytics, and tracks.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                // Installation instructions
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Install Claude Code")
-                            .font(.headline)
-
-                        installStep(number: 1, text: "Open **Terminal** app")
-
-                        installStep(number: 2, text: "Run this command:")
-                        codeBlock("npm install -g @anthropic-ai/claude-code")
-
-                        installStep(number: 3, text: "Verify installation:")
-                        codeBlock("which claude")
-
-                        Divider()
-
-                        Text("Don't have npm?")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Text("Install Node.js first from **nodejs.org**, then run the command above.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                }
-                .frame(maxWidth: 480)
-
-                // Manual path override
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Or specify the path manually")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        HStack {
-                            TextField("e.g. /usr/local/bin/claude", text: $manualClaudePath)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button("Browse...") {
-                                let panel = NSOpenPanel()
-                                panel.canChooseFiles = true
-                                panel.canChooseDirectories = false
-                                panel.allowsMultipleSelection = false
-                                panel.message = "Select the 'claude' executable"
-                                if panel.runModal() == .OK, let url = panel.url {
-                                    manualClaudePath = url.path
-                                }
-                            }
-                        }
-
-                        if let result = claudeCheckResult {
-                            Text(result)
-                                .font(.caption)
-                                .foregroundStyle(result.contains("Found") ? .green : .red)
-                        }
-                    }
-                    .padding(8)
-                }
-                .frame(maxWidth: 480)
-
-                // Action buttons
-                HStack(spacing: 16) {
-                    Button("Back to Settings") {
-                        appState.onboarding.goTo(.settings)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
-                    Button("Skip for now") {
-                        appState.onboarding.goTo(.chat)
-                        runSync()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
-                    Button {
-                        checkAndContinue()
-                    } label: {
-                        HStack {
-                            if isRunning {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text("Check & Verify")
-                        }
-                        .frame(minWidth: 160)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(isRunning)
-                }
-
+                claudeNotInstalledView
             } else if claudeHealthPassed {
-                // Health check passed
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.green)
-
-                Text("AI Connection Verified")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("Claude is ready with **\(settingsModelPreset.title)** model.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                ProgressView()
-                    .controlSize(.small)
-                Text("Starting sync...")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
+                claudeVerifiedView
             } else if isRunning {
-                // Health check in progress
-                ProgressView()
-                    .controlSize(.regular)
-
-                Text("Testing AI Connection")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                Text("Sending a test request to Claude (**\(settingsModelPreset.aiModel)**)...")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                Text("This may take 10–30 seconds")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
+                claudeCheckingView
             } else if let error = claudeHealthError {
-                // Health check failed
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.red)
-
-                Text("AI Connection Failed")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                GroupBox {
-                    Text(error)
-                        .font(.caption)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(4)
-                }
-                .frame(maxWidth: 480)
-
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Quick fix — open Terminal and run:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        codeBlock("claude")
-
-                        Text("Complete the authentication, then press Retry.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(4)
-                }
-                .frame(maxWidth: 480)
-
-                HStack(spacing: 16) {
-                    Button("Back to Settings") {
-                        claudeHealthError = nil
-                        appState.onboarding.goTo(.settings)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-
-                    Button {
-                        runClaudeHealthCheck()
-                    } label: {
-                        Text("Retry")
-                            .frame(minWidth: 100)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
+                claudeHealthFailedView(error)
             } else {
-                // Initial state — auto-start health check
                 ProgressView()
                     .controlSize(.small)
                 Text("Preparing...")
@@ -478,6 +293,218 @@ struct OnboardingView: View {
                 runSync()
             } else if hasClaudeCLI && !claudeHealthPassed && !isRunning && claudeHealthError == nil {
                 runClaudeHealthCheck()
+            }
+        }
+    }
+
+    private var claudeNotInstalledView: some View {
+        Group {
+            Image(systemName: "terminal")
+                .font(.system(size: 36))
+                .foregroundStyle(.orange)
+
+            Text("Claude Code CLI Required")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Watchtower uses Claude Code for AI-powered digests,\npeople analytics, and tracks.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            claudeInstallInstructions
+            claudeManualPathBox
+            claudeInstallButtons
+        }
+    }
+
+    private var claudeInstallInstructions: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Install Claude Code")
+                    .font(.headline)
+
+                installStep(number: 1, text: "Open **Terminal** app")
+
+                installStep(number: 2, text: "Run this command:")
+                codeBlock("npm install -g @anthropic-ai/claude-code")
+
+                installStep(number: 3, text: "Verify installation:")
+                codeBlock("which claude")
+
+                Divider()
+
+                Text("Don't have npm?")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text("Install Node.js first from **nodejs.org**, then run the command above.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
+        }
+        .frame(maxWidth: 480)
+    }
+
+    private var claudeManualPathBox: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Or specify the path manually")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                HStack {
+                    TextField("e.g. /usr/local/bin/claude", text: $manualClaudePath)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button("Browse...") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = true
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        panel.message = "Select the 'claude' executable"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            manualClaudePath = url.path
+                        }
+                    }
+                }
+
+                if let result = claudeCheckResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.contains("Found") ? .green : .red)
+                }
+            }
+            .padding(8)
+        }
+        .frame(maxWidth: 480)
+    }
+
+    private var claudeInstallButtons: some View {
+        HStack(spacing: 16) {
+            Button("Back to Settings") {
+                appState.onboarding.goTo(.settings)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+
+            Button("Skip for now") {
+                appState.onboarding.goTo(.chat)
+                runSync()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+
+            Button {
+                checkAndContinue()
+            } label: {
+                HStack {
+                    if isRunning {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text("Check & Verify")
+                }
+                .frame(minWidth: 160)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isRunning)
+        }
+    }
+
+    private var claudeVerifiedView: some View {
+        Group {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.green)
+
+            Text("AI Connection Verified")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Claude is ready with **\(settingsModelPreset.title)** model.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ProgressView()
+                .controlSize(.small)
+            Text("Starting sync...")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var claudeCheckingView: some View {
+        Group {
+            ProgressView()
+                .controlSize(.regular)
+
+            Text("Testing AI Connection")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Sending a test request to Claude (**\(settingsModelPreset.aiModel)**)...")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Text("This may take 10–30 seconds")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func claudeHealthFailedView(_ error: String) -> some View {
+        Group {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.red)
+
+            Text("AI Connection Failed")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            GroupBox {
+                Text(error)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+            }
+            .frame(maxWidth: 480)
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Quick fix — open Terminal and run:")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    codeBlock("claude")
+
+                    Text("Complete the authentication, then press Retry.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+            .frame(maxWidth: 480)
+
+            HStack(spacing: 16) {
+                Button("Back to Settings") {
+                    claudeHealthError = nil
+                    appState.onboarding.goTo(.settings)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
+                    runClaudeHealthCheck()
+                } label: {
+                    Text("Retry")
+                        .frame(minWidth: 100)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
         }
     }
@@ -599,7 +626,11 @@ struct OnboardingView: View {
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
 
-                            Text("Watchtower stores everything locally — messages, digests, and analytics never leave your Mac. A local TLS certificate will be generated on your machine to securely handle the Slack OAuth callback. No data is sent to external servers.")
+                            Text("Watchtower stores everything locally — messages, "
+                                + "digests, and analytics never leave your Mac. "
+                                + "A local TLS certificate will be generated on "
+                                + "your machine to securely handle the Slack OAuth "
+                                + "callback. No data is sent to external servers.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -666,9 +697,9 @@ struct OnboardingView: View {
     // MARK: - Settings Step
 
     enum ModelPreset: String, CaseIterable {
-        case fast = "fast"
-        case balanced = "balanced"
-        case quality = "quality"
+        case fast
+        case balanced
+        case quality
 
         var title: String {
             switch self {
@@ -712,10 +743,10 @@ struct OnboardingView: View {
     }
 
     enum PollPreset: String, CaseIterable {
-        case frequent = "frequent"
-        case normal = "normal"
-        case relaxed = "relaxed"
-        case hourly = "hourly"
+        case frequent
+        case normal
+        case relaxed
+        case hourly
 
         var title: String {
             switch self {
@@ -748,97 +779,8 @@ struct OnboardingView: View {
             Text("Configure your preferences before the first sync.")
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 1) {
-                // Language
-                settingCard(
-                    icon: "globe",
-                    iconColor: .secondary,
-                    title: "Language",
-                    description: "Choose the language for digests, insights, and AI-generated content. All analysis will be produced in this language.",
-                    isFirst: true
-                ) {
-                    Picker("", selection: $settingsLanguage) {
-                        Text("English").tag("English")
-                        Text("Українська").tag("Ukrainian")
-                        Text("Русский").tag("Russian")
-                    }
-                    .pickerStyle(.menu)
-                }
-
-                // AI Model
-                settingCard(
-                    icon: "cpu",
-                    iconColor: .secondary,
-                    title: "AI Model",
-                    description: settingsModelPreset.settingDescription
-                ) {
-                    Picker("", selection: $settingsModelPreset) {
-                        ForEach(ModelPreset.allCases, id: \.self) { preset in
-                            Text(preset.title).tag(preset)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                // History depth
-                settingCard(
-                    icon: "calendar.badge.clock",
-                    iconColor: .secondary,
-                    title: "History Depth",
-                    description: "How far back to look when syncing for the first time. More days means richer initial digests but a longer first sync."
-                ) {
-                    HStack(spacing: 8) {
-                        Picker("", selection: $settingsHistoryDays) {
-                            Text("1 day").tag(1)
-                            Text("3 days").tag(3)
-                            Text("5 days").tag(5)
-                            Text("7 days").tag(7)
-                            Text("Custom").tag(-1)
-                        }
-                        .pickerStyle(.menu)
-
-                        if settingsHistoryDays == -1 {
-                            TextField("days", text: $settingsCustomDays)
-                                .frame(width: 40)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                }
-
-                // Sync Frequency
-                settingCard(
-                    icon: "arrow.triangle.2.circlepath",
-                    iconColor: .secondary,
-                    title: "Sync Frequency",
-                    description: "How often Watchtower checks Slack for new messages. More frequent syncs keep digests up to date but use more resources."
-                ) {
-                    Picker("", selection: $settingsPollPreset) {
-                        ForEach(PollPreset.allCases, id: \.self) { preset in
-                            Text(preset.title).tag(preset)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-
-                // Notifications
-                settingCard(
-                    icon: "bell.badge",
-                    iconColor: .secondary,
-                    title: "Notifications",
-                    description: "Get notified about important tracks, action items, and when daily digests are ready.",
-                    isLast: true
-                ) {
-                    Toggle("", isOn: $settingsNotifications)
-                        .toggleStyle(.switch)
-                }
-            }
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-            .frame(maxWidth: 520)
+            settingsCardStack
+                .frame(maxWidth: 520)
 
             Button {
                 applySettingsAndSync()
@@ -850,6 +792,96 @@ struct OnboardingView: View {
             .controlSize(.large)
             .disabled(isRunning || (settingsHistoryDays == -1 && resolvedHistoryDays == -1))
         }
+    }
+
+    private var settingsCardStack: some View {
+        VStack(spacing: 1) {
+            settingCard(
+                icon: "globe",
+                iconColor: .secondary,
+                title: "Language",
+                description: "Choose the language for digests, insights, "
+                    + "and AI-generated content.",
+                isFirst: true
+            ) {
+                Picker("", selection: $settingsLanguage) {
+                    Text("English").tag("English")
+                    Text("Українська").tag("Ukrainian")
+                    Text("Русский").tag("Russian")
+                }
+                .pickerStyle(.menu)
+            }
+
+            settingCard(
+                icon: "cpu",
+                iconColor: .secondary,
+                title: "AI Model",
+                description: settingsModelPreset.settingDescription
+            ) {
+                Picker("", selection: $settingsModelPreset) {
+                    ForEach(ModelPreset.allCases, id: \.self) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingCard(
+                icon: "calendar.badge.clock",
+                iconColor: .secondary,
+                title: "History Depth",
+                description: "How far back to look when syncing. "
+                    + "More days = richer digests but longer first sync."
+            ) {
+                HStack(spacing: 8) {
+                    Picker("", selection: $settingsHistoryDays) {
+                        Text("1 day").tag(1)
+                        Text("3 days").tag(3)
+                        Text("5 days").tag(5)
+                        Text("7 days").tag(7)
+                        Text("Custom").tag(-1)
+                    }
+                    .pickerStyle(.menu)
+
+                    if settingsHistoryDays == -1 {
+                        TextField("days", text: $settingsCustomDays)
+                            .frame(width: 40)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            settingCard(
+                icon: "arrow.triangle.2.circlepath",
+                iconColor: .secondary,
+                title: "Sync Frequency",
+                description: "How often Watchtower checks Slack for new messages."
+            ) {
+                Picker("", selection: $settingsPollPreset) {
+                    ForEach(PollPreset.allCases, id: \.self) { preset in
+                        Text(preset.title).tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            settingCard(
+                icon: "bell.badge",
+                iconColor: .secondary,
+                title: "Notifications",
+                description: "Get notified about tracks, action items, and digests.",
+                isLast: true
+            ) {
+                Toggle("", isOn: $settingsNotifications)
+                    .toggleStyle(.switch)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func settingCard<Content: View>(
@@ -941,7 +973,7 @@ struct OnboardingView: View {
         process.arguments = [
             "-p", "respond with: OK",
             "--output-format", "text",
-            "--model", model,
+            "--model", model
         ]
 
         // Use shared resolved environment (caches login shell PATH)
@@ -973,26 +1005,23 @@ struct OnboardingView: View {
     private static func diagnoseClaudeError(stderr: String, exitCode: Int32) -> String {
         let lower = stderr.lowercased()
 
-        if lower.contains("not authenticated") || lower.contains("unauthorized")
-            || lower.contains("api key") || lower.contains("log in") || lower.contains("login")
-        {
+        let authKeywords = ["not authenticated", "unauthorized", "api key", "log in", "login"]
+        if authKeywords.contains(where: { lower.contains($0) }) {
             return "Claude is not authenticated.\n\nOpen Terminal and run: claude\nComplete the login, then press Retry."
         }
 
-        if lower.contains("model")
-            && (lower.contains("access") || lower.contains("available")
-                || lower.contains("permission") || lower.contains("not found"))
-        {
-            return "The selected model is not available for your account.\n\nGo back to Settings and try a different AI model (e.g. \"Fast\" for Haiku)."
+        let modelAccessKeywords = ["access", "available", "permission", "not found"]
+        if lower.contains("model") && modelAccessKeywords.contains(where: { lower.contains($0) }) {
+            return "The selected model is not available for your account.\n\n"
+                + "Go back to Settings and try a different AI model (e.g. \"Fast\" for Haiku)."
         }
 
         if lower.contains("rate limit") || lower.contains("overloaded") || lower.contains("529") {
             return "Claude API is temporarily overloaded.\nWait a moment and press Retry."
         }
 
-        if lower.contains("network") || lower.contains("connection")
-            || lower.contains("timed out") || lower.contains("resolve")
-        {
+        let networkKeywords = ["network", "connection", "timed out", "resolve"]
+        if networkKeywords.contains(where: { lower.contains($0) }) {
             return "Network error.\nCheck your internet connection and press Retry."
         }
 
@@ -1009,92 +1038,9 @@ struct OnboardingView: View {
     private var chatStep: some View {
         VStack(spacing: 16) {
             if !appState.onboarding.chatFinished {
-                // AI chat conversation (runs parallel with sync)
-                if let vm = onboardingVM {
-                    OnboardingChatView(viewModel: vm) {
-                        if appState.onboarding.syncCompleted {
-                            appState.onboarding.goTo(.teamForm)
-                        } else {
-                            appState.onboarding.chatFinished = true
-                        }
-                    }
-                } else {
-                    ProgressView("Preparing...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-
-                // Sync progress banner at bottom during chat
-                if isRunning {
-                    Divider()
-                    syncProgressCompactBanner
-                } else if appState.onboarding.syncCompleted {
-                    Divider()
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Sync complete!")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                }
+                chatActiveView
             } else {
-                // Chat finished, waiting for sync to complete
-                VStack(spacing: 20) {
-                    if let err = cliError {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(.red)
-                        Text("Sync failed")
-                            .font(.title3)
-                            .fontWeight(.medium)
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 450)
-                        Button("Retry Sync") {
-                            cliError = nil
-                            runSync()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    } else if !isRunning {
-                        // Sync finished (but syncCompleted may not have triggered transition)
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(.green)
-                        Text("Sync complete!")
-                            .font(.title3)
-                            .fontWeight(.medium)
-                        Button {
-                            guard ensureOnboardingDatabase() else { return }
-                            appState.onboarding.syncCompleted = true
-                            appState.onboarding.goTo(.teamForm)
-                        } label: {
-                            Label("Continue", systemImage: "arrow.right.circle.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .frame(maxWidth: 300)
-                    } else {
-                        // Sync still running
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 36))
-                            .foregroundStyle(Color.accentColor)
-                        Text("Syncing your workspace...")
-                            .font(.title3)
-                            .fontWeight(.medium)
-                        if let p = syncProgress {
-                            syncProgressView(p).frame(maxWidth: 450)
-                        } else {
-                            ProgressView()
-                        }
-                    }
-                }
+                chatWaitingForSyncView
             }
         }
         .task {
@@ -1115,6 +1061,111 @@ struct OnboardingView: View {
                 && appState.onboarding.currentStep == .chat else { return }
             ensureOnboardingDatabase()
             appState.onboarding.goTo(.teamForm)
+        }
+    }
+
+    @ViewBuilder
+    private var chatActiveView: some View {
+        if let vm = onboardingVM {
+            OnboardingChatView(viewModel: vm) {
+                if appState.onboarding.syncCompleted {
+                    appState.onboarding.goTo(.teamForm)
+                } else {
+                    appState.onboarding.chatFinished = true
+                }
+            }
+        } else {
+            ProgressView("Preparing...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+
+        if isRunning {
+            Divider()
+            syncProgressCompactBanner
+        } else if appState.onboarding.syncCompleted {
+            Divider()
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Sync complete!")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var chatWaitingForSyncView: some View {
+        VStack(spacing: 20) {
+            if let err = cliError {
+                chatSyncErrorView(err)
+            } else if !isRunning {
+                chatSyncCompleteView
+            } else {
+                chatSyncInProgressView
+            }
+        }
+    }
+
+    private func chatSyncErrorView(_ err: String) -> some View {
+        Group {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.red)
+            Text("Sync failed")
+                .font(.title3)
+                .fontWeight(.medium)
+            Text(err)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 450)
+            Button("Retry Sync") {
+                cliError = nil
+                runSync()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+    }
+
+    private var chatSyncCompleteView: some View {
+        Group {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.green)
+            Text("Sync complete!")
+                .font(.title3)
+                .fontWeight(.medium)
+            Button {
+                guard ensureOnboardingDatabase() else { return }
+                appState.onboarding.syncCompleted = true
+                appState.onboarding.goTo(.teamForm)
+            } label: {
+                Label("Continue", systemImage: "arrow.right.circle.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(maxWidth: 300)
+        }
+    }
+
+    @ViewBuilder
+    private var chatSyncInProgressView: some View {
+        Image(systemName: "arrow.triangle.2.circlepath")
+            .font(.system(size: 36))
+            .foregroundStyle(Color.accentColor)
+        Text("Syncing your workspace...")
+            .font(.title3)
+            .fontWeight(.medium)
+        if let progress = syncProgress {
+            syncProgressView(progress).frame(maxWidth: 450)
+        } else {
+            ProgressView()
         }
     }
 
@@ -1178,14 +1229,14 @@ struct OnboardingView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.accentColor)
 
-                if let p = syncProgress {
-                    Text("Syncing: \(p.phase)")
+                if let progress = syncProgress {
+                    Text("Syncing: \(progress.phase)")
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
-                    if p.elapsedSec > 0 {
+                    if progress.elapsedSec > 0 {
                         Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
-                        Text(formatElapsed(p.elapsedSec))
+                        Text(formatElapsed(progress.elapsedSec))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1205,8 +1256,8 @@ struct OnboardingView: View {
             }
 
             // Progress bar from current phase
-            if let p = syncProgress {
-                let (done, total) = currentPhaseProgress(p)
+            if let progress = syncProgress {
+                let (done, total) = currentPhaseProgress(progress)
                 if total > 0 {
                     ProgressView(value: Double(done), total: Double(total))
                         .tint(.accentColor)
@@ -1223,22 +1274,22 @@ struct OnboardingView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
-    private func currentPhaseProgress(_ p: SyncProgressData) -> (done: Int, total: Int) {
-        switch p.phase {
+    private func currentPhaseProgress(_ progress: SyncProgressData) -> (done: Int, total: Int) {
+        switch progress.phase {
         case "Discovery":
-            return (p.discoveryPages, p.discoveryTotalPages)
+            return (progress.discoveryPages, progress.discoveryTotalPages)
         case "Messages":
-            return (p.msgChannelsDone, p.msgChannelsTotal)
+            return (progress.msgChannelsDone, progress.msgChannelsTotal)
         case "Users":
-            return (p.userProfilesDone, p.userProfilesTotal)
+            return (progress.userProfilesDone, progress.userProfilesTotal)
         case "Threads":
-            return (p.threadsDone, p.threadsTotal)
+            return (progress.threadsDone, progress.threadsTotal)
         default:
             return (0, 0)
         }
     }
 
-private func syncProgressView(_ p: SyncProgressData) -> some View {
+private func syncProgressView(_ progress: SyncProgressData) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Syncing workspace...").font(.subheadline).fontWeight(.medium)
@@ -1247,20 +1298,47 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
                     Text("\(formatETA(eta)) left").font(.caption).foregroundStyle(.secondary)
                     Text("·").font(.caption).foregroundStyle(.secondary.opacity(0.5))
                 }
-                Text(formatElapsed(p.elapsedSec)).font(.caption).foregroundStyle(.secondary)
+                Text(formatElapsed(progress.elapsedSec)).font(.caption).foregroundStyle(.secondary)
             }
-            syncPhaseRow(label: "Discovery", icon: "magnifyingglass", phase: "Discovery", cur: p.phase,
-                         done: p.discoveryPages, total: p.discoveryTotalPages,
-                         detail: p.discoveryChannels > 0 ? "\(p.discoveryChannels) ch, \(p.discoveryUsers) users, \(fmtNum(p.messagesFetched)) msgs" : nil)
-            syncPhaseRow(label: "Messages", icon: "message", phase: "Messages", cur: p.phase,
-                         done: p.msgChannelsDone, total: p.msgChannelsTotal,
-                         detail: p.messagesFetched > 0 ? "\(fmtNum(p.messagesFetched)) messages" : nil)
-            syncPhaseRow(label: "Users", icon: "person.2", phase: "Users", cur: p.phase,
-                         done: p.userProfilesDone, total: p.userProfilesTotal, detail: nil)
-            syncPhaseRow(label: "Threads", icon: "bubble.left.and.bubble.right", phase: "Threads", cur: p.phase,
-                         done: p.threadsDone, total: p.threadsTotal,
-                         detail: p.threadsFetched > 0 ? "\(fmtNum(p.threadsFetched)) replies" : nil)
-            if p.phase == "Done" {
+            syncPhaseRow(
+                label: "Discovery",
+                icon: "magnifyingglass",
+                phase: "Discovery",
+                cur: progress.phase,
+                done: progress.discoveryPages,
+                total: progress.discoveryTotalPages,
+                detail: progress.discoveryChannels > 0
+                    ? "\(progress.discoveryChannels) ch, \(progress.discoveryUsers) users, \(fmtNum(progress.messagesFetched)) msgs"
+                    : nil
+            )
+            syncPhaseRow(
+                label: "Messages",
+                icon: "message",
+                phase: "Messages",
+                cur: progress.phase,
+                done: progress.msgChannelsDone,
+                total: progress.msgChannelsTotal,
+                detail: progress.messagesFetched > 0 ? "\(fmtNum(progress.messagesFetched)) messages" : nil
+            )
+            syncPhaseRow(
+                label: "Users",
+                icon: "person.2",
+                phase: "Users",
+                cur: progress.phase,
+                done: progress.userProfilesDone,
+                total: progress.userProfilesTotal,
+                detail: nil
+            )
+            syncPhaseRow(
+                label: "Threads",
+                icon: "bubble.left.and.bubble.right",
+                phase: "Threads",
+                cur: progress.phase,
+                done: progress.threadsDone,
+                total: progress.threadsTotal,
+                detail: progress.threadsFetched > 0 ? "\(fmtNum(progress.threadsFetched)) replies" : nil
+            )
+            if progress.phase == "Done" {
                 HStack {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     Text("Sync complete!").font(.caption).fontWeight(.medium)
@@ -1273,18 +1351,22 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
 
     private func syncPhaseRow(label: String, icon: String, phase: String, cur: String, done: Int, total: Int, detail: String?) -> some View {
         let order = ["Metadata": 0, "Discovery": 1, "Messages": 2, "Users": 3, "Threads": 4, "Done": 5]
-        let c = order[cur] ?? 0, t = order[phase] ?? 0
-        let isActive = c == t, isDone = c > t, isWaiting = c < t
+        let curIdx = order[cur] ?? 0, phaseIdx = order[phase] ?? 0
+        let isActive = curIdx == phaseIdx, isDone = curIdx > phaseIdx, isWaiting = curIdx < phaseIdx
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: isDone ? "checkmark.circle.fill" : icon)
                     .foregroundStyle(isDone ? .green : isActive ? .accentColor : .secondary.opacity(0.4))
                     .frame(width: 16)
-                Text(label).font(.caption).fontWeight(isActive ? .semibold : .regular)
+                Text(label)
+                    .font(.caption)
+                    .fontWeight(isActive ? .semibold : .regular)
                     .foregroundStyle(isWaiting ? Color.secondary.opacity(0.4) : Color.primary)
                 Spacer()
                 if isActive && total > 0 {
-                    Text("\(done)/\(total)").font(.caption2).foregroundStyle(.secondary)
+                    Text("\(done)/\(total)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 } else if isDone, let detail {
                     Text(detail).font(.caption2).foregroundStyle(.secondary)
                 }
@@ -1298,19 +1380,19 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
     }
 
     private func formatElapsed(_ s: Double) -> String {
-        let i = Int(s); return i < 60 ? "\(i)s" : "\(i/60)m \(i%60)s"
+        let i = Int(s); return i < 60 ? "\(i)s" : "\(i / 60)m \(i % 60)s"
     }
 
     private func fmtNum(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n)/1_000_000) }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n)/1_000) }
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
         return "\(n)"
     }
 
-    private func updateSyncETA(_ p: SyncProgressData) {
+    private func updateSyncETA(_ progress: SyncProgressData) {
         // Reset timer when phase changes
-        if p.phase != syncLastPhase {
-            syncLastPhase = p.phase
+        if progress.phase != syncLastPhase {
+            syncLastPhase = progress.phase
             syncPhaseStartedAt = Date()
             syncEtaSeconds = nil
             return
@@ -1322,7 +1404,7 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
         }
 
         // Get done/total for current phase
-        let (done, total) = syncPhaseCounts(p)
+        let (done, total) = syncPhaseCounts(progress)
         guard done > 0, total > 0 else {
             syncEtaSeconds = nil
             return
@@ -1339,12 +1421,12 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
         syncEtaSeconds = remaining
     }
 
-    private func syncPhaseCounts(_ p: SyncProgressData) -> (done: Int, total: Int) {
-        switch p.phase {
-        case "Discovery": return (p.discoveryPages, p.discoveryTotalPages)
-        case "Messages": return (p.msgChannelsDone, p.msgChannelsTotal)
-        case "Users": return (p.userProfilesDone, p.userProfilesTotal)
-        case "Threads": return (p.threadsDone, p.threadsTotal)
+    private func syncPhaseCounts(_ progress: SyncProgressData) -> (done: Int, total: Int) {
+        switch progress.phase {
+        case "Discovery": return (progress.discoveryPages, progress.discoveryTotalPages)
+        case "Messages": return (progress.msgChannelsDone, progress.msgChannelsTotal)
+        case "Users": return (progress.userProfilesDone, progress.userProfilesTotal)
+        case "Threads": return (progress.threadsDone, progress.threadsTotal)
         default: return (0, 0)
         }
     }
@@ -1353,9 +1435,9 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
         let s = Int(seconds)
         if s < 5 { return "< 5s" }
         if s < 60 { return "~\(s)s" }
-        let m = s / 60, rem = s % 60
-        if rem == 0 { return "~\(m)m" }
-        return "~\(m)m \(rem)s"
+        let min = s / 60, rem = s % 60
+        if rem == 0 { return "~\(min)m" }
+        return "~\(min)m \(rem)s"
     }
 
     // MARK: - CLI Execution
@@ -1421,7 +1503,7 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
                 ("sync.initial_history_days", "\(days)"),
                 ("digest.model", model.digestModel),
                 ("ai.model", model.aiModel),
-                ("sync.poll_interval", poll.interval),
+                ("sync.poll_interval", poll.interval)
             ]
             for (key, value) in settings {
                 let result = await Self.runCLI(path: path, arguments: ["config", "set", key, value])
@@ -1504,8 +1586,8 @@ private func syncProgressView(_ p: SyncProgressData) -> some View {
 
             // Wait for process exit without blocking main thread
             let exitCode: Int32 = await withCheckedContinuation { cont in
-                process.terminationHandler = { p in
-                    cont.resume(returning: p.terminationStatus)
+                process.terminationHandler = { proc in
+                    cont.resume(returning: proc.terminationStatus)
                 }
             }
 

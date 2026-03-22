@@ -119,12 +119,14 @@ func runSyncStop(cfg *config.Config) error {
 	// Poll until process exits (10s timeout).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			daemon.RemovePID(pidPath)
-			fmt.Println("Daemon stopped.")
-			return nil //nolint:nilerr // err means process exited, which is the desired outcome
+		if err := syscall.Kill(pid, 0); err == nil {
+			// Process still alive, keep waiting
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
-		time.Sleep(200 * time.Millisecond)
+		daemon.RemovePID(pidPath)
+		fmt.Println("Daemon stopped.")
+		return nil
 	}
 	return fmt.Errorf("daemon (PID %d) did not exit within 10 seconds", pid)
 }
@@ -363,7 +365,7 @@ func printProgress(w io.Writer, p *sync.Progress, workspace string) {
 	}
 	output := p.Render(workspace)
 	fmt.Fprintln(w, output)
-	progressLines.Store(int32(strings.Count(output, "\n") + 1)) //nolint:gosec // safe conversion within expected range
+	progressLines.Store(int32(strings.Count(output, "\n") + 1))
 }
 
 func isTerminal(f *os.File) bool {
@@ -398,13 +400,16 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 	}
 
 	out := os.Stdout
+	var chainCtxForTracks string
 	gen, cleanup := cliPooledGenerator(cfg, logger)
 	defer cleanup()
 
-	// Digests
+	// Digests (with chains linked between channel digests and rollups)
 	fmt.Fprintln(out)
 	digestSpinner := ui.NewSpinner(out, "Generating digests...")
 	pipe := digest.New(database, cfg, gen, logger)
+	chainsPipe := chains.New(database, cfg, gen, logger)
+	pipe.ChainLinker = chainsPipe
 	pipe.OnProgress = func(done, total int, status string) {
 		digestSpinner.UpdateProgress(done, total, status)
 	}
@@ -420,6 +425,11 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		}
 	} else {
 		digestSpinner.Stop("No new digests needed")
+	}
+
+	// Inject chain context into tracks pipeline for chain-aware extraction.
+	if chainCtx, err := chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
+		chainCtxForTracks = chainCtx
 	}
 
 	// People cards (REDUCE phase: reads signals from channel digests)
@@ -439,9 +449,10 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		}
 	}
 
-	// Tracks (depends on digests for related_digest_ids)
+	// Tracks (depends on digests + chains for context)
 	trackSpinner := ui.NewSpinner(out, "Extracting tracks...")
 	trackPipe := tracks.New(database, cfg, gen, logger)
+	trackPipe.ChainContext = chainCtxForTracks
 	trackPipe.OnProgress = func(done, total int, status string) {
 		trackSpinner.UpdateProgress(done, total, status)
 	}

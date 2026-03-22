@@ -78,7 +78,7 @@ final class ChainQueryTests: XCTestCase {
         }
         let chain = try db.read { try ChainQueries.fetchByID($0, id: 1) }
         XCTAssertEqual(chain?.status, "resolved")
-        XCTAssertTrue(chain!.isResolved)
+        XCTAssertTrue(try XCTUnwrap(chain).isResolved)
     }
 
     func testFetchChainsForDigest() throws {

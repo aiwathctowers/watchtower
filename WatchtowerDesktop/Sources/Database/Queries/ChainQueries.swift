@@ -37,18 +37,26 @@ enum ChainQueries {
 
     /// Fetch child chains of a parent.
     static func fetchChildren(_ db: Database, parentID: Int) throws -> [Chain] {
-        try Chain.fetchAll(db, sql: """
-            SELECT * FROM chains WHERE parent_id = ?
-            ORDER BY last_seen DESC
-            """, arguments: [parentID])
+        try Chain.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM chains WHERE parent_id = ?
+                ORDER BY last_seen DESC
+                """,
+            arguments: [parentID]
+        )
     }
 
     /// Fetch all refs for a chain, ordered by timestamp.
     static func fetchRefs(_ db: Database, chainID: Int) throws -> [ChainRef] {
-        try ChainRef.fetchAll(db, sql: """
-            SELECT * FROM chain_refs WHERE chain_id = ?
-            ORDER BY timestamp ASC
-            """, arguments: [chainID])
+        try ChainRef.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM chain_refs WHERE chain_id = ?
+                ORDER BY timestamp ASC
+                """,
+            arguments: [chainID]
+        )
     }
 
     /// Count of active chains.
@@ -90,21 +98,29 @@ enum ChainQueries {
 
     /// Fetch chains that contain a specific digest's decisions or the digest itself.
     static func fetchChainsForDigest(_ db: Database, digestID: Int) throws -> [Chain] {
-        try Chain.fetchAll(db, sql: """
-            SELECT DISTINCT c.* FROM chains c
-            JOIN chain_refs cr ON cr.chain_id = c.id
-            WHERE cr.digest_id = ?
-            ORDER BY c.last_seen DESC
-            """, arguments: [digestID])
+        try Chain.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT c.* FROM chains c
+                JOIN chain_refs cr ON cr.chain_id = c.id
+                WHERE cr.digest_id = ?
+                ORDER BY c.last_seen DESC
+                """,
+            arguments: [digestID]
+        )
     }
 
     /// Fetch chains that contain a specific track.
     static func fetchChainsForTrack(_ db: Database, trackID: Int) throws -> [Chain] {
-        try Chain.fetchAll(db, sql: """
-            SELECT DISTINCT c.* FROM chains c
-            JOIN chain_refs cr ON cr.chain_id = c.id
-            WHERE cr.track_id = ? AND cr.ref_type = 'track'
-            ORDER BY c.last_seen DESC
-            """, arguments: [trackID])
+        try Chain.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT c.* FROM chains c
+                JOIN chain_refs cr ON cr.chain_id = c.id
+                WHERE cr.track_id = ? AND cr.ref_type = 'track'
+                ORDER BY c.last_seen DESC
+                """,
+            arguments: [trackID]
+        )
     }
 }

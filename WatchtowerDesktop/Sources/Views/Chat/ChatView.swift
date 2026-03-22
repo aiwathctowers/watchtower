@@ -26,62 +26,13 @@ private struct ChatSplitView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Main chat area (left)
             VStack(spacing: 0) {
-                // Toolbar row
-                HStack(spacing: 8) {
-                    Picker("Model", selection: $chatVM.selectedModel) {
-                        ForEach(ChatModel.allCases) { model in
-                            Text(model.displayName).tag(model)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(width: 130)
-                    .disabled(chatVM.isStreaming)
-
-                    Button {
-                        createNewChat()
-                    } label: {
-                        Image(systemName: "plus.message")
-                    }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .help("New Chat")
-
-                    if chatVM.conversationID != nil {
-                        Button(role: .destructive) {
-                            showDeleteConfirmation = true
-                        } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .keyboardShortcut(.delete, modifiers: .command)
-                        .help("Delete Chat")
-                    }
-
-                    Spacer()
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showHistory.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.trailing")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Toggle Chat History")
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-
+                chatToolbar
                 Divider()
-
                 chatContent
             }
             .frame(maxWidth: .infinity)
 
-            // Right panel: chat history
             if showHistory {
                 ResizeHandle { delta in
                     historyWidth = min(max(historyWidth - delta, 160), 400)
@@ -125,6 +76,54 @@ private struct ChatSplitView: View {
         if let next = historyVM.conversations.first {
             chatVM.bind(to: next)
         }
+    }
+
+    private var chatToolbar: some View {
+        HStack(spacing: 8) {
+            Picker("Model", selection: $chatVM.selectedModel) {
+                ForEach(ChatModel.allCases) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 130)
+            .disabled(chatVM.isStreaming)
+
+            Button {
+                createNewChat()
+            } label: {
+                Image(systemName: "plus.message")
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .help("New Chat")
+
+            if chatVM.conversationID != nil {
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.delete, modifiers: .command)
+                .help("Delete Chat")
+            }
+
+            Spacer()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showHistory.toggle()
+                }
+            } label: {
+                Image(systemName: "sidebar.trailing")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle Chat History")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private var chatContent: some View {

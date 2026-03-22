@@ -163,18 +163,14 @@ enum RoleLevel: String, Codable {
 struct RoleDetermination {
     let reportsToThem: Bool      // Q1: "People report to you?"
     let setStrategy: Bool        // Q2: "You set strategy?" (only if Q1=true)
-    let manageManagers: Bool?    // Q3: "Do you manage other managers?" (only if Q1=true AND Q2=true)
+    let manageManagers: Bool     // Q3: "Do you manage other managers?" (only if Q1=true AND Q2=true)
     let influenceType: String?   // Q2b: "expertise" or "tasks" (only if Q1=false)
 
     var roleLevel: RoleLevel {
         if reportsToThem {
             if setStrategy {
                 // Q1=true, Q2=true → need Q3
-                if let manageManagers = manageManagers {
-                    return manageManagers ? .topManagement : .directionOwner
-                }
-                // Q3 not answered yet, default to direction owner
-                return .directionOwner
+                return manageManagers ? .topManagement : .directionOwner
             } else {
                 // Q1=true, Q2=false
                 return .middleManagement
@@ -189,7 +185,7 @@ struct RoleDetermination {
         }
     }
 
-    static func forIC() -> RoleDetermination {
-        RoleDetermination(reportsToThem: false, setStrategy: false, manageManagers: nil, influenceType: "tasks")
+    static func forIC() -> Self {
+        Self(reportsToThem: false, setStrategy: false, manageManagers: false, influenceType: "tasks")
     }
 }

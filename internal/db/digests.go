@@ -4,14 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 )
 
 // UpsertDigest inserts or replaces a digest based on the unique constraint
 // (channel_id, type, period_from, period_to).
 func (db *DB) UpsertDigest(d Digest) (int64, error) {
-	_, err := db.Exec(`INSERT INTO digests (channel_id, type, period_from, period_to, summary, topics, decisions, action_items, people_signals, situations, message_count, model, input_tokens, output_tokens, cost_usd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := db.Exec(`INSERT INTO digests (channel_id, type, period_from, period_to, summary, topics, decisions, action_items, people_signals, situations, running_summary, message_count, model, input_tokens, output_tokens, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_id, type, period_from, period_to) DO UPDATE SET
 			summary = excluded.summary,
 			topics = excluded.topics,
@@ -19,6 +21,7 @@ func (db *DB) UpsertDigest(d Digest) (int64, error) {
 			action_items = excluded.action_items,
 			people_signals = excluded.people_signals,
 			situations = excluded.situations,
+			running_summary = excluded.running_summary,
 			message_count = excluded.message_count,
 			model = excluded.model,
 			input_tokens = excluded.input_tokens,
@@ -26,7 +29,7 @@ func (db *DB) UpsertDigest(d Digest) (int64, error) {
 			cost_usd = excluded.cost_usd,
 			created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`,
 		d.ChannelID, d.Type, d.PeriodFrom, d.PeriodTo,
-		d.Summary, d.Topics, d.Decisions, d.ActionItems, d.PeopleSignals, d.Situations,
+		d.Summary, d.Topics, d.Decisions, d.ActionItems, d.PeopleSignals, d.Situations, d.RunningSummary,
 		d.MessageCount, d.Model, d.InputTokens, d.OutputTokens, d.CostUSD)
 	if err != nil {
 		return 0, fmt.Errorf("upserting digest: %w", err)
@@ -57,13 +60,17 @@ func (db *DB) populateDigestParticipants(digestID int64, situationsJSON string) 
 	}
 
 	// Delete existing participants for this digest (idempotent on re-upsert)
-	db.Exec(`DELETE FROM digest_participants WHERE digest_id = ?`, digestID)
+	if _, err := db.Exec(`DELETE FROM digest_participants WHERE digest_id = ?`, digestID); err != nil {
+		slog.Warn("failed to delete digest participants", "digest_id", digestID, "error", err)
+	}
 
 	for idx, s := range situations {
 		for _, p := range s.Participants {
 			if p.UserID != "" {
-				db.Exec(`INSERT OR IGNORE INTO digest_participants (digest_id, user_id, situation_idx, role) VALUES (?, ?, ?, ?)`,
-					digestID, p.UserID, idx, p.Role)
+				if _, err := db.Exec(`INSERT OR IGNORE INTO digest_participants (digest_id, user_id, situation_idx, role) VALUES (?, ?, ?, ?)`,
+					digestID, p.UserID, idx, p.Role); err != nil {
+					slog.Warn("failed to insert digest participant", "digest_id", digestID, "user_id", p.UserID, "error", err)
+				}
 			}
 		}
 	}
@@ -80,7 +87,7 @@ type DigestFilter struct {
 
 // GetDigests returns digests matching the filter, newest first.
 func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
-	query := `SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at FROM digests`
+	query := `SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, running_summary, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at FROM digests`
 	var conditions []string
 	var args []any
 
@@ -124,7 +131,7 @@ func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
 	for rows.Next() {
 		var d Digest
 		if err := rows.Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
-			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations,
+			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations, &d.RunningSummary,
 			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt); err != nil {
 			return nil, fmt.Errorf("scanning digest: %w", err)
 		}
@@ -137,11 +144,11 @@ func (db *DB) GetDigests(f DigestFilter) ([]Digest, error) {
 // or nil if none exists.
 func (db *DB) GetLatestDigest(channelID, digestType string) (*Digest, error) {
 	var d Digest
-	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
+	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, running_summary, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
 		FROM digests WHERE channel_id = ? AND type = ?
 		ORDER BY period_to DESC LIMIT 1`, channelID, digestType).
 		Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
-			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations,
+			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations, &d.RunningSummary,
 			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -155,10 +162,10 @@ func (db *DB) GetLatestDigest(channelID, digestType string) (*Digest, error) {
 // GetDigestByID returns a single digest by its ID.
 func (db *DB) GetDigestByID(id int) (*Digest, error) {
 	var d Digest
-	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
+	err := db.QueryRow(`SELECT id, channel_id, period_from, period_to, type, summary, topics, decisions, action_items, people_signals, situations, running_summary, message_count, model, input_tokens, output_tokens, cost_usd, created_at, read_at
 		FROM digests WHERE id = ?`, id).
 		Scan(&d.ID, &d.ChannelID, &d.PeriodFrom, &d.PeriodTo, &d.Type,
-			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations,
+			&d.Summary, &d.Topics, &d.Decisions, &d.ActionItems, &d.PeopleSignals, &d.Situations, &d.RunningSummary,
 			&d.MessageCount, &d.Model, &d.InputTokens, &d.OutputTokens, &d.CostUSD, &d.CreatedAt, &d.ReadAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -316,6 +323,59 @@ func (db *DB) GetDigestDecisionsForChannel(channelID string, periodFrom, periodT
 		}
 	}
 	return result, rows.Err()
+}
+
+// RunningSummaryResult holds the running summary and its age in days.
+type RunningSummaryResult struct {
+	Summary string
+	AgeDays float64
+}
+
+// GetLatestRunningSummaryWithAge returns the running_summary from the most recent
+// digest for the given channel/type, along with how many days old it is.
+// Returns nil if no digest with a non-empty running_summary exists.
+func (db *DB) GetLatestRunningSummaryWithAge(channelID, digestType string) (*RunningSummaryResult, error) {
+	var summary, createdAt string
+	err := db.QueryRow(`SELECT running_summary, created_at FROM digests
+		WHERE channel_id = ? AND type = ? AND running_summary != ''
+		ORDER BY period_to DESC LIMIT 1`, channelID, digestType).
+		Scan(&summary, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting latest running summary: %w", err)
+	}
+
+	var ageDays float64
+	if t, parseErr := time.Parse("2006-01-02T15:04:05Z", createdAt); parseErr == nil {
+		ageDays = time.Since(t).Hours() / 24
+	}
+
+	return &RunningSummaryResult{Summary: summary, AgeDays: ageDays}, nil
+}
+
+// ResetRunningSummary clears the running_summary for all digests of the given
+// channel and type. If channelID is empty, clears for all channels of that type.
+// If digestType is also empty, clears all running summaries.
+func (db *DB) ResetRunningSummary(channelID, digestType string) (int64, error) {
+	query := `UPDATE digests SET running_summary = '' WHERE running_summary != ''`
+	var args []any
+
+	if channelID != "" {
+		query += ` AND channel_id = ?`
+		args = append(args, channelID)
+	}
+	if digestType != "" {
+		query += ` AND type = ?`
+		args = append(args, digestType)
+	}
+
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("resetting running summary: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // ChannelNameByID returns the channel name for a given channel ID.

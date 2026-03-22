@@ -3,7 +3,13 @@ import SwiftUI
 struct GuideDetailView: View {
     let guide: CommunicationGuide
     let userName: String
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
+
+    private static let periodFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d, yyyy"
+        return fmt
+    }()
 
     var body: some View {
         ScrollView {
@@ -33,11 +39,7 @@ struct GuideDetailView: View {
                 Text("Communication Guide")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                let from = guide.periodFromDate
-                let to = guide.periodToDate
-                let fmt = DateFormatter()
-                let _ = fmt.dateFormat = "MMM d, yyyy"
-                Text("\(fmt.string(from: from)) – \(fmt.string(from: to))")
+                Text("\(Self.periodFormatter.string(from: guide.periodFromDate)) – \(Self.periodFormatter.string(from: guide.periodToDate))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -59,7 +61,7 @@ struct GuideDetailView: View {
         LazyVGrid(columns: [
             GridItem(.flexible()),
             GridItem(.flexible()),
-            GridItem(.flexible()),
+            GridItem(.flexible())
         ], spacing: 8) {
             statCard("Messages", value: "\(guide.messageCount)")
             statCard("Channels", value: "\(guide.channelsActive)")
@@ -180,7 +182,7 @@ struct GuideDetailView: View {
                             RoundedRectangle(cornerRadius: 1)
                                 .fill(count > 0 ? Color.accentColor : Color.gray.opacity(0.2))
                                 .frame(width: 8, height: max(2, height))
-                            if hour % 6 == 0 {
+                            if hour.isMultiple(of: 6) {
                                 Text("\(hour)")
                                     .font(.system(size: 8))
                                     .foregroundStyle(.secondary)

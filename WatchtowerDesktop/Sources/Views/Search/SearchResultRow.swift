@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SearchResultRow: View {
     let result: SearchResult
-    var slackChannelURL: URL? = nil
+    var slackChannelURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

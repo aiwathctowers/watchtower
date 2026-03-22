@@ -423,7 +423,7 @@ func TestGenerateFunc(t *testing.T) {
 	result, err := gen.GenerateText(context.Background(), "my prompt")
 	require.NoError(t, err)
 	assert.Equal(t, "result", result)
-	assert.Equal(t, "", calledSystem)     // GenerateFunc passes "" for system
+	assert.Equal(t, "", calledSystem) // GenerateFunc passes "" for system
 	assert.Equal(t, "my prompt", calledUser)
 }
 

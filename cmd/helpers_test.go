@@ -304,7 +304,6 @@ func TestPrintLastLines(t *testing.T) {
 	assert.Len(t, lines, 10)
 }
 
-
 func TestDbFileSize_Nonexistent(t *testing.T) {
 	assert.Equal(t, int64(0), dbFileSize("/nonexistent/file/path"))
 }

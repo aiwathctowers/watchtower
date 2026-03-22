@@ -3,9 +3,13 @@ import GRDB
 enum ProfileQueries {
     static func fetchProfile(_ db: Database, slackUserID: String) throws -> UserProfile? {
         guard try db.tableExists("user_profile") else { return nil }
-        return try UserProfile.fetchOne(db, sql: """
-            SELECT * FROM user_profile WHERE slack_user_id = ?
-            """, arguments: [slackUserID])
+        return try UserProfile.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM user_profile WHERE slack_user_id = ?
+                """,
+            arguments: [slackUserID]
+        )
     }
 
     static func fetchCurrentProfile(_ db: Database) throws -> UserProfile? {
@@ -43,7 +47,7 @@ enum ProfileQueries {
                 profile.responsibilities, profile.reports, profile.peers, profile.manager,
                 profile.starredChannels, profile.starredPeople,
                 profile.painPoints, profile.trackFocus,
-                profile.onboardingDone, profile.customPromptContext,
+                profile.onboardingDone, profile.customPromptContext
             ])
     }
 

@@ -30,9 +30,9 @@ final class GuideViewModel {
                 let users = try UserQueries.fetchAll(db, activeOnly: false)
 
                 var nameMap: [String: String] = [:]
-                for u in users {
-                    let name = u.displayName.isEmpty ? u.name : u.displayName
-                    nameMap[u.id] = name
+                for user in users {
+                    let name = user.displayName.isEmpty ? user.name : user.displayName
+                    nameMap[user.id] = name
                 }
 
                 let guides: [CommunicationGuide]
@@ -72,13 +72,13 @@ final class GuideViewModel {
         let window = availableWindows[index]
         do {
             let result = try dbManager.dbPool.read { db in
-                let g = try GuideQueries.fetchForWindow(
+                let guides = try GuideQueries.fetchForWindow(
                     db, periodFrom: window.from, periodTo: window.to
                 )
                 let gs = try GuideQueries.fetchGuideSummary(
                     db, periodFrom: window.from, periodTo: window.to
                 )
-                return (g, gs)
+                return (guides, gs)
             }
             guides = result.0
             guideSummary = result.1

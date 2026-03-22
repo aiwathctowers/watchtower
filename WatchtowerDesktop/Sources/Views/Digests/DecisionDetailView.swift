@@ -4,7 +4,7 @@ import SwiftUI
 struct DecisionDetailView: View {
     let entry: DecisionEntry
     let viewModel: DigestViewModel
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
     @State private var markingRead = false
     @State private var markedRead = false
@@ -13,153 +13,165 @@ struct DecisionDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header
-                HStack(alignment: .center) {
-                    EditableImportanceBadge(
-                        importance: entry.effectiveImportance,
-                        isCorrected: entry.correctedImportance != nil
-                    ) { newImportance in
-                        viewModel.setDecisionImportance(entry, newImportance: newImportance)
-                    }
+                headerSection
+                decisionTextSection
+                Divider()
+                digestContextSection
+                channelActionsSection
+            }
+            .padding()
+        }
+    }
 
-                    if let name = entry.channelName {
-                        if let url = viewModel.slackChannelURL(channelID: entry.channelID) {
-                            Link(destination: url) {
-                                Text("#\(name)")
-                                    .font(.title3)
-                                    .fontWeight(.semibold)
-                            }
-                            .buttonStyle(.borderless)
-                        } else {
-                            Text("#\(name)")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
-                    } else {
-                        Text("Cross-channel")
+    private var headerSection: some View {
+        HStack(alignment: .center) {
+            EditableImportanceBadge(
+                importance: entry.effectiveImportance,
+                isCorrected: entry.correctedImportance != nil
+            ) { newImportance in
+                viewModel.setDecisionImportance(entry, newImportance: newImportance)
+            }
+
+            if let name = entry.channelName {
+                if let url = viewModel.slackChannelURL(channelID: entry.channelID) {
+                    Link(destination: url) {
+                        Text("#\(name)")
                             .font(.title3)
                             .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Text("#\(name)")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                }
+            } else {
+                Text("Cross-channel")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+            }
+
+            Spacer()
+
+            Text(TimeFormatting.shortDateTime(from: entry.date))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let onClose {
+                Button { onClose() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var decisionTextSection: some View {
+        HStack(alignment: .top, spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(importanceColor)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(entry.decision.text)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack {
+                    if let by = entry.decision.by, !by.isEmpty {
+                        Label(by, systemImage: "person")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     Spacer()
 
-                    Text(TimeFormatting.shortDateTime(from: entry.date))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if let onClose {
-                        Button { onClose() } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-
-                // Decision text with left bar
-                HStack(alignment: .top, spacing: 0) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(importanceColor)
-                        .frame(width: 3)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(entry.decision.text)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        HStack {
-                            if let by = entry.decision.by, !by.isEmpty {
-                                Label(by, systemImage: "person")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if let ts = entry.messageTS,
-                               let url = viewModel.slackMessageURL(channelID: entry.channelID, messageTS: ts) {
-                                Link(destination: url) {
-                                    Label("View in Slack", systemImage: "arrow.up.right.square")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                    }
-                    .padding(.leading, 12)
-                }
-
-                Divider()
-
-                // Context: parent digest
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Text("From digest")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-
-                        Text(entry.digestType.capitalized)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(typeColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(typeColor.opacity(0.12), in: Capsule())
-
-                        Text("#\(entry.digestID)")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Text(entry.digestSummary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                // Open channel in Slack + mark read
-                if !entry.channelID.isEmpty {
-                    HStack(spacing: 12) {
-                        Button {
-                            markChannelRead()
-                        } label: {
-                            if markingRead {
-                                ProgressView()
-                                    .controlSize(.mini)
-                            } else {
-                                Label(
-                                    markedRead ? "Marked read" : "Mark read in Slack",
-                                    systemImage: markedRead ? "checkmark.circle.fill" : "eye"
-                                )
+                    if let ts = entry.messageTS,
+                       let url = viewModel.slackMessageURL(
+                        channelID: entry.channelID,
+                        messageTS: ts
+                       ) {
+                        Link(destination: url) {
+                            Label("View in Slack", systemImage: "arrow.up.right.square")
                                 .font(.caption)
-                                .foregroundStyle(markedRead ? .green : .accentColor)
-                            }
                         }
                         .buttonStyle(.borderless)
-                        .disabled(markingRead || markedRead)
-
-                        if let err = markReadError {
-                            Text(err)
-                                .font(.caption2)
-                                .foregroundStyle(.red)
-                        }
-
-                        Spacer()
-
-                        if let dbManager = appState.databaseManager {
-                            FeedbackButtons(
-                                entityType: "decision",
-                                entityID: "\(entry.digestID):\(entry.decisionIdx)",
-                                dbManager: dbManager
-                            )
-                        }
                     }
                 }
             }
-            .padding()
+            .padding(.leading, 12)
+        }
+    }
+
+    private var digestContextSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("From digest")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                Text(entry.digestType.capitalized)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(typeColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(typeColor.opacity(0.12), in: Capsule())
+
+                Text("#\(entry.digestID)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Text(entry.digestSummary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var channelActionsSection: some View {
+        if !entry.channelID.isEmpty {
+            HStack(spacing: 12) {
+                Button {
+                    markChannelRead()
+                } label: {
+                    if markingRead {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Label(
+                            markedRead ? "Marked read" : "Mark read in Slack",
+                            systemImage: markedRead ? "checkmark.circle.fill" : "eye"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(markedRead ? .green : .accentColor)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(markingRead || markedRead)
+
+                if let err = markReadError {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+
+                Spacer()
+
+                if let dbManager = appState.databaseManager {
+                    FeedbackButtons(
+                        entityType: "decision",
+                        entityID: "\(entry.digestID):\(entry.decisionIdx)",
+                        dbManager: dbManager
+                    )
+                }
+            }
         }
     }
 

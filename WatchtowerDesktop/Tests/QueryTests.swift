@@ -230,8 +230,13 @@ final class DigestQueryTests: XCTestCase {
         let db = try TestDatabase.create()
         try db.write { db in
             try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400, decisions: "[]")
-            try TestDatabase.insertDigest(db, channelID: "C002", periodFrom: 1700000000, periodTo: 1700086400,
-                                          decisions: #"[{"text":"Use Go"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C002",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                decisions: #"[{"text":"Use Go"}]"#
+            )
         }
         let withDecisions = try db.read { try DigestQueries.fetchWithDecisions($0) }
         XCTAssertEqual(withDecisions.count, 1)
@@ -241,10 +246,20 @@ final class DigestQueryTests: XCTestCase {
     func testFetchNewSince() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400,
-                                          decisions: #"[{"text":"Old"}]"#)
-            try TestDatabase.insertDigest(db, channelID: "C002", periodFrom: 1700086400, periodTo: 1700172800,
-                                          decisions: #"[{"text":"New"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C001",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                decisions: #"[{"text":"Old"}]"#
+            )
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C002",
+                periodFrom: 1700086400,
+                periodTo: 1700172800,
+                decisions: #"[{"text":"New"}]"#
+            )
         }
         let newer = try db.read { try DigestQueries.fetchNewSince($0, afterID: 1) }
         XCTAssertEqual(newer.count, 1)
@@ -501,12 +516,27 @@ final class UserAnalysisQueryTests: XCTestCase {
     func testCountRedFlags() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["Low engagement"]"#)
-            try TestDatabase.insertUserAnalysis(db, userID: "U002", periodFrom: 100, periodTo: 200,
-                                                 redFlags: "[]")
-            try TestDatabase.insertUserAnalysis(db, userID: "U003", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["Issue 1","Issue 2"]"#)
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U001",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: #"["Low engagement"]"#
+            )
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U002",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: "[]"
+            )
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U003",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: #"["Issue 1","Issue 2"]"#
+            )
         }
         let count = try db.read { try UserAnalysisQueries.countRedFlags($0) }
         XCTAssertEqual(count, 2) // U001 and U003 have red flags
@@ -700,7 +730,7 @@ final class ChatConversationQueryTests: XCTestCase {
             try ChatConversationQueries.touch(db, id: conv.id)
         }
         let updated = try db.read { try ChatConversationQueries.fetchByID($0, id: conv.id) }
-        XCTAssertTrue(updated!.updatedAt > originalUpdated)
+        XCTAssertTrue(try XCTUnwrap(updated).updatedAt > originalUpdated)
     }
 
     func testDisplayTitle() throws {
@@ -712,7 +742,7 @@ final class ChatConversationQueryTests: XCTestCase {
         XCTAssertEqual(conv.displayTitle, "New Chat")
 
         let conv2 = try db.write { db -> ChatConversation in
-            return try ChatConversationQueries.create(db, title: "My Chat")
+            try ChatConversationQueries.create(db, title: "My Chat")
         }
         XCTAssertEqual(conv2.displayTitle, "My Chat")
     }
@@ -778,7 +808,7 @@ final class ProfileQueryTests: XCTestCase {
         }
 
         // Read, modify, upsert
-        let original = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }!
+        let original = try XCTUnwrap(db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") })
         var updated = original
         updated.role = "Tech Lead"
         updated.team = "Platform"
@@ -829,12 +859,12 @@ final class ProfileQueryTests: XCTestCase {
                 trackFocus: #"["blockers","deadlines"]"#
             )
         }
-        let p = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }!
-        XCTAssertEqual(p.decodedReports, ["U1", "U2"])
-        XCTAssertEqual(p.decodedPeers, ["U3"])
-        XCTAssertEqual(p.decodedStarredChannels, ["C1", "C2", "C3"])
-        XCTAssertEqual(p.decodedStarredPeople, ["U4"])
-        XCTAssertEqual(p.decodedPainPoints, ["lost decisions"])
-        XCTAssertEqual(p.decodedTrackFocus, ["blockers", "deadlines"])
+        let profile = try XCTUnwrap(db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") })
+        XCTAssertEqual(profile.decodedReports, ["U1", "U2"])
+        XCTAssertEqual(profile.decodedPeers, ["U3"])
+        XCTAssertEqual(profile.decodedStarredChannels, ["C1", "C2", "C3"])
+        XCTAssertEqual(profile.decodedStarredPeople, ["U4"])
+        XCTAssertEqual(profile.decodedPainPoints, ["lost decisions"])
+        XCTAssertEqual(profile.decodedTrackFocus, ["blockers", "deadlines"])
     }
 }

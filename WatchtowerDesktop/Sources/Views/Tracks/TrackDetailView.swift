@@ -3,7 +3,7 @@ import SwiftUI
 struct TrackDetailView: View {
     let item: Track
     let viewModel: TracksViewModel
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
     @State private var history: [TrackHistoryEntry] = []
     @State private var chatVM: TrackChatViewModel?
@@ -593,24 +593,25 @@ struct TrackDetailView: View {
         }
     }
 
+    private static let historyColorMap: [String: Color] = [
+        "created": .green,
+        "accepted": .teal,
+        "status_changed": .blue,
+        "snoozed": .purple,
+        "reactivated": .orange,
+        "update_detected": .yellow,
+        "update_read": .gray,
+        "reopened": .orange,
+        "priority_changed": .pink,
+        "re_extracted": .cyan,
+        "decision_evolved": .indigo,
+        "digest_linked": .blue,
+        "sub_items_updated": .mint,
+        "context_updated": .teal,
+        "due_date_changed": .orange
+    ]
+
     private func historyColor(_ event: String) -> Color {
-        switch event {
-        case "created": .green
-        case "accepted": .teal
-        case "status_changed": .blue
-        case "snoozed": .purple
-        case "reactivated": .orange
-        case "update_detected": .yellow
-        case "update_read": .gray
-        case "reopened": .orange
-        case "priority_changed": .pink
-        case "re_extracted": .cyan
-        case "decision_evolved": .indigo
-        case "digest_linked": .blue
-        case "sub_items_updated": .mint
-        case "context_updated": .teal
-        case "due_date_changed": .orange
-        default: .secondary
-        }
+        Self.historyColorMap[event] ?? .secondary
     }
 }

@@ -16,11 +16,11 @@ struct DecisionsListView: View {
             items = items.filter { !$0.isRead }
         }
         if !searchText.isEmpty {
-            let q = searchText.lowercased()
+            let query = searchText.lowercased()
             items = items.filter { entry in
-                if entry.decision.text.lowercased().contains(q) { return true }
-                if let name = entry.channelName, name.lowercased().contains(q) { return true }
-                if let by = entry.decision.by, by.lowercased().contains(q) { return true }
+                if entry.decision.text.lowercased().contains(query) { return true }
+                if let name = entry.channelName, name.lowercased().contains(query) { return true }
+                if let by = entry.decision.by, by.lowercased().contains(query) { return true }
                 return false
             }
         }

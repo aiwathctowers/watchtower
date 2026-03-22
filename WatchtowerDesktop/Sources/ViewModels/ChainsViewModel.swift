@@ -11,15 +11,34 @@ final class ChainsViewModel {
     var errorMessage: String?
     var activeChainCount: Int = 0
     var unreadChainCount: Int = 0
-    var statusFilter: String? = nil  // nil = all, "active", "resolved", "stale"
+    var statusFilter: String?   // nil = all, "active", "resolved", "stale"
 
     // Pre-fetched caches
     private var channelNameCache: [String: String] = [:]
     private var digestCache: [Int: Digest] = [:]
     private let dbManager: DatabaseManager
+    private var observationTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    /// Start observing the chains table for live updates.
+    func startObserving() {
+        guard observationTask == nil else { return }
+        load()
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chains") ?? 0
+            }
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    self?.load()
+                }
+            } catch {}
+        }
     }
 
     private(set) var workspaceTeamID: String?
@@ -94,8 +113,8 @@ final class ChainsViewModel {
             try dbManager.dbPool.read { db in
                 for ref in refs {
                     if (ref.isDecision || ref.isDigest) && digestCache[ref.digestID] == nil {
-                        if let d = try DigestQueries.fetchByID(db, id: ref.digestID) {
-                            digestCache[ref.digestID] = d
+                        if let digest = try DigestQueries.fetchByID(db, id: ref.digestID) {
+                            digestCache[ref.digestID] = digest
                         }
                     }
                 }
@@ -200,8 +219,8 @@ final class ChainsViewModel {
         guard ref.isDecision, let digest = digestCache[ref.digestID] else { return nil }
         let decisions = digest.parsedDecisions
         guard ref.decisionIdx < decisions.count else { return nil }
-        let d = decisions[ref.decisionIdx]
-        return (text: d.text, by: d.by ?? "", importance: d.resolvedImportance)
+        let decision = decisions[ref.decisionIdx]
+        return (text: decision.text, by: decision.by ?? "", importance: decision.resolvedImportance)
     }
 
     /// Returns the digest summary for a digest ref.

@@ -25,9 +25,28 @@ final class TracksViewModel {
     private(set) var workspaceTeamID: String?
     private let dbManager: DatabaseManager
     private var currentUserID: String?
+    private var observationTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    /// Start observing the tracks table for live updates.
+    func startObserving() {
+        guard observationTask == nil else { return }
+        load()
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tracks") ?? 0
+            }
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    self?.load()
+                }
+            } catch {}
+        }
     }
 
     var inboxItems: [Track] {
@@ -197,11 +216,15 @@ final class TracksViewModel {
         guard let uid = currentUserID else { return [] }
         do {
             return try dbManager.dbPool.read { db in
-                let rows = try Row.fetchAll(db, sql: """
-                    SELECT DISTINCT channel_id, source_channel_name FROM tracks
-                    WHERE assignee_user_id = ?
-                    ORDER BY source_channel_name
-                    """, arguments: [uid])
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT DISTINCT channel_id, source_channel_name FROM tracks
+                        WHERE assignee_user_id = ?
+                        ORDER BY source_channel_name
+                        """,
+                    arguments: [uid]
+                )
                 return rows.map { row in
                     let chID: String = row["channel_id"]
                     let name: String = row["source_channel_name"] ?? chID

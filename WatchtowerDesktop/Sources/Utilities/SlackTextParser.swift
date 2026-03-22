@@ -6,6 +6,23 @@ import AppKit
 /// Parses Slack mrkdwn into plain text or AttributedString.
 enum SlackTextParser {
 
+    // MARK: - Compiled regex patterns
+
+    // swiftformat:disable all
+    private static let linkPattern = try? NSRegularExpression(pattern: #"<(https?://[^|>]+)\|([^>]+)>"#)
+    private static let bareLinkPattern = try? NSRegularExpression(pattern: #"<(https?://[^>]+)>"#)
+    private static let userMentionPattern = try? NSRegularExpression(pattern: #"<@(U[A-Z0-9]+)>"#)
+    private static let channelMentionPattern = try? NSRegularExpression(pattern: #"<#C[A-Z0-9]+\|([^>]+)>"#)
+    private static let specialMentionPattern = try? NSRegularExpression(pattern: #"<!(\w+)(\|[^>]+)?>"#)
+    private static let codeBlockRegex = try? NSRegularExpression(pattern: #"```[\s\S]*?```"#, options: [.dotMatchesLineSeparators])
+    private static let inlineCodeRegex = try? NSRegularExpression(pattern: #"`([^`]+)`"#)
+    private static let boldRegex = try? NSRegularExpression(pattern: #"(?<!\w)\*([^\*]+)\*(?!\w)"#)
+    private static let italicRegex = try? NSRegularExpression(pattern: #"(?<!\w)_([^_]+)_(?!\w)"#)
+    private static let strikeRegex = try? NSRegularExpression(pattern: #"(?<!\w)~([^~]+)~(?!\w)"#)
+    private static let blockquoteRegex = try? NSRegularExpression(pattern: #"(?m)^&gt;\s?"#)
+    private static let codeBlockCaptureRegex = try? NSRegularExpression(pattern: #"```([\s\S]*?)```"#, options: [.dotMatchesLineSeparators])
+    // swiftformat:enable all
+
     // MARK: - Plain text (strips all formatting)
 
     /// Convert Slack mrkdwn to plain text
@@ -41,33 +58,38 @@ enum SlackTextParser {
         var text = input
 
         // Resolve links: <https://url|display text> → display text, <https://url> → url
-        let linkPattern = try! NSRegularExpression(pattern: #"<(https?://[^|>]+)\|([^>]+)>"#)
-        text = linkPattern.stringByReplacingMatches(
-            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$2"
-        )
+        if let pattern = linkPattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$2"
+            )
+        }
 
-        let bareLink = try! NSRegularExpression(pattern: #"<(https?://[^>]+)>"#)
-        text = bareLink.stringByReplacingMatches(
-            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1"
-        )
+        if let pattern = bareLinkPattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "$1"
+            )
+        }
 
         // User mentions: <@U123ABC> → @U123ABC
-        let userMention = try! NSRegularExpression(pattern: #"<@(U[A-Z0-9]+)>"#)
-        text = userMention.stringByReplacingMatches(
-            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
-        )
+        if let pattern = userMentionPattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
+            )
+        }
 
         // Channel mentions: <#C123ABC|channel-name> → #channel-name
-        let channelMention = try! NSRegularExpression(pattern: #"<#C[A-Z0-9]+\|([^>]+)>"#)
-        text = channelMention.stringByReplacingMatches(
-            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "#$1"
-        )
+        if let pattern = channelMentionPattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "#$1"
+            )
+        }
 
         // Special commands: <!here>, <!channel>, <!everyone>
-        let specialMention = try! NSRegularExpression(pattern: #"<!(\w+)(\|[^>]+)?>"#)
-        text = specialMention.stringByReplacingMatches(
-            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
-        )
+        if let pattern = specialMentionPattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
+            )
+        }
 
         return text
     }
@@ -77,44 +99,50 @@ enum SlackTextParser {
         var result = text
 
         // Remove code blocks (```...```)
-        let codeBlock = try! NSRegularExpression(pattern: #"```[\s\S]*?```"#, options: [.dotMatchesLineSeparators])
-        let codeBlockMatches = codeBlock.matches(in: result, range: NSRange(result.startIndex..., in: result))
-        for match in codeBlockMatches.reversed() {
-            let range = Range(match.range, in: result)!
-            var content = String(result[range])
-            content = content.replacingOccurrences(of: "```", with: "")
-            result.replaceSubrange(range, with: content.trimmingCharacters(in: .whitespacesAndNewlines))
+        if let regex = codeBlockRegex {
+            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+            for match in matches.reversed() {
+                guard let range = Range(match.range, in: result) else { continue }
+                var content = String(result[range])
+                content = content.replacingOccurrences(of: "```", with: "")
+                result.replaceSubrange(range, with: content.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         }
 
         // Remove inline code
-        let inlineCode = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
-        result = inlineCode.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
-        )
+        if let regex = inlineCodeRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
+            )
+        }
 
         // Remove bold markers
-        let bold = try! NSRegularExpression(pattern: #"(?<!\w)\*([^\*]+)\*(?!\w)"#)
-        result = bold.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
-        )
+        if let regex = boldRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
+            )
+        }
 
         // Remove italic markers
-        let italic = try! NSRegularExpression(pattern: #"(?<!\w)_([^_]+)_(?!\w)"#)
-        result = italic.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
-        )
+        if let regex = italicRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
+            )
+        }
 
         // Remove strikethrough markers
-        let strike = try! NSRegularExpression(pattern: #"(?<!\w)~([^~]+)~(?!\w)"#)
-        result = strike.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
-        )
+        if let regex = strikeRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1"
+            )
+        }
 
         // Remove blockquote markers
-        let blockquote = try! NSRegularExpression(pattern: #"(?m)^&gt;\s?"#)
-        result = blockquote.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: ""
-        )
+        if let regex = blockquoteRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: ""
+            )
+        }
 
         return result
     }
@@ -125,15 +153,12 @@ enum SlackTextParser {
 
         // Handle code blocks first — protect them from further processing
         var codeBlocks: [String] = []
-        let codeBlockPattern = try! NSRegularExpression(
-            pattern: #"```([\s\S]*?)```"#, options: [.dotMatchesLineSeparators]
-        )
-        let codeBlockMatches = codeBlockPattern.matches(
+        let codeBlockMatches = (codeBlockCaptureRegex?.matches(
             in: result, range: NSRange(result.startIndex..., in: result)
-        )
+        )) ?? []
         for (i, match) in codeBlockMatches.reversed().enumerated() {
-            let range = Range(match.range, in: result)!
-            let contentRange = Range(match.range(at: 1), in: result)!
+            guard let range = Range(match.range, in: result),
+                  let contentRange = Range(match.range(at: 1), in: result) else { continue }
             let content = String(result[contentRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             let placeholder = "⟪CODEBLOCK\(codeBlockMatches.count - 1 - i)⟫"
             codeBlocks.insert(content, at: 0)
@@ -142,13 +167,12 @@ enum SlackTextParser {
 
         // Handle inline code — protect from further processing
         var inlineCodes: [String] = []
-        let inlineCodePattern = try! NSRegularExpression(pattern: #"`([^`]+)`"#)
-        let inlineMatches = inlineCodePattern.matches(
+        let inlineMatches = (inlineCodeRegex?.matches(
             in: result, range: NSRange(result.startIndex..., in: result)
-        )
+        )) ?? []
         for (i, match) in inlineMatches.reversed().enumerated() {
-            let range = Range(match.range, in: result)!
-            let contentRange = Range(match.range(at: 1), in: result)!
+            guard let range = Range(match.range, in: result),
+                  let contentRange = Range(match.range(at: 1), in: result) else { continue }
             let content = String(result[contentRange])
             let placeholder = "⟪INLINE\(inlineMatches.count - 1 - i)⟫"
             inlineCodes.insert(content, at: 0)
@@ -156,24 +180,27 @@ enum SlackTextParser {
         }
 
         // Convert Slack bold *text* → Markdown **text**
-        let bold = try! NSRegularExpression(pattern: #"(?<!\w)\*([^\*]+)\*(?!\w)"#)
-        result = bold.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "**$1**"
-        )
+        if let regex = boldRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "**$1**"
+            )
+        }
 
         // Slack _italic_ → Markdown _italic_ (same syntax, no change needed)
 
         // Convert Slack ~strikethrough~ → Markdown ~~strikethrough~~
-        let strike = try! NSRegularExpression(pattern: #"(?<!\w)~([^~]+)~(?!\w)"#)
-        result = strike.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "~~$1~~"
-        )
+        if let regex = strikeRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "~~$1~~"
+            )
+        }
 
         // Convert blockquotes: &gt; → >
-        let blockquote = try! NSRegularExpression(pattern: #"(?m)^&gt;\s?"#)
-        result = blockquote.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "> "
-        )
+        if let regex = blockquoteRegex {
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "> "
+            )
+        }
 
         // Restore inline code
         for (i, code) in inlineCodes.enumerated() {

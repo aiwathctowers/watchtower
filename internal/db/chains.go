@@ -10,18 +10,28 @@ import (
 )
 
 // CreateChain inserts a new chain and returns its ID.
+// If a chain with the same slug already exists, returns the existing chain's ID.
 func (db *DB) CreateChain(c Chain) (int64, error) {
 	var parentID any
 	if c.ParentID > 0 {
 		parentID = c.ParentID
 	}
-	res, err := db.Exec(`INSERT INTO chains (parent_id, title, slug, status, summary, channel_ids, first_seen, last_seen, item_count)
+	res, err := db.Exec(`INSERT OR IGNORE INTO chains (parent_id, title, slug, status, summary, channel_ids, first_seen, last_seen, item_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		parentID, c.Title, c.Slug, c.Status, c.Summary, c.ChannelIDs, c.FirstSeen, c.LastSeen, c.ItemCount)
 	if err != nil {
 		return 0, fmt.Errorf("creating chain: %w", err)
 	}
-	return res.LastInsertId()
+	id, _ := res.LastInsertId()
+	if id == 0 {
+		// Slug conflict — return existing chain's ID.
+		var existingID int64
+		if err := db.QueryRow(`SELECT id FROM chains WHERE slug = ?`, c.Slug).Scan(&existingID); err != nil {
+			return 0, fmt.Errorf("finding existing chain by slug %q: %w", c.Slug, err)
+		}
+		return existingID, nil
+	}
+	return id, nil
 }
 
 // UpdateChainSummary updates the summary, last_seen, item_count, and channel_ids of a chain.

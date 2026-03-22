@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 29"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 31"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -927,6 +927,7 @@ func (db *DB) migrate() error {
 				`CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status)`,
 				`CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC)`,
 				`CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id)`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_slug ON chains(slug)`,
 				`CREATE TABLE IF NOT EXISTS chain_refs (
 					id            INTEGER PRIMARY KEY AUTOINCREMENT,
 					chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
@@ -1069,14 +1070,14 @@ func (db *DB) migrate() error {
 		defer tx.Rollback()
 
 		columns := map[string]string{
-			"dm_messages_to":   "INTEGER NOT NULL DEFAULT 0",
-			"dm_messages_from": "INTEGER NOT NULL DEFAULT 0",
-			"mentions_to":     "INTEGER NOT NULL DEFAULT 0",
-			"mentions_from":   "INTEGER NOT NULL DEFAULT 0",
-			"reactions_to":    "INTEGER NOT NULL DEFAULT 0",
-			"reactions_from":  "INTEGER NOT NULL DEFAULT 0",
+			"dm_messages_to":    "INTEGER NOT NULL DEFAULT 0",
+			"dm_messages_from":  "INTEGER NOT NULL DEFAULT 0",
+			"mentions_to":       "INTEGER NOT NULL DEFAULT 0",
+			"mentions_from":     "INTEGER NOT NULL DEFAULT 0",
+			"reactions_to":      "INTEGER NOT NULL DEFAULT 0",
+			"reactions_from":    "INTEGER NOT NULL DEFAULT 0",
 			"interaction_score": "REAL NOT NULL DEFAULT 0",
-			"connection_type":  "TEXT NOT NULL DEFAULT ''",
+			"connection_type":   "TEXT NOT NULL DEFAULT ''",
 		}
 		for col, typ := range columns {
 			if !hasColumn(tx, "user_interactions", col) {
@@ -1319,6 +1320,89 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v29: %w", err)
 		}
 		version = 29
+	}
+
+	if version < 30 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("starting migration v30: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Deduplicate chains: for each slug, keep the chain with the highest item_count
+		// and reassign all chain_refs from duplicates to the keeper.
+		if _, err := tx.Exec(`
+			UPDATE chain_refs
+			SET chain_id = (
+				SELECT c2.id FROM chains c2
+				WHERE c2.slug = (SELECT slug FROM chains WHERE id = chain_refs.chain_id)
+				ORDER BY c2.item_count DESC, c2.id ASC
+				LIMIT 1
+			)
+			WHERE chain_id NOT IN (
+				SELECT id FROM (
+					SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
+					FROM chains
+				) WHERE rn = 1
+			)
+		`); err != nil {
+			return fmt.Errorf("migration v30 reassign chain_refs: %w", err)
+		}
+
+		if _, err := tx.Exec(`
+			DELETE FROM chains WHERE id NOT IN (
+				SELECT id FROM (
+					SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
+					FROM chains
+				) WHERE rn = 1
+			)
+		`); err != nil {
+			return fmt.Errorf("migration v30 delete duplicate chains: %w", err)
+		}
+
+		// Update item_count for remaining chains.
+		if _, err := tx.Exec(`
+			UPDATE chains SET item_count = (
+				SELECT COUNT(*) FROM chain_refs WHERE chain_refs.chain_id = chains.id
+			)
+		`); err != nil {
+			return fmt.Errorf("migration v30 update item_count: %w", err)
+		}
+
+		// Add unique index on slug to prevent future duplicates.
+		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_slug ON chains(slug)`); err != nil {
+			return fmt.Errorf("migration v30 create unique index: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 30"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v30: %w", err)
+		}
+		version = 30
+	}
+
+	if version < 31 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("starting migration v31: %w", err)
+		}
+		defer tx.Rollback()
+
+		if !hasColumn(tx, "digests", "running_summary") {
+			if _, err := tx.Exec(`ALTER TABLE digests ADD COLUMN running_summary TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migration v31 add running_summary: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 31"); err != nil {
+			return fmt.Errorf("setting schema version v31: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v31: %w", err)
+		}
+		version = 31
 	}
 
 	_ = version // silence unused variable if this is the last migration

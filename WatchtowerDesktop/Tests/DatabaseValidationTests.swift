@@ -88,8 +88,8 @@ final class DatabaseValidationTests: XCTestCase {
 
     func testErrorDescriptions() {
         XCTAssertNotNil(WatchtowerDatabaseError.databaseNotFound.errorDescription)
-        XCTAssertTrue(WatchtowerDatabaseError.invalidWorkspaceName("bad").errorDescription!.contains("bad"))
-        XCTAssertTrue(WatchtowerDatabaseError.schemaVersionTooOld(1).errorDescription!.contains("1"))
-        XCTAssertTrue(WatchtowerDatabaseError.missingTable("users").errorDescription!.contains("users"))
+        XCTAssertTrue(WatchtowerDatabaseError.invalidWorkspaceName("bad").errorDescription?.contains("bad") == true)
+        XCTAssertTrue(WatchtowerDatabaseError.schemaVersionTooOld(1).errorDescription?.contains("1") == true)
+        XCTAssertTrue(WatchtowerDatabaseError.missingTable("users").errorDescription?.contains("users") == true)
     }
 }

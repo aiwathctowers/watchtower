@@ -3,7 +3,7 @@ import SwiftUI
 struct ChainDetailView: View {
     let chain: Chain
     let viewModel: ChainsViewModel
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
 
     var body: some View {
@@ -236,90 +236,102 @@ struct ChainDetailView: View {
     @ViewBuilder
     private func timelineItem(_ ref: ChainRef) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            if ref.isDecision {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(.orange)
-                    .frame(width: 20)
-            } else if ref.isDigest {
-                Image(systemName: "doc.text.fill")
-                    .foregroundStyle(.purple)
-                    .frame(width: 20)
+            timelineIcon(ref)
+            VStack(alignment: .leading, spacing: 4) {
+                timelineHeader(ref)
+                timelineContent(ref)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timelineIcon(_ ref: ChainRef) -> some View {
+        if ref.isDecision {
+            Image(systemName: "checkmark.seal.fill")
+                .foregroundStyle(.orange)
+                .frame(width: 20)
+        } else if ref.isDigest {
+            Image(systemName: "doc.text.fill")
+                .foregroundStyle(.purple)
+                .frame(width: 20)
+        } else {
+            Image(systemName: "target")
+                .foregroundStyle(.blue)
+                .frame(width: 20)
+        }
+    }
+
+    private func timelineHeader(_ ref: ChainRef) -> some View {
+        HStack {
+            Text(refTypeLabel(ref))
+                .font(.caption.bold())
+                .foregroundStyle(refTypeColor(ref))
+
+            if let url = viewModel.slackChannelURL(channelID: ref.channelID) {
+                Link(destination: url) {
+                    Text("#" + viewModel.channelName(for: ref.channelID))
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
             } else {
-                Image(systemName: "target")
-                    .foregroundStyle(.blue)
-                    .frame(width: 20)
+                Text("#" + viewModel.channelName(for: ref.channelID))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(refTypeLabel(ref))
-                        .font(.caption.bold())
-                        .foregroundStyle(refTypeColor(ref))
+            Spacer()
 
-                    if let url = viewModel.slackChannelURL(channelID: ref.channelID) {
-                        Link(destination: url) {
-                            Text("#" + viewModel.channelName(for: ref.channelID))
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                    } else {
-                        Text("#" + viewModel.channelName(for: ref.channelID))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            Text(ref.timestampDate, format: .dateTime.month().day().hour().minute())
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    private func timelineContent(_ ref: ChainRef) -> some View {
+        if ref.isDecision, let decision = viewModel.decisionText(for: ref) {
+            Text(decision.text)
+                .font(.subheadline)
+                .textSelection(.enabled)
+            if !decision.by.isEmpty {
+                Text("by \(decision.by)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            importanceBadge(decision.importance)
+        } else if ref.isDigest, let digest = viewModel.digestSummary(for: ref) {
+            Text(digest.summary)
+                .font(.subheadline)
+                .textSelection(.enabled)
+            let topics = digest.parsedTopics
+            if !topics.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(topics.prefix(5), id: \.self) { topic in
+                        Text(topic)
+                            .font(.caption2)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.purple.opacity(0.1), in: Capsule())
                     }
-
-                    Spacer()
-
-                    Text(ref.timestampDate, format: .dateTime.month().day().hour().minute())
+                }
+            }
+            HStack(spacing: 8) {
+                if digest.messageCount > 0 {
+                    Label("\(digest.messageCount) msgs", systemImage: "message")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-
-                if ref.isDecision, let decision = viewModel.decisionText(for: ref) {
-                    Text(decision.text)
-                        .font(.subheadline)
-                        .textSelection(.enabled)
-                    if !decision.by.isEmpty {
-                        Text("by \(decision.by)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    importanceBadge(decision.importance)
-                } else if ref.isDigest, let digest = viewModel.digestSummary(for: ref) {
-                    Text(digest.summary)
-                        .font(.subheadline)
-                        .textSelection(.enabled)
-                    let topics = digest.parsedTopics
-                    if !topics.isEmpty {
-                        FlowLayout(spacing: 4) {
-                            ForEach(topics.prefix(5), id: \.self) { topic in
-                                Text(topic)
-                                    .font(.caption2)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(Color.purple.opacity(0.1), in: Capsule())
-                            }
-                        }
-                    }
-                    HStack(spacing: 8) {
-                        if digest.messageCount > 0 {
-                            Label("\(digest.messageCount) msgs", systemImage: "message")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        let decCount = digest.parsedDecisions.count
-                        if decCount > 0 {
-                            Label("\(decCount) decisions", systemImage: "arrow.triangle.branch")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                } else if ref.isTrack {
-                    Text("Track #\(ref.trackID)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                let decCount = digest.parsedDecisions.count
+                if decCount > 0 {
+                    Label("\(decCount) decisions", systemImage: "arrow.triangle.branch")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
             }
+        } else if ref.isTrack {
+            Text("Track #\(ref.trackID)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
     }
 

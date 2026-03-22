@@ -6,7 +6,7 @@ struct FeedbackButtons: View {
     let entityID: String
     let dbManager: DatabaseManager
 
-    @State private var currentRating: Int? = nil  // nil = not rated, +1 = good, -1 = bad
+    @State private var currentRating: Int?   // nil = not rated, +1 = good, -1 = bad
     @State private var isLoading = false
 
     var body: some View {

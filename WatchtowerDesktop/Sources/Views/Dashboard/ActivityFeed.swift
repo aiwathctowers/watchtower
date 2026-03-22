@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ActivityFeed: View {
     let messages: [MessageWithContext]
-    var slackChannelURL: ((String) -> URL?)? = nil
+    var slackChannelURL: ((String) -> URL?)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

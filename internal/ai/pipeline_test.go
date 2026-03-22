@@ -257,7 +257,7 @@ func TestIntegrationAIPromptAssembly(t *testing.T) {
 		To:   refTime,
 	}
 
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema, "")
 	assert.Contains(t, systemPrompt, "Watchtower")
 	assert.Contains(t, systemPrompt, "my-company")
 	assert.Contains(t, systemPrompt, "sqlite3")
@@ -320,7 +320,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	assert.Contains(t, query.Channels, "general")
 
 	// Step 3: Build prompts (DB path + schema in system prompt, no pre-loaded context)
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema, "")
 	timeHints := FormatTimeHints(query)
 	userMessage := AssembleUserMessage(question, timeHints)
 
@@ -365,7 +365,7 @@ func TestIntegrationEndToEndStreaming(t *testing.T) {
 		To:   refTime,
 	}
 
-	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema)
+	systemPrompt := BuildSystemPrompt("my-company", "my-company", "T001", "/tmp/test.db", db.Schema, "")
 	timeHints := FormatTimeHints(query)
 	userMessage := AssembleUserMessage(question, timeHints)
 

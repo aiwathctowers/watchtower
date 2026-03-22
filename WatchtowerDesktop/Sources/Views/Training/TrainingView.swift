@@ -290,7 +290,7 @@ struct TrainingView: View {
             } else {
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 12),
-                    GridItem(.flexible(), spacing: 12),
+                    GridItem(.flexible(), spacing: 12)
                 ], spacing: 12) {
                     ForEach(prompts) { prompt in
                         PromptCard(prompt: prompt) {
@@ -418,7 +418,7 @@ let sharedPromptLabels: [String: String] = [
     "tracks.extract": "Tracks Extract",
     "tracks.update": "Tracks Update",
     "analysis.user": "User Analysis",
-    "analysis.period": "Period Analysis",
+    "analysis.period": "Period Analysis"
 ]
 
 // MARK: - Stat Card

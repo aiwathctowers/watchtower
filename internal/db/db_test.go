@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -522,7 +522,7 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Verify table rename: action_items → tracks.
 	var text string

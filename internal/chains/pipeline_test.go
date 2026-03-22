@@ -838,3 +838,157 @@ func TestRunParseResponseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing chain response")
 	assert.Equal(t, 0, n)
 }
+
+func TestRunDeduplicatesSameSlugNewChains(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.EnsureChannel("C1", "engineering", "public", ""))
+	require.NoError(t, database.EnsureChannel("C2", "devops", "public", ""))
+
+	// Seed two digests with decisions that AI will assign to the same NEW slug.
+	seedDigestWithDecisions(t, database, "C1", []digest.Decision{
+		{Text: "Migrate DB to PostgreSQL", By: "@alice", Importance: "high"},
+	})
+	seedDigestWithDecisions(t, database, "C2", []digest.Decision{
+		{Text: "Set up PostgreSQL on RDS", By: "@bob", Importance: "high"},
+	})
+
+	// AI returns NEW with the same slug for both decisions — should deduplicate.
+	gen := &mockGenerator{
+		response: `[
+			{"index": 0, "item_type": "decision", "action": "NEW", "title": "PostgreSQL Migration", "slug": "postgres-migration", "summary": "Migrating to PostgreSQL"},
+			{"index": 1, "item_type": "decision", "action": "NEW", "title": "PostgreSQL Migration", "slug": "postgres-migration", "summary": "Migrating to PostgreSQL"}
+		]`,
+	}
+	pipe := New(database, testConfig(), gen, testLogger())
+
+	n, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "both decisions should be linked")
+
+	// Only ONE chain should be created.
+	chains, err := database.GetActiveChains(14)
+	require.NoError(t, err)
+	assert.Len(t, chains, 1, "should create only one chain, not two")
+	assert.Equal(t, "postgres-migration", chains[0].Slug)
+
+	// Both decisions should be refs of the same chain.
+	refs, err := database.GetChainRefs(chains[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, refs, 2, "both decisions should be linked to the single chain")
+}
+
+func TestRunLinksToNewlyCreatedChainByID(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.EnsureChannel("C1", "engineering", "public", ""))
+	require.NoError(t, database.EnsureChannel("C2", "backend", "public", ""))
+
+	// Seed two decisions in different channels.
+	seedDigestWithDecisions(t, database, "C1", []digest.Decision{
+		{Text: "Migrate to PostgreSQL", By: "@alice", Importance: "high"},
+	})
+	seedDigestWithDecisions(t, database, "C2", []digest.Decision{
+		{Text: "Choose RDS instance for PG", By: "@bob", Importance: "medium"},
+	})
+
+	// AI creates a NEW chain for decision 0, then links decision 1 to it by ID.
+	// The new chain will get ID=1 since the DB is empty.
+	gen := &mockGenerator{
+		response: `[
+			{"index": 0, "item_type": "decision", "action": "NEW", "title": "PostgreSQL Migration", "slug": "postgres-migration", "summary": "Migrating DB"},
+			{"index": 1, "item_type": "decision", "action": "EXISTING", "chain_id": 1}
+		]`,
+	}
+	pipe := New(database, testConfig(), gen, testLogger())
+
+	n, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "both decisions should be linked")
+
+	// Verify only one chain was created.
+	chains, err := database.GetActiveChains(14)
+	require.NoError(t, err)
+	require.Len(t, chains, 1)
+	assert.Equal(t, "PostgreSQL Migration", chains[0].Title)
+
+	// Both decisions should be linked to the same chain.
+	refs, err := database.GetChainRefs(chains[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, refs, 2, "both decisions should reference the same chain")
+}
+
+func TestRunLinksDigestToNewlyCreatedChainByID(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.EnsureChannel("C1", "engineering", "public", ""))
+	require.NoError(t, database.EnsureChannel("C2", "backend", "public", ""))
+
+	// Seed a decision in C1 and a digest-only in C2.
+	seedDigestWithDecisions(t, database, "C1", []digest.Decision{
+		{Text: "Migrate to PostgreSQL", By: "@alice", Importance: "high"},
+	})
+	seedDigestWithDecisions(t, database, "C2", nil) // digest without decisions
+
+	// AI creates a NEW chain for decision 0, then links digest 1 to it by ID.
+	gen := &mockGenerator{
+		response: `[
+			{"index": 0, "item_type": "decision", "action": "NEW", "title": "PostgreSQL Migration", "slug": "postgres-migration", "summary": "Migrating DB"},
+			{"index": 1, "item_type": "digest", "action": "EXISTING", "chain_id": 1}
+		]`,
+	}
+	pipe := New(database, testConfig(), gen, testLogger())
+
+	n, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "decision and digest should both be linked")
+
+	chains, err := database.GetActiveChains(14)
+	require.NoError(t, err)
+	require.Len(t, chains, 1)
+
+	refs, err := database.GetChainRefs(chains[0].ID)
+	require.NoError(t, err)
+	assert.Len(t, refs, 2, "should have refs for both decision and digest")
+}
+
+func TestRunDeduplicatesNewChainAgainstExistingSlug(t *testing.T) {
+	database := testDB(t)
+	require.NoError(t, database.EnsureChannel("C1", "engineering", "public", ""))
+
+	// Create an existing chain.
+	existingID, err := database.CreateChain(db.Chain{
+		Title:      "PostgreSQL Migration",
+		Slug:       "postgres-migration",
+		Status:     "active",
+		Summary:    "Ongoing migration",
+		ChannelIDs: `["C1"]`,
+		FirstSeen:  float64(time.Now().Add(-48 * time.Hour).Unix()),
+		LastSeen:   float64(time.Now().Add(-24 * time.Hour).Unix()),
+		ItemCount:  1,
+	})
+	require.NoError(t, err)
+
+	// Seed a new decision.
+	seedDigestWithDecisions(t, database, "C1", []digest.Decision{
+		{Text: "Choose RDS instance size for PG", By: "@alice", Importance: "medium"},
+	})
+
+	// AI says NEW with the same slug as the existing chain — should reuse existing.
+	gen := &mockGenerator{
+		response: `[{"index": 0, "item_type": "decision", "action": "NEW", "title": "PostgreSQL Migration", "slug": "postgres-migration", "summary": "Updated summary"}]`,
+	}
+	pipe := New(database, testConfig(), gen, testLogger())
+
+	n, err := pipe.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Should NOT create a new chain — should reuse existing.
+	chains, err := database.GetActiveChains(14)
+	require.NoError(t, err)
+	assert.Len(t, chains, 1, "should not create a duplicate chain")
+	assert.Equal(t, int(existingID), chains[0].ID, "should reuse the existing chain")
+
+	// Decision should be linked to the existing chain.
+	refs, err := database.GetChainRefs(int(existingID))
+	require.NoError(t, err)
+	assert.Len(t, refs, 1)
+}

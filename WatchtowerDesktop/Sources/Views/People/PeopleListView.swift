@@ -17,9 +17,8 @@ struct PeopleListView: View {
                     Divider()
                     if userID == Self.teamSummaryID, let cs = vm.cardSummary {
                         TeamSummaryDetailView(
-                            summary: cs,
-                            onClose: { selectedUserID = nil }
-                        )
+                            summary: cs
+                        ) { selectedUserID = nil }
                         .id(userID)
                         .frame(minWidth: 400, idealWidth: 500)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -33,10 +32,14 @@ struct PeopleListView: View {
                             isCurrentUser: userID == vm.currentUserID,
                             profile: userID == vm.currentUserID ? vm.currentProfile : nil,
                             interactions: userID == vm.currentUserID ? vm.interactions : [],
-                            allCards: vm.cards,
                             onUpdateConnections: { reports, peers, manager in
-                                vm.updateConnections(reports: reports, peers: peers, manager: manager)
-                            }
+                                vm.updateConnections(
+                                    reports: reports,
+                                    peers: peers,
+                                    manager: manager
+                                )
+                            },
+                            allCards: vm.cards
                         )
                         .id(userID)
                         .frame(minWidth: 400, idealWidth: 500)
@@ -53,7 +56,7 @@ struct PeopleListView: View {
         .onAppear {
             if let db = appState.databaseManager, viewModel == nil {
                 viewModel = PeopleViewModel(dbManager: db)
-                viewModel?.load()
+                viewModel?.startObserving()
             }
         }
     }
@@ -68,56 +71,67 @@ struct PeopleListView: View {
         guard let vm = viewModel else { return [] }
         let excluding = vm.cards.filter { $0.userID != vm.currentUserID }
         if searchText.isEmpty { return excluding }
-        let q = searchText.lowercased()
+        let query = searchText.lowercased()
         return excluding.filter { card in
             let name = vm.userName(for: card.userID).lowercased()
-            if name.contains(q) { return true }
-            if card.summary.lowercased().contains(q) { return true }
-            if card.communicationStyle.lowercased().contains(q) { return true }
-            if card.decisionRole.lowercased().contains(q) { return true }
+            if name.contains(query) { return true }
+            if card.summary.lowercased().contains(query) { return true }
+            if card.communicationStyle.lowercased().contains(query) { return true }
+            if card.decisionRole.lowercased().contains(query) { return true }
             return false
         }
     }
 
     private func listPanel(_ vm: PeopleViewModel) -> some View {
         VStack(spacing: 0) {
-            // Window picker
-            if vm.availableWindows.count > 1 {
-                HStack {
-                    Button(action: {
-                        let next = vm.selectedWindow + 1
-                        if next < vm.availableWindows.count {
-                            vm.loadWindow(at: next)
-                        }
-                    }) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .disabled(vm.selectedWindow >= vm.availableWindows.count - 1)
+            windowPicker(vm)
+            statsAndSearch(vm)
+            Divider()
+            userListScrollView(vm)
+        }
+        .frame(minWidth: 300, idealWidth: 360)
+    }
 
-                    Spacer()
-                    Text(vm.currentWindowLabel)
-                        .font(.headline)
-                    Spacer()
-
-                    Button(action: {
-                        let prev = vm.selectedWindow - 1
-                        if prev >= 0 {
-                            vm.loadWindow(at: prev)
-                        }
-                    }) {
-                        Image(systemName: "chevron.right")
+    @ViewBuilder
+    private func windowPicker(_ vm: PeopleViewModel) -> some View {
+        if vm.availableWindows.count > 1 {
+            HStack {
+                Button {
+                    let next = vm.selectedWindow + 1
+                    if next < vm.availableWindows.count {
+                        vm.loadWindow(at: next)
                     }
-                    .disabled(vm.selectedWindow <= 0)
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            } else {
+                .disabled(vm.selectedWindow >= vm.availableWindows.count - 1)
+
+                Spacer()
                 Text(vm.currentWindowLabel)
                     .font(.headline)
-                    .padding(.vertical, 8)
-            }
+                Spacer()
 
-            // Summary stats
+                Button {
+                    let prev = vm.selectedWindow - 1
+                    if prev >= 0 {
+                        vm.loadWindow(at: prev)
+                    }
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(vm.selectedWindow <= 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        } else {
+            Text(vm.currentWindowLabel)
+                .font(.headline)
+                .padding(.vertical, 8)
+        }
+    }
+
+    private func statsAndSearch(_ vm: PeopleViewModel) -> some View {
+        VStack(spacing: 0) {
             HStack(spacing: 16) {
                 StatBadge(value: "\(vm.cards.count)", label: "users")
                 if vm.redFlagCount > 0 {
@@ -127,7 +141,6 @@ struct PeopleListView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 6)
 
-            // Search
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -140,110 +153,115 @@ struct PeopleListView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
             .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
 
-            Divider()
+    private func userListScrollView(_ vm: PeopleViewModel) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                teamSummaryRow(vm)
+                myCardPinnedRow(vm)
 
-            // User list
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    // Card summary (team summary)
-                    if let cs = vm.cardSummary, searchText.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Image(systemName: "person.3.fill")
-                                    .foregroundStyle(.orange)
-                                    .font(.caption)
-                                Text("Team Summary")
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-
-                            Text(cs.summary)
-                                .font(.subheadline)
-                                .lineLimit(3)
-
-                            let attention = cs.parsedAttention
-                            if !attention.isEmpty {
-                                HStack(alignment: .top, spacing: 4) {
-                                    Image(systemName: "exclamationmark.circle.fill")
-                                        .foregroundStyle(.orange)
-                                        .font(.caption)
-                                    Text("\(attention.count) item\(attention.count == 1 ? "" : "s") need attention")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .padding(10)
+                ForEach(filteredCards) { card in
+                    personRow(card, vm: vm)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            selectedUserID = Self.teamSummaryID
+                            selectedUserID = card.userID
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .background(
-                            selectedUserID == Self.teamSummaryID
-                                ? Color.orange.opacity(0.15)
-                                : Color.orange.opacity(0.05),
-                            in: RoundedRectangle(cornerRadius: 8)
+                            selectedUserID == card.userID
+                                ? Color.accentColor.opacity(0.15)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
                         )
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 4)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
 
-                        Divider()
-                            .padding(.horizontal, 8)
-                    }
+    @ViewBuilder
+    private func teamSummaryRow(_ vm: PeopleViewModel) -> some View {
+        if let cs = vm.cardSummary, searchText.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "person.3.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text("Team Summary")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
 
-                    // My Card — pinned at top
-                    if let my = myCard, let vm = viewModel, searchText.isEmpty {
-                        myCardRow(my, vm: vm)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedUserID = my.userID
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                selectedUserID == my.userID
-                                    ? Color.accentColor.opacity(0.15)
-                                    : Color.accentColor.opacity(0.05),
-                                in: RoundedRectangle(cornerRadius: 8)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 1)
-                            )
-                            .padding(.horizontal, 4)
-                            .padding(.bottom, 4)
+                Text(cs.summary)
+                    .font(.subheadline)
+                    .lineLimit(3)
 
-                        Divider()
-                            .padding(.horizontal, 8)
-                    }
-
-                    ForEach(filteredCards) { card in
-                        personRow(card, vm: vm)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedUserID = card.userID
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                selectedUserID == card.userID
-                                    ? Color.accentColor.opacity(0.15)
-                                    : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 6)
-                            )
-                            .padding(.horizontal, 4)
+                let attention = cs.parsedAttention
+                if !attention.isEmpty {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                        Text("\(attention.count) item\(attention.count == 1 ? "" : "s") need attention")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.vertical, 4)
             }
+            .padding(10)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedUserID = Self.teamSummaryID
+            }
+            .background(
+                selectedUserID == Self.teamSummaryID
+                    ? Color.orange.opacity(0.15)
+                    : Color.orange.opacity(0.05),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+
+            Divider()
+                .padding(.horizontal, 8)
         }
-        .frame(minWidth: 300, idealWidth: 360)
+    }
+
+    @ViewBuilder
+    private func myCardPinnedRow(_ vm: PeopleViewModel) -> some View {
+        if let my = myCard, let vm = viewModel, searchText.isEmpty {
+            myCardRow(my, vm: vm)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedUserID = my.userID
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    selectedUserID == my.userID
+                        ? Color.accentColor.opacity(0.15)
+                        : Color.accentColor.opacity(0.05),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 1)
+                )
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+
+            Divider()
+                .padding(.horizontal, 8)
+        }
     }
 
     private func myCardRow(_ card: PeopleCard, vm: PeopleViewModel) -> some View {

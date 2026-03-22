@@ -93,7 +93,7 @@ func runStatus(deps Deps) string {
 	if statErr == nil {
 		dbSize = info.Size()
 	}
-	b.WriteString(fmt.Sprintf("Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize)))) //nolint:gosec // safe conversion within expected range
+	b.WriteString(fmt.Sprintf("Database:  %s (%s)\n", dbPath, humanize.IBytes(uint64(dbSize))))
 
 	if lastSync != "" {
 		t, err := time.Parse(time.RFC3339, lastSync)
@@ -190,9 +190,12 @@ func (r *REPL) runCatchup() {
 		},
 	}
 
-	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema)
+	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema, cfg.Digest.Language)
 	timeHints := ai.FormatTimeHints(pq)
 	question := "What happened since I was last here? Give me a structured catchup summary."
+	if lang := cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {
+		question = fmt.Sprintf("What happened since I was last here? Give me a structured catchup summary. Respond in %s.", lang)
+	}
 	userMessage := ai.AssembleUserMessage(question, timeHints)
 
 	streamCtx, streamCancel := context.WithCancel(r.ctx)

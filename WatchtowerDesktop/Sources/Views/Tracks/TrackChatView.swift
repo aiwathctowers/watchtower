@@ -68,7 +68,6 @@ final class TrackChatViewModel {
 
         messages.append(ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false))
 
-        // Persist user message
         if let convID = conversationID {
             persistMessage(conversationID: convID, role: "user", text: text)
         }
@@ -79,74 +78,88 @@ final class TrackChatViewModel {
         let currentSessionID = sessionID
         let dbPath = dbManager.dbPool.path
         let dbPool = dbManager.dbPool
-
         let capturedItem = item
         let capturedClaudeService = claudeService
 
         streamTask = Task { [weak self] in
-            let systemPrompt: String? = if currentSessionID == nil {
-                Self.buildSystemPrompt(item: capturedItem, dbPool: dbPool)
-            } else {
-                nil
-            }
-
-            do {
-                let stream = capturedClaudeService.stream(
-                    prompt: text,
-                    systemPrompt: systemPrompt,
-                    sessionID: currentSessionID,
-                    dbPath: dbPath,
-                    extraAllowedTools: ["Bash(watchtower*)"]
-                )
-                var sawTurnComplete = false
-                for try await event in stream {
-                    guard let self else { return }
-                    switch event {
-                    case .text(let chunk):
-                        if let idx = self.messages.indices.last {
-                            if sawTurnComplete {
-                                self.messages[idx].text = chunk
-                                sawTurnComplete = false
-                            } else {
-                                self.messages[idx].text += chunk
-                            }
-                        }
-                    case .turnComplete(let fullText):
-                        if let idx = self.messages.indices.last {
-                            self.messages[idx].text = fullText
-                        }
-                        sawTurnComplete = true
-                    case .sessionID(let sid):
-                        self.sessionID = sid
-                        // Persist session ID for resume
-                        if let convID = self.conversationID {
-                            self.persistSessionID(conversationID: convID, sessionID: sid)
-                        }
-                    case .done:
-                        break
-                    }
-                }
-            } catch {
-                if !Task.isCancelled {
-                    self?.errorMessage = error.localizedDescription
-                }
-            }
-            guard let self else { return }
-            if let idx = self.messages.indices.last {
-                self.messages[idx].isStreaming = false
-                // Persist assistant message
-                let assistantText = self.messages[idx].text
-                if !assistantText.isEmpty, let convID = self.conversationID {
-                    self.persistMessage(conversationID: convID, role: "assistant", text: assistantText)
-                    self.touchConversation(convID)
-                }
-            }
-            self.isStreaming = false
-
-            // Refresh the track from DB after Claude may have updated it
-            self.reloadItem()
-            self.viewModel?.load()
+            let systemPrompt: String? = currentSessionID == nil
+                ? Self.buildSystemPrompt(item: capturedItem, dbPool: dbPool)
+                : nil
+            await self?.runStream(
+                text: text,
+                systemPrompt: systemPrompt,
+                sessionID: currentSessionID,
+                dbPath: dbPath,
+                claudeService: capturedClaudeService
+            )
         }
+    }
+
+    private func runStream(
+        text: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String,
+        claudeService: any ClaudeServiceProtocol
+    ) async {
+        do {
+            let stream = claudeService.stream(
+                prompt: text,
+                systemPrompt: systemPrompt,
+                sessionID: sessionID,
+                dbPath: dbPath,
+                extraAllowedTools: ["Bash(watchtower*)"]
+            )
+            var sawTurnComplete = false
+            for try await event in stream {
+                handleStreamEvent(event, sawTurnComplete: &sawTurnComplete)
+            }
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+        finalizeStream()
+    }
+
+    private func handleStreamEvent(_ event: StreamEvent, sawTurnComplete: inout Bool) {
+        switch event {
+        case .text(let chunk):
+            if let idx = messages.indices.last {
+                if sawTurnComplete {
+                    messages[idx].text = chunk
+                    sawTurnComplete = false
+                } else {
+                    messages[idx].text += chunk
+                }
+            }
+        case .turnComplete(let fullText):
+            if let idx = messages.indices.last {
+                messages[idx].text = fullText
+            }
+            sawTurnComplete = true
+        case .sessionID(let sid):
+            self.sessionID = sid
+            if let convID = conversationID {
+                persistSessionID(conversationID: convID, sessionID: sid)
+            }
+        case .done:
+            break
+        }
+    }
+
+    private func finalizeStream() {
+        if let idx = messages.indices.last {
+            messages[idx].isStreaming = false
+            let assistantText = messages[idx].text
+            if !assistantText.isEmpty, let convID = conversationID {
+                persistMessage(conversationID: convID, role: "assistant", text: assistantText)
+                touchConversation(convID)
+            }
+        }
+        isStreaming = false
+        reloadItem()
+        viewModel?.load()
     }
 
     func cancelStream() {
@@ -199,7 +212,6 @@ final class TrackChatViewModel {
         let ws: Workspace? = try? dbPool.read { db in
             try WorkspaceQueries.fetchWorkspace(db)
         }
-        let domain = ws?.domain ?? "unknown"
         let teamID = ws?.id ?? "unknown"
 
         return """
@@ -231,8 +243,17 @@ final class TrackChatViewModel {
         \(schema)
 
         === QUERY TIPS ===
-        - Find the original message: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.ts = ?  (bind: '\(item.channelID.replacingOccurrences(of: "'", with: "''"))', '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))')
-        - Find thread context: SELECT m.text, u.display_name FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = ? AND m.thread_ts = ? ORDER BY m.ts_unix ASC  (bind same values)
+        - Find the original message:
+          SELECT m.text, u.display_name FROM messages m
+          JOIN users u ON m.user_id = u.id
+          WHERE m.channel_id = '\(item.channelID.replacingOccurrences(of: "'", with: "''"))'
+          AND m.ts = '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))'
+        - Find thread context:
+          SELECT m.text, u.display_name FROM messages m
+          JOIN users u ON m.user_id = u.id
+          WHERE m.channel_id = '\(item.channelID.replacingOccurrences(of: "'", with: "''"))'
+          AND m.thread_ts = '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))'
+          ORDER BY m.ts_unix ASC
         - Find who else discussed this: Look for messages in the same channel around the same time
         - Deep link format: slack://channel?team=\(teamID)&id={channel_id}&message={ts}
 

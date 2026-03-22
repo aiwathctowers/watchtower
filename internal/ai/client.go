@@ -88,7 +88,7 @@ func (c *Client) Query(ctx context.Context, systemPrompt, userMessage, sessionID
 		defer close(sidCh)
 
 		args := c.buildArgs(systemPrompt, userMessage, "stream-json", sessionID)
-		cmd := exec.CommandContext(ctx, c.claudeCmd, args...) //nolint:gosec // args are validated internally
+		cmd := exec.CommandContext(ctx, c.claudeCmd, args...)
 		// Send SIGINT first for graceful shutdown; SIGKILL after 5s.
 		cmd.Cancel = func() error {
 			return cmd.Process.Signal(os.Interrupt)
@@ -164,7 +164,7 @@ func (c *Client) Query(ctx context.Context, systemPrompt, userMessage, sessionID
 // the full response text. Pass a non-empty sessionID to resume an existing session.
 func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, error) {
 	args := c.buildArgs(systemPrompt, userMessage, "text", sessionID)
-	cmd := exec.CommandContext(ctx, c.claudeCmd, args...) //nolint:gosec // args are validated internally
+	cmd := exec.CommandContext(ctx, c.claudeCmd, args...)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(os.Interrupt)
 	}

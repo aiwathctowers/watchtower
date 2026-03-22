@@ -210,10 +210,6 @@ func runTune(cmd *cobra.Command, args []string) error {
 	// H3 fix: reuse the database from the store instead of opening a second connection.
 	database := store.DB()
 
-	model := cfg.Digest.Model
-	if model == "" {
-		model = "haiku"
-	}
 	gen := cliGenerator(cfg)
 
 	// Wrap digest.Generator as prompts.TextGenerator

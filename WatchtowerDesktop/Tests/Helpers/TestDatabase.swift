@@ -200,7 +200,10 @@ enum TestDatabase {
         ballOn: String = "",
         ownerUserID: String = ""
     ) throws {
-        var cols = "channel_id, assignee_user_id, assignee_raw, text, context, source_message_ts, source_channel_name, status, priority, period_from, period_to, model, ownership, ball_on, owner_user_id"
+        var cols = "channel_id, assignee_user_id, assignee_raw, "
+            + "text, context, source_message_ts, source_channel_name, "
+            + "status, priority, period_from, period_to, model, "
+            + "ownership, ball_on, owner_user_id"
         var placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
         var args: [any DatabaseValueConvertible] = [
             channelID, assigneeUserID, assigneeRaw, text, context,
@@ -263,7 +266,10 @@ enum TestDatabase {
         is_deleted   INTEGER NOT NULL DEFAULT 0,
         subtype      TEXT NOT NULL DEFAULT '',
         permalink    TEXT NOT NULL DEFAULT '',
-        ts_unix      REAL GENERATED ALWAYS AS (CASE WHEN INSTR(ts, '.') > 0 THEN CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL) ELSE CAST(ts AS REAL) END) STORED,
+        ts_unix      REAL GENERATED ALWAYS AS (
+            CASE WHEN INSTR(ts, '.') > 0
+            THEN CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL)
+            ELSE CAST(ts AS REAL) END) STORED,
         raw_json     TEXT NOT NULL DEFAULT '{}',
         PRIMARY KEY (channel_id, ts)
     );
@@ -331,6 +337,7 @@ enum TestDatabase {
         prompt_version INTEGER NOT NULL DEFAULT 0,
         people_signals TEXT NOT NULL DEFAULT '[]',
         situations     TEXT NOT NULL DEFAULT '[]',
+        running_summary TEXT NOT NULL DEFAULT '',
         UNIQUE(channel_id, type, period_from, period_to)
     );
     CREATE TABLE IF NOT EXISTS digest_participants (
@@ -620,7 +627,7 @@ enum TestDatabase {
             """, arguments: [
                 slackUserID, role, team, responsibilities, reports, peers, manager,
                 starredChannels, starredPeople, painPoints, trackFocus,
-                onboardingDone ? 1 : 0, customPromptContext,
+                onboardingDone ? 1 : 0, customPromptContext
             ])
     }
 

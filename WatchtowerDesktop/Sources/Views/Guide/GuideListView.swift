@@ -19,8 +19,7 @@ struct GuideListView: View {
                     GuideDetailView(
                         guide: guide,
                         userName: vm.userName(for: userID),
-                        onClose: { selectedUserID = nil }
-                    )
+                    ) { selectedUserID = nil }
                     .id(userID)
                     .frame(minWidth: 400, idealWidth: 500)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -44,10 +43,10 @@ struct GuideListView: View {
         guard let vm = viewModel else { return [] }
         let excluding = vm.guides.filter { $0.userID != vm.currentUserID }
         if searchText.isEmpty { return excluding }
-        let q = searchText.lowercased()
+        let query = searchText.lowercased()
         return excluding.filter { guide in
             let name = vm.userName(for: guide.userID).lowercased()
-            return name.contains(q)
+            return name.contains(query)
         }
     }
 
@@ -57,11 +56,11 @@ struct GuideListView: View {
             // Window picker
             if vm.availableWindows.count > 1 {
                 HStack {
-                    Button(action: {
+                    Button {
                         if vm.selectedWindow < vm.availableWindows.count - 1 {
                             vm.loadWindow(at: vm.selectedWindow + 1)
                         }
-                    }) {
+                    } label: {
                         Image(systemName: "chevron.left")
                     }
                     .disabled(vm.selectedWindow >= vm.availableWindows.count - 1)
@@ -70,11 +69,11 @@ struct GuideListView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
 
-                    Button(action: {
+                    Button {
                         if vm.selectedWindow > 0 {
                             vm.loadWindow(at: vm.selectedWindow - 1)
                         }
-                    }) {
+                    } label: {
                         Image(systemName: "chevron.right")
                     }
                     .disabled(vm.selectedWindow <= 0)

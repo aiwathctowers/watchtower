@@ -30,9 +30,13 @@ enum ChatConversationQueries {
 
     static func search(_ db: Database, query: String) throws -> [ChatConversation] {
         let pattern = "%\(query)%"
-        return try ChatConversation.fetchAll(db, sql: """
-            SELECT * FROM chat_conversations WHERE context_type IS NULL AND title LIKE ? ORDER BY updated_at DESC
-        """, arguments: [pattern])
+        return try ChatConversation.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM chat_conversations WHERE context_type IS NULL AND title LIKE ? ORDER BY updated_at DESC
+                """,
+            arguments: [pattern]
+        )
     }
 
     static func ensureContextColumns(_ db: Database) throws {
@@ -66,9 +70,13 @@ enum ChatConversationQueries {
     }
 
     static func fetchByContext(_ db: Database, type: String, id: String) throws -> ChatConversation? {
-        try ChatConversation.fetchOne(db, sql: """
-            SELECT * FROM chat_conversations WHERE context_type = ? AND context_id = ? ORDER BY updated_at DESC LIMIT 1
-        """, arguments: [type, id])
+        try ChatConversation.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM chat_conversations WHERE context_type = ? AND context_id = ? ORDER BY updated_at DESC LIMIT 1
+                """,
+            arguments: [type, id]
+        )
     }
 
     static func updateTitle(_ db: Database, id: Int64, title: String) throws {

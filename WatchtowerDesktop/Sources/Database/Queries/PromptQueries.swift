@@ -14,8 +14,12 @@ enum PromptQueries {
 
     static func fetchHistory(_ db: Database, promptID: String) throws -> [PromptHistoryEntry] {
         guard try db.tableExists("prompt_history") else { return [] }
-        return try PromptHistoryEntry.fetchAll(db, sql: """
-            SELECT * FROM prompt_history WHERE prompt_id = ? ORDER BY version DESC
-            """, arguments: [promptID])
+        return try PromptHistoryEntry.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM prompt_history WHERE prompt_id = ? ORDER BY version DESC
+                """,
+            arguments: [promptID]
+        )
     }
 }

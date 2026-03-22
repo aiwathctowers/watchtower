@@ -59,7 +59,7 @@ final class InteractionQueryTests: XCTestCase {
         let db = try TestDatabase.create()
         try db.write { db in
             for i in 0..<5 {
-                try insertInteraction(db, userA: "U001", userB: "U0\(10+i)", messagesTo: 10 - i, messagesFrom: 5 - i)
+                try insertInteraction(db, userA: "U001", userB: "U0\(10 + i)", messagesTo: 10 - i, messagesFrom: 5 - i)
             }
         }
         let top = try db.read {
@@ -71,14 +71,22 @@ final class InteractionQueryTests: XCTestCase {
     func testUserInteractionComputedProperties() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try insertInteraction(db, userA: "U001", userB: "U002",
-                                  messagesTo: 10, messagesFrom: 5,
-                                  threadRepliesTo: 3, threadRepliesFrom: 2,
-                                  sharedChannelIDs: #"["C001","C002"]"#)
+            try insertInteraction(
+                db,
+                userA: "U001",
+                userB: "U002",
+                messagesTo: 10,
+                messagesFrom: 5,
+                threadRepliesTo: 3,
+                threadRepliesFrom: 2,
+                sharedChannelIDs: #"["C001","C002"]"#
+            )
         }
-        let interaction = try db.read {
-            try InteractionQueries.fetchForUser($0, userID: "U001", periodFrom: 100, periodTo: 200)
-        }.first!
+        let interaction = try XCTUnwrap(
+            try db.read {
+                try InteractionQueries.fetchForUser($0, userID: "U001", periodFrom: 100, periodTo: 200)
+            }.first
+        )
 
         XCTAssertEqual(interaction.totalMessages, 15)
         XCTAssertEqual(interaction.totalThreadReplies, 5)
@@ -90,9 +98,11 @@ final class InteractionQueryTests: XCTestCase {
         try db.write { db in
             try insertInteraction(db, userA: "U001", userB: "U002", sharedChannelIDs: "[]")
         }
-        let interaction = try db.read {
-            try InteractionQueries.fetchForUser($0, userID: "U001", periodFrom: 100, periodTo: 200)
-        }.first!
+        let interaction = try XCTUnwrap(
+            try db.read {
+                try InteractionQueries.fetchForUser($0, userID: "U001", periodFrom: 100, periodTo: 200)
+            }.first
+        )
         XCTAssertTrue(interaction.parsedSharedChannelIDs.isEmpty)
     }
 }

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TeamSummaryDetailView: View {
     let summary: PeopleCardSummary
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
 
     var body: some View {
         ScrollView {

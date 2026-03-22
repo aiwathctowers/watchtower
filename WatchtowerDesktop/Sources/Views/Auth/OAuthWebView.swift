@@ -53,70 +53,73 @@ final class SlackOAuthManager {
     func authenticate(cliPath: String, completion: @escaping AuthCompletion) {
         Task.detached {
             do {
-                // First, ensure the localhost cert is trusted (silent)
-                let trustResult = await Self.runCLI(path: cliPath, arguments: ["auth", "trust-cert"])
-                if trustResult.exitCode != 0 {
-                    throw OAuthError.invalidAuthURL
-                }
-
-                // Get the OAuth URL from CLI
-                let urlResult = await Self.runCLI(path: cliPath, arguments: ["auth", "url"])
-                if urlResult.exitCode != 0 {
-                    throw OAuthError.invalidAuthURL
-                }
-
-                guard let authURL = URL(string: urlResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                    throw OAuthError.invalidAuthURL
-                }
-
-                // Validate callback URL scheme
-                guard URL(string: OAuthConstants.redirectURI) != nil else {
-                    throw OAuthError.invalidCallbackURL
-                }
-
-                // Create and start the authentication session
-                // This opens a separate window that the user can interact with
-                let session = ASWebAuthenticationSession(
+                let authURL = try await Self.obtainAuthURL(cliPath: cliPath)
+                let session = Self.createAuthSession(
                     url: authURL,
-                    callbackURLScheme: "https"
-                ) { callbackURL, error in
-                    if let error = error {
-                        // Check if user cancelled (different API versions have different error codes)
-                        let errorDescription = error.localizedDescription.lowercased()
-                        if errorDescription.contains("cancel") || errorDescription.contains("user") {
-                            completion(.failure(OAuthError.cancelled))
-                        } else {
-                            completion(.failure(error))
-                        }
-                        return
-                    }
-
-                    guard let callbackURL = callbackURL else {
-                        completion(.failure(OAuthError.invalidCallbackURL))
-                        return
-                    }
-
-                    // Extract authorization code from callback URL
-                    if let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-                       let code = components.queryItems?.first(where: { $0.name == "code" })?.value {
-                        completion(.success(code))
-                    } else {
-                        completion(.failure(OAuthError.invalidCallbackURL))
-                    }
-                }
-
-                // Start the session on main thread (opens separate window)
+                    completion: completion
+                )
                 await MainActor.run {
                     session.presentationContextProvider = OAuthPresentationContext.shared
                     session.prefersEphemeralWebBrowserSession = false
-
-                    let started = session.start()
-                    if !started {
+                    if !session.start() {
                         completion(.failure(OAuthError.cancelled))
                     }
                 }
             } catch {
                 completion(.failure(error))
+            }
+        }
+    }
+
+    private static func obtainAuthURL(cliPath: String) async throws -> URL {
+        let trustResult = await runCLI(path: cliPath, arguments: ["auth", "trust-cert"])
+        if trustResult.exitCode != 0 { throw OAuthError.invalidAuthURL }
+
+        let urlResult = await runCLI(path: cliPath, arguments: ["auth", "url"])
+        if urlResult.exitCode != 0 { throw OAuthError.invalidAuthURL }
+
+        guard let authURL = URL(
+            string: urlResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) else {
+            throw OAuthError.invalidAuthURL
+        }
+        guard URL(string: OAuthConstants.redirectURI) != nil else {
+            throw OAuthError.invalidCallbackURL
+        }
+        return authURL
+    }
+
+    private static func createAuthSession(
+        url: URL,
+        completion: @escaping AuthCompletion
+    ) -> ASWebAuthenticationSession {
+        ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "https"
+        ) { callbackURL, error in
+            if let error = error {
+                let desc = error.localizedDescription.lowercased()
+                if desc.contains("cancel") || desc.contains("user") {
+                    completion(.failure(OAuthError.cancelled))
+                } else {
+                    completion(.failure(error))
+                }
+                return
+            }
+            guard let callbackURL = callbackURL else {
+                completion(.failure(OAuthError.invalidCallbackURL))
+                return
+            }
+            if let components = URLComponents(
+                url: callbackURL,
+                resolvingAgainstBaseURL: false
+            ),
+               let code = components.queryItems?.first(
+                where: { $0.name == "code" }
+               )?.value {
+                completion(.success(code))
+            } else {
+                completion(.failure(OAuthError.invalidCallbackURL))
             }
         }
     }

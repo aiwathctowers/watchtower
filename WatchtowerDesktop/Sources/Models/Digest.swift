@@ -18,6 +18,7 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
     let costUSD: Double?
     let createdAt: String
     let readAt: String?
+    let runningSummary: String?
 
     enum CodingKeys: String, CodingKey {
         case id, type, summary, topics, decisions, model
@@ -31,6 +32,7 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
         case costUSD = "cost_usd"
         case createdAt = "created_at"
         case readAt = "read_at"
+        case runningSummary = "running_summary"
     }
 
     var isRead: Bool { readAt != nil }
@@ -51,5 +53,11 @@ struct Digest: FetchableRecord, Decodable, Identifiable, Equatable {
     var parsedTopics: [String] {
         guard let data = topics.data(using: .utf8) else { return [] }
         return (try? Self.decoder.decode([String].self, from: data)) ?? []
+    }
+
+    var parsedRunningSummary: RunningSummary? {
+        guard let raw = runningSummary, !raw.isEmpty,
+              let data = raw.data(using: .utf8) else { return nil }
+        return try? Self.decoder.decode(RunningSummary.self, from: data)
     }
 }

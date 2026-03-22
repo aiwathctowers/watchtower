@@ -126,74 +126,20 @@ private func generateAndSave(
             try TrackQueries.fetchCurrentUserID(db)
         } ?? ""
 
-        let participantsJSON: String = encodeToJSON(generated.participants) ?? "[]"
-        let sourceRefsJSON: String = encodeToJSON(generated.sourceRefs) ?? "[]"
-        let tagsJSON: String = encodeToJSON(generated.tags) ?? "[]"
-        let decisionOptionsJSON: String = encodeToJSON(generated.decisionOptions) ?? "[]"
-        let subItemsJSON: String = encodeToJSON(generated.subItems) ?? "[]"
-        let relatedDigestIDs: String = encodeToJSON([digest.id]) ?? "[]"
+        try await persistTrack(
+            generated: generated,
+            digest: digest,
+            channelName: channelName,
+            currentUserID: currentUserID,
+            db: db
+        )
 
-        let dueDateUnix: Double? = generated.dueDate.flatMap { dd in
-            let fmt = DateFormatter()
-            fmt.dateFormat = "yyyy-MM-dd"
-            fmt.timeZone = TimeZone.current
-            return fmt.date(from: dd)?.timeIntervalSince1970
-        }
-
-        let channelID: String = digest.channelID
-        let srcChannelName: String = channelName ?? ""
-        let text: String = generated.text
-        let context: String = generated.context
-        let priority: String = generated.priority
-        let periodFrom: Double = digest.periodFrom
-        let periodTo: Double = digest.periodTo
-        let reqName: String = generated.requester?.name ?? ""
-        let reqUID: String = generated.requester?.userID ?? ""
-        let category: String = generated.category
-        let blocking: String = generated.blocking ?? ""
-        let decSummary: String = generated.decisionSummary ?? ""
-
-        _ = try await db.dbPool.write { db in
-            try TrackQueries.insertTrack(
-                db,
-                channelID: channelID,
-                assigneeUserID: currentUserID,
-                assigneeRaw: "",
-                text: text,
-                context: context,
-                sourceMessageTS: "",
-                sourceChannelName: srcChannelName,
-                priority: priority,
-                dueDate: dueDateUnix,
-                periodFrom: periodFrom,
-                periodTo: periodTo,
-                model: "claude",
-                inputTokens: 0,
-                outputTokens: 0,
-                costUSD: 0,
-                participants: participantsJSON,
-                sourceRefs: sourceRefsJSON,
-                requesterName: reqName,
-                requesterUserID: reqUID,
-                category: category,
-                blocking: blocking,
-                tags: tagsJSON,
-                decisionSummary: decSummary,
-                decisionOptions: decisionOptionsJSON,
-                relatedDigestIDs: relatedDigestIDs,
-                subItems: subItemsJSON
-            )
-        }
-
-        // Notify success
-        let channel: String = channelName ?? "digest"
         NotificationService.shared.sendTrackNotification(
             text: generated.text,
-            channelName: channel,
+            channelName: channelName ?? "digest",
             priority: generated.priority
         )
     } catch {
-        // Notify error
         let content = UNMutableNotificationContent()
         content.title = "Track creation failed"
         content.body = error.localizedDescription
@@ -204,5 +150,48 @@ private func generateAndSave(
             trigger: nil
         )
         try? await UNUserNotificationCenter.current().add(request)
+    }
+}
+
+private func persistTrack(
+    generated: GeneratedTrack,
+    digest: Digest,
+    channelName: String?,
+    currentUserID: String,
+    db: DatabaseManager
+) async throws {
+    let dueDateUnix: Double? = generated.dueDate.flatMap { dd in
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone.current
+        return fmt.date(from: dd)?.timeIntervalSince1970
+    }
+
+    let data = TrackInsertData(
+        channelID: digest.channelID,
+        assigneeUserID: currentUserID,
+        text: generated.text,
+        context: generated.context,
+        sourceChannelName: channelName ?? "",
+        priority: generated.priority,
+        dueDate: dueDateUnix,
+        periodFrom: digest.periodFrom,
+        periodTo: digest.periodTo,
+        model: "claude",
+        participants: encodeToJSON(generated.participants) ?? "[]",
+        sourceRefs: encodeToJSON(generated.sourceRefs) ?? "[]",
+        requesterName: generated.requester?.name ?? "",
+        requesterUserID: generated.requester?.userID ?? "",
+        category: generated.category,
+        blocking: generated.blocking ?? "",
+        tags: encodeToJSON(generated.tags) ?? "[]",
+        decisionSummary: generated.decisionSummary ?? "",
+        decisionOptions: encodeToJSON(generated.decisionOptions) ?? "[]",
+        relatedDigestIDs: encodeToJSON([digest.id]) ?? "[]",
+        subItems: encodeToJSON(generated.subItems) ?? "[]"
+    )
+
+    _ = try await db.dbPool.write { db in
+        try TrackQueries.insertTrack(db, data: data)
     }
 }

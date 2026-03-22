@@ -11,7 +11,7 @@ import (
 type SessionEvent struct {
 	Timestamp  string `json:"ts"`
 	SessionID  string `json:"session_id"`
-	Action     string `json:"action"`     // "created" or "reused"
+	Action     string `json:"action"`      // "created" or "reused"
 	Source     string `json:"source"`      // caller label (e.g. "digest.channel", "analysis.user")
 	DurationMS int64  `json:"duration_ms"` // how long the session was held
 }

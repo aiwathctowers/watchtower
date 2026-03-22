@@ -21,11 +21,16 @@ struct TrainingSettings: View {
 
             // Right: prompt detail/editor
             if let id = selectedPromptID, let prompt = prompts.first(where: { $0.id == id }) {
-                PromptDetailPane(prompt: prompt, dbManager: appState.databaseManager, onSave: {
-                    reload()
-                }, onClose: {
-                    selectedPromptID = nil
-                })
+                PromptDetailPane(
+                    prompt: prompt,
+                    dbManager: appState.databaseManager,
+                    onSave: {
+                        reload()
+                    },
+                    onClose: {
+                        selectedPromptID = nil
+                    }
+                )
             } else {
                 VStack {
                     Spacer()
@@ -172,8 +177,8 @@ struct TrainingSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                let grouped = Dictionary(grouping: importanceCorrections.values, by: { $0 })
-                let parts = grouped.sorted(by: { $0.key < $1.key }).map { "\($0.value.count) \($0.key)" }
+                let grouped = Dictionary(grouping: importanceCorrections.values) { $0 }
+                let parts = grouped.sorted { $0.key < $1.key }.map { "\($0.value.count) \($0.key)" }
                 Text(parts.joined(separator: ", "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -329,7 +334,7 @@ struct TrainingSettings: View {
             "tracks.extract": "Tracks Extract",
             "tracks.update": "Tracks Update",
             "analysis.user": "User Analysis",
-            "analysis.period": "Period Analysis",
+            "analysis.period": "Period Analysis"
         ]
         return labels[id] ?? id
     }
@@ -350,7 +355,7 @@ struct PromptDetailPane: View {
     let prompt: PromptTemplate
     let dbManager: DatabaseManager?
     let onSave: () -> Void
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
 
     @State private var editedTemplate: String = ""
     @State private var history: [PromptHistoryEntry] = []

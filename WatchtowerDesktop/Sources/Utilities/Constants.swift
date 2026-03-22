@@ -59,7 +59,7 @@ enum Constants {
     }
 
     /// Search for a binary in the resolved user PATH, with well-known fallback directories.
-    private nonisolated static func findInPath(_ binary: String) -> String? {
+    nonisolated private static func findInPath(_ binary: String) -> String? {
         let env = resolvedEnvironment()
         guard let pathValue = env["PATH"] else { return nil }
         for dir in pathValue.split(separator: ":") {
@@ -73,7 +73,7 @@ enum Constants {
         let fallbackDirs = [
             "/usr/local/bin",
             "/opt/homebrew/bin",
-            "\(home)/.volta/bin",
+            "\(home)/.volta/bin"
         ]
         for dir in fallbackDirs {
             let fullPath = "\(dir)/\(binary)"
@@ -85,7 +85,7 @@ enum Constants {
         let versionedDirs = [
             "\(home)/.nvm/versions/node",
             "\(home)/.local/share/fnm/node-versions",
-            "\(home)/.fnm/node-versions",
+            "\(home)/.fnm/node-versions"
         ]
         for dir in versionedDirs {
             if let found = searchNodeVersions(dir: dir, binary: binary) {
@@ -96,11 +96,11 @@ enum Constants {
     }
 
     /// Search versioned node manager directories for a binary.
-    private nonisolated static func searchNodeVersions(dir: String, binary: String) -> String? {
+    nonisolated private static func searchNodeVersions(dir: String, binary: String) -> String? {
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
-        for v in versions.sorted().reversed() {
+        for ver in versions.sorted().reversed() {
             for sub in ["bin", "installation/bin"] {
-                let path = "\(dir)/\(v)/\(sub)/\(binary)"
+                let path = "\(dir)/\(ver)/\(sub)/\(binary)"
                 if FileManager.default.isExecutableFile(atPath: path) {
                     return path
                 }
@@ -143,13 +143,13 @@ enum Constants {
                 let nvmDirs = [
                     NSHomeDirectory() + "/.nvm/versions/node",
                     NSHomeDirectory() + "/.local/share/fnm/node-versions",
-                    NSHomeDirectory() + "/.fnm/node-versions",
+                    NSHomeDirectory() + "/.fnm/node-versions"
                 ]
                 outer: for nvmDir in nvmDirs {
                     guard let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir) else { continue }
-                    for v in versions.sorted().reversed() {
+                    for ver in versions.sorted().reversed() {
                         for sub in ["bin", "installation/bin"] {
-                            let candidate = "\(nvmDir)/\(v)/\(sub)/claude"
+                            let candidate = "\(nvmDir)/\(ver)/\(sub)/claude"
                             if FileManager.default.isExecutableFile(atPath: candidate) {
                                 let claudeDir = (candidate as NSString).deletingLastPathComponent
                                 if let path = env["PATH"], !path.contains(claudeDir) {

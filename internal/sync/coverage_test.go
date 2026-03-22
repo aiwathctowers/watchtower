@@ -241,8 +241,8 @@ func TestChannelNameWithMap(t *testing.T) {
 	}
 
 	assert.Equal(t, "#general (C001)", ts.orch.channelName("C001"))
-	assert.Equal(t, "C002", ts.orch.channelName("C002"))   // empty name
-	assert.Equal(t, "C999", ts.orch.channelName("C999"))   // not in map
+	assert.Equal(t, "C002", ts.orch.channelName("C002")) // empty name
+	assert.Equal(t, "C999", ts.orch.channelName("C999")) // not in map
 }
 
 func TestChannelNameNilMap(t *testing.T) {

@@ -109,10 +109,13 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 
 	// Assemble prompt with DB access
 	dbPath := cfg.DBPath()
-	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, ws.ID, dbPath, db.Schema)
+	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, ws.ID, dbPath, db.Schema, cfg.Digest.Language)
 	timeHints := ai.FormatTimeHints(pq)
 
 	question := "What happened since I was last here? Give me a structured catchup summary."
+	if lang := cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {
+		question = fmt.Sprintf("What happened since I was last here? Give me a structured catchup summary. Respond in %s.", lang)
+	}
 	if catchupFlagWatchedOnly {
 		question += " Focus only on watched channels and users."
 	}

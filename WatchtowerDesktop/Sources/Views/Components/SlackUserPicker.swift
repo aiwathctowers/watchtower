@@ -35,7 +35,7 @@ struct SlackUserPicker: View {
             } else {
                 ForEach(selectedIDs, id: \.self) { uid in
                     HStack {
-                        let user = allUsers.first(where: { $0.id == uid })
+                        let user = allUsers.first { $0.id == uid }
                         Text(user?.bestName ?? uid)
                             .font(.subheadline)
                         if let user, !user.name.isEmpty {

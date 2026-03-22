@@ -6,16 +6,16 @@ package prompts
 // in digest, tracks, and analysis packages. They serve as the
 // initial seed and fallback when no DB version exists.
 var Defaults = map[string]string{
-	DigestChannel:  defaultDigestChannel,
-	DigestDaily:    defaultDigestDaily,
-	DigestWeekly:   defaultDigestWeekly,
-	DigestPeriod:   defaultDigestPeriod,
-	TracksExtract:  defaultTracksExtract,
-	TracksUpdate:   defaultTracksUpdate,
-	GuideUser:      defaultGuideUser,
-	GuidePeriod:    defaultGuidePeriod,
-	PeopleReduce:   defaultPeopleReduce,
-	PeopleTeam:     defaultPeopleTeam,
+	DigestChannel: defaultDigestChannel,
+	DigestDaily:   defaultDigestDaily,
+	DigestWeekly:  defaultDigestWeekly,
+	DigestPeriod:  defaultDigestPeriod,
+	TracksExtract: defaultTracksExtract,
+	TracksUpdate:  defaultTracksUpdate,
+	GuideUser:     defaultGuideUser,
+	GuidePeriod:   defaultGuidePeriod,
+	PeopleReduce:  defaultPeopleReduce,
+	PeopleTeam:    defaultPeopleTeam,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -34,16 +34,16 @@ var AllIDs = []string{
 
 // Descriptions maps prompt IDs to human-readable descriptions.
 var Descriptions = map[string]string{
-	DigestChannel:  "Channel digest — per-channel message analysis",
-	DigestDaily:    "Daily rollup — cross-channel daily summary",
-	DigestWeekly:   "Weekly trends — week-over-week analysis",
-	DigestPeriod:   "Period summary — comprehensive period overview",
-	TracksExtract:  "Tracks — extract tasks from messages",
-	TracksUpdate:   "Track update check — detect progress in threads",
-	GuideUser:      "Communication guide — personal coaching per user",
-	GuidePeriod:    "Team guide — cross-user communication tips",
-	PeopleReduce:   "People card — unified profile from signals",
-	PeopleTeam:     "Team summary — cross-user attention & tips",
+	DigestChannel: "Channel digest — per-channel message analysis",
+	DigestDaily:   "Daily rollup — cross-channel daily summary",
+	DigestWeekly:  "Weekly trends — week-over-week analysis",
+	DigestPeriod:  "Period summary — comprehensive period overview",
+	TracksExtract: "Tracks — extract tasks from messages",
+	TracksUpdate:  "Track update check — detect progress in threads",
+	GuideUser:     "Communication guide — personal coaching per user",
+	GuidePeriod:   "Team guide — cross-user communication tips",
+	PeopleReduce:  "People card — unified profile from signals",
+	PeopleTeam:    "Team summary — cross-user attention & tips",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -58,7 +58,8 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
   "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
   "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
   "key_messages": ["1234567890.123456", "1234567891.123456"],
-  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}]
+  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief description of channel culture and key players", "open_questions": ["..."]}
 }
 
 %s
@@ -89,9 +90,14 @@ Rules:
   * observations: Notable patterns or behaviors observed (empty [] if none)
   * message_refs: Slack timestamps of key messages (e.g. ["1234567890.123456"])
   Use Slack user IDs (e.g. U123456) for participant user_id. Only include situations where the interaction pattern is noteworthy — skip routine exchanges. If no notable situations, return empty array [].
+- running_summary: Updated running context for this channel. Compress aggressively — max 2000 characters. Include:
+  * active_topics: Topics currently in progress or recently discussed (remove resolved topics older than 3 days)
+  * recent_decisions: Key decisions from the last few days (max 5, remove outdated ones)
+  * channel_dynamics: Brief description of channel culture, key players, communication patterns
+  * open_questions: Unresolved questions that may come up again
 - If a field has no items, use an empty array []
 - Return valid JSON only, no other text
-
+%s
 === MESSAGES ===
 %s`
 
@@ -108,7 +114,8 @@ Return ONLY a JSON object (no markdown fences, no explanation):
   "topics": ["cross-channel topic1", "topic2"],
   "decisions": [{"text": "decision text", "by": "@username", "message_ts": "ts", "importance": "high"}],
   "action_items": [{"text": "action text", "assignee": "@username", "status": "open"}],
-  "key_messages": []
+  "key_messages": [],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief cross-channel dynamics overview", "open_questions": ["..."]}
 }
 
 %s
@@ -121,8 +128,9 @@ Rules:
   * "medium" — changes a process, workflow, or technical approach within a team/project
   * "low" — minor tactical choices (naming, formatting, scheduling, tooling tweaks)
   Only include GENUINE decisions. If no real decisions were made today, return an empty array.
+- running_summary: Updated daily running context. Compress aggressively — max 2000 characters. Track cross-channel themes, decisions, and open questions.
 - Return valid JSON only
-
+%s
 === CHANNEL DIGESTS ===
 %s`
 
@@ -139,7 +147,8 @@ Return ONLY a JSON object (no markdown fences, no explanation):
   "topics": ["trending topic1", "trending topic2"],
   "decisions": [{"text": "key decision", "by": "@username", "message_ts": "ts", "importance": "high"}],
   "action_items": [{"text": "outstanding action", "assignee": "@username", "status": "open"}],
-  "key_messages": []
+  "key_messages": [],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief weekly dynamics overview", "open_questions": ["..."]}
 }
 
 %s
@@ -149,8 +158,9 @@ Rules:
 - Highlight the most impactful decisions of the week. DEDUPLICATE: if the same decision appears across multiple days, include it only ONCE. Only include genuine choices/decisions, not status updates.
   importance: "high" (architectural, strategic, budget, org-wide), "medium" (process, workflow, team-level), "low" (tactical, minor)
 - Consolidate action items (remove completed, flag overdue)
+- running_summary: Updated weekly running context. Compress aggressively — max 2000 characters. Track major themes, decisions, trends, and open questions across the week.
 - Return valid JSON only
-
+%s
 === DAILY DIGESTS ===
 %s`
 

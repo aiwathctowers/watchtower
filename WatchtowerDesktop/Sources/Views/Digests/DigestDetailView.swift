@@ -4,7 +4,7 @@ struct DigestDetailView: View {
     let digest: Digest
     let channelName: String?
     let viewModel: DigestViewModel
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
     @State private var showCreateTrack = false
     @State private var markingRead = false
@@ -33,6 +33,9 @@ struct DigestDetailView: View {
 
                 // Topics
                 topicsSection
+
+                // Ongoing Topics (from running summary)
+                ongoingTopicsSection
 
                 // Decisions
                 decisionsSection
@@ -64,112 +67,117 @@ struct DigestDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
-                // Type badge
-                Text(digest.type.capitalized)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(typeColor)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(typeColor.opacity(0.12), in: Capsule())
+            headerTitleRow
+            headerDateRow
+            headerActionsRow
+        }
+    }
 
-                if let name = channelName {
-                    if let url = viewModel.slackChannelURL(channelID: digest.channelID) {
-                        Link(destination: url) {
-                            Text("#\(name)")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                        }
-                        .buttonStyle(.borderless)
-                    } else {
+    private var headerTitleRow: some View {
+        HStack(alignment: .center) {
+            Text(digest.type.capitalized)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(typeColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(typeColor.opacity(0.12), in: Capsule())
+
+            if let name = channelName {
+                if let url = viewModel.slackChannelURL(channelID: digest.channelID) {
+                    Link(destination: url) {
                         Text("#\(name)")
                             .font(.title3)
                             .fontWeight(.semibold)
                     }
+                    .buttonStyle(.borderless)
                 } else {
-                    Text("Cross-channel")
+                    Text("#\(name)")
                         .font(.title3)
                         .fontWeight(.semibold)
                 }
-
-                Spacer()
-
-                if let onClose {
-                    Button { onClose() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                }
+            } else {
+                Text("Cross-channel")
+                    .font(.title3)
+                    .fontWeight(.semibold)
             }
 
-            // Date range + message count
-            HStack(spacing: 12) {
-                Label(
-                    "\(TimeFormatting.shortDateTime(fromUnix: digest.periodFrom)) — \(TimeFormatting.shortDateTime(fromUnix: digest.periodTo))",
-                    systemImage: "calendar"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Spacer()
 
-                if digest.messageCount > 0 {
-                    Label("\(digest.messageCount) messages", systemImage: "message")
-                        .font(.caption)
+            if let onClose {
+                Button { onClose() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
 
-                Spacer()
+    private var headerDateRow: some View {
+        HStack(spacing: 12) {
+            Label(
+                "\(TimeFormatting.shortDateTime(fromUnix: digest.periodFrom)) — \(TimeFormatting.shortDateTime(fromUnix: digest.periodTo))",
+                systemImage: "calendar"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if digest.messageCount > 0 {
+                Label("\(digest.messageCount) messages", systemImage: "message")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            // Action buttons
-            HStack(spacing: 12) {
-                // Channel link moved to header title
+            Spacer()
+        }
+    }
 
+    private var headerActionsRow: some View {
+        HStack(spacing: 12) {
+            Button {
+                showCreateTrack = true
+            } label: {
+                Label("Create Track", systemImage: "plus.circle")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+
+            if !digest.channelID.isEmpty {
                 Button {
-                    showCreateTrack = true
+                    markChannelRead()
                 } label: {
-                    Label("Create Track", systemImage: "plus.circle")
+                    if markingRead {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Label(
+                            markedRead ? "Marked read" : "Mark read in Slack",
+                            systemImage: markedRead ? "checkmark.circle.fill" : "eye"
+                        )
                         .font(.caption)
+                        .foregroundStyle(markedRead ? .green : .accentColor)
+                    }
                 }
                 .buttonStyle(.borderless)
+                .disabled(markingRead || markedRead)
+            }
 
-                if !digest.channelID.isEmpty {
-                    Button {
-                        markChannelRead()
-                    } label: {
-                        if markingRead {
-                            ProgressView()
-                                .controlSize(.mini)
-                        } else {
-                            Label(
-                                markedRead ? "Marked read" : "Mark read in Slack",
-                                systemImage: markedRead ? "checkmark.circle.fill" : "eye"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(markedRead ? .green : .accentColor)
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(markingRead || markedRead)
-                }
+            if let err = markReadError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
 
-                if let err = markReadError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                }
+            Spacer()
 
-                Spacer()
-
-                if let dbManager = appState.databaseManager {
-                    FeedbackButtons(
-                        entityType: "digest",
-                        entityID: String(digest.id),
-                        dbManager: dbManager
-                    )
-                }
+            if let dbManager = appState.databaseManager {
+                FeedbackButtons(
+                    entityType: "digest",
+                    entityID: String(digest.id),
+                    dbManager: dbManager
+                )
             }
         }
     }
@@ -222,6 +230,60 @@ struct DigestDetailView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var ongoingTopicsSection: some View {
+        if let rs = digest.parsedRunningSummary,
+           let activeTopics = rs.activeTopics, !activeTopics.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Ongoing Topics")
+                    .font(.headline)
+                ForEach(activeTopics) { topic in
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(topicStatusColor(topic.status))
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 5)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(topic.topic)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            if let topicSummary = topic.summary,
+                               !topicSummary.isEmpty {
+                                Text(topicSummary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 8) {
+                                if let status = topic.status {
+                                    Text(status)
+                                        .font(.caption2)
+                                        .foregroundStyle(
+                                            topicStatusColor(status)
+                                        )
+                                }
+                                if let started = topic.started {
+                                    Text("since \(started)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func topicStatusColor(_ status: String?) -> Color {
+        switch status {
+        case "in_progress": .orange
+        case "resolved": .green
+        case "blocked": .red
+        case "stale": .gray
+        default: .blue
         }
     }
 

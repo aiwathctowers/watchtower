@@ -193,6 +193,24 @@ func (c *Client) GetChannels(ctx context.Context, types []string, onPage ...func
 	return allChannels, nil
 }
 
+// GetChannelReadCursor fetches the last_read timestamp for a single channel via conversations.info. (Tier 3)
+// Returns the last_read string (Slack ts) and any error.
+func (c *Client) GetChannelReadCursor(ctx context.Context, channelID string) (string, error) {
+	var ch *slack.Channel
+	err := c.doRequest(ctx, Tier3, func() error {
+		c.logf("slack API: conversations.info channel=%s", channelID)
+		var err error
+		ch, err = c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+			ChannelID: channelID,
+		})
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return ch.LastRead, nil
+}
+
 // HistoryOptions configures a conversation history request.
 type HistoryOptions struct {
 	ChannelID string

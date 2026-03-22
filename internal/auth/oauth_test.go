@@ -21,7 +21,7 @@ import (
 // insecureClient is an HTTP client that skips TLS verification (for self-signed certs).
 var insecureClient = &http.Client{
 	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	},
 }
 

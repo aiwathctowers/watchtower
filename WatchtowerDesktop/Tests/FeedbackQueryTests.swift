@@ -13,7 +13,7 @@ final class FeedbackQueryTests: XCTestCase {
         XCTAssertNotNil(feedback)
         XCTAssertEqual(feedback?.rating, 1)
         XCTAssertEqual(feedback?.comment, "Great")
-        XCTAssertTrue(feedback!.isPositive)
+        XCTAssertTrue(try XCTUnwrap(feedback).isPositive)
     }
 
     func testGetFeedbackReturnsLatest() throws {
@@ -31,7 +31,7 @@ final class FeedbackQueryTests: XCTestCase {
         }
         let feedback = try db.read { try FeedbackQueries.getFeedback($0, entityType: "digest", entityID: "1") }
         XCTAssertEqual(feedback?.rating, -1)
-        XCTAssertFalse(feedback!.isPositive)
+        XCTAssertFalse(try XCTUnwrap(feedback).isPositive)
     }
 
     func testGetFeedbackNotFound() throws {
@@ -51,13 +51,13 @@ final class FeedbackQueryTests: XCTestCase {
         let stats = try db.read { try FeedbackQueries.getStats($0) }
         XCTAssertEqual(stats.count, 2)
 
-        let digestStats = stats.first { $0.entityType == "digest" }!
+        let digestStats = try XCTUnwrap(stats.first { $0.entityType == "digest" })
         XCTAssertEqual(digestStats.positive, 2)
         XCTAssertEqual(digestStats.negative, 1)
         XCTAssertEqual(digestStats.total, 3)
         XCTAssertEqual(digestStats.positivePercent, 66) // 2*100/3
 
-        let trackStats = stats.first { $0.entityType == "track" }!
+        let trackStats = try XCTUnwrap(stats.first { $0.entityType == "track" })
         XCTAssertEqual(trackStats.positive, 0)
         XCTAssertEqual(trackStats.negative, 1)
         XCTAssertEqual(trackStats.total, 1)

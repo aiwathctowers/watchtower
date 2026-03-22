@@ -8,20 +8,65 @@ enum StreamEvent {
 }
 
 protocol ClaudeServiceProtocol: Sendable {
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?, model: String?, extraAllowedTools: [String]) -> AsyncThrowingStream<StreamEvent, Error>
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?,
+        model: String?,
+        extraAllowedTools: [String]
+    ) -> AsyncThrowingStream<StreamEvent, Error>
 }
 
 extension ClaudeServiceProtocol {
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?) -> AsyncThrowingStream<StreamEvent, Error> {
-        stream(prompt: prompt, systemPrompt: systemPrompt, sessionID: sessionID, dbPath: dbPath, model: nil, extraAllowedTools: [])
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
+        stream(
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            sessionID: sessionID,
+            dbPath: dbPath,
+            model: nil,
+            extraAllowedTools: []
+        )
     }
 
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?, model: String?) -> AsyncThrowingStream<StreamEvent, Error> {
-        stream(prompt: prompt, systemPrompt: systemPrompt, sessionID: sessionID, dbPath: dbPath, model: model, extraAllowedTools: [])
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?,
+        model: String?
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
+        stream(
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            sessionID: sessionID,
+            dbPath: dbPath,
+            model: model,
+            extraAllowedTools: []
+        )
     }
 
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?, extraAllowedTools: [String]) -> AsyncThrowingStream<StreamEvent, Error> {
-        stream(prompt: prompt, systemPrompt: systemPrompt, sessionID: sessionID, dbPath: dbPath, model: nil, extraAllowedTools: extraAllowedTools)
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?,
+        extraAllowedTools: [String]
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
+        stream(
+            prompt: prompt,
+            systemPrompt: systemPrompt,
+            sessionID: sessionID,
+            dbPath: dbPath,
+            model: nil,
+            extraAllowedTools: extraAllowedTools
+        )
     }
 }
 
@@ -38,7 +83,7 @@ private final class ProcessHandle: @unchecked Sendable {
 
     func terminate() {
         lock.lock()
-        if let p = process, p.isRunning { p.terminate() }
+        if let proc = process, proc.isRunning { proc.terminate() }
         lock.unlock()
     }
 }
@@ -50,7 +95,14 @@ final class ClaudeService: ClaudeServiceProtocol, Sendable {
         self.model = model
     }
 
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?, model: String?, extraAllowedTools: [String]) -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?,
+        model: String?,
+        extraAllowedTools: [String]
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
         let processHandle = ProcessHandle()
         let effectiveModel = model ?? self.model
         return AsyncThrowingStream { continuation in
@@ -335,7 +387,9 @@ extension ClaudeService {
             parts.append("Channel: #\(sanitizePromptValue(name))")
         }
         parts.append("Type: \(digest.type)")
-        parts.append("Period: \(TimeFormatting.shortDateTime(fromUnix: digest.periodFrom)) — \(TimeFormatting.shortDateTime(fromUnix: digest.periodTo))")
+        let periodFrom = TimeFormatting.shortDateTime(fromUnix: digest.periodFrom)
+        let periodTo = TimeFormatting.shortDateTime(fromUnix: digest.periodTo)
+        parts.append("Period: \(periodFrom) — \(periodTo)")
         parts.append("Summary: \(sanitizePromptValue(digest.summary))")
         if !digest.topics.isEmpty && digest.topics != "[]" {
             parts.append("Topics: \(sanitizePromptValue(digest.topics))")
@@ -368,9 +422,12 @@ extension ClaudeService {
         """
         You are an assistant that creates structured tracks from Slack workspace digests.
 
-        The user will provide a digest (summary, topics, decisions, existing tracks) and optionally their own instructions.
+        The user will provide a digest (summary, topics, decisions,
+        existing tracks) and optionally their own instructions.
 
-        Your task: analyze the digest and create ONE comprehensive, high-quality track that captures the most important actionable work from this digest.
+        Your task: analyze the digest and create ONE comprehensive,
+        high-quality track that captures the most important actionable
+        work from this digest.
 
         If the user provides instructions, follow them to focus the track on what they need.
 
@@ -378,7 +435,7 @@ extension ClaudeService {
 
         {
           "text": "clear, actionable title of what needs to be done",
-          "context": "detailed context (3-5 sentences): what was discussed, what decisions were made, why this action is needed. The reader should understand the full picture without reading the original digest.",
+          "context": "detailed context (3-5 sentences): what was discussed, what decisions were made, why this action is needed.",
           "priority": "high|medium|low",
           "due_date": "YYYY-MM-DD (only if clearly implied, otherwise omit)",
           "requester": {"name": "person or team who needs this", "user_id": ""},
@@ -420,7 +477,7 @@ enum ClaudeError: LocalizedError {
         switch self {
         case .notFound:
             "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code\nOr set claude_path in ~/.config/watchtower/config.yaml"
-        case .exitCode(let code, let stderr):
+        case let .exitCode(code, stderr):
             "Claude exited with code \(code): \(stderr)"
         }
     }

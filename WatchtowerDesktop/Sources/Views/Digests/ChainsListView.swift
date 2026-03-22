@@ -7,11 +7,11 @@ struct ChainsListView: View {
 
     private var filteredChains: [Chain] {
         if searchText.isEmpty { return viewModel.chains }
-        let q = searchText.lowercased()
+        let query = searchText.lowercased()
         return viewModel.chains.filter {
-            $0.title.lowercased().contains(q) ||
-            $0.summary.lowercased().contains(q) ||
-            $0.slug.lowercased().contains(q)
+            $0.title.lowercased().contains(query) ||
+            $0.summary.lowercased().contains(query) ||
+            $0.slug.lowercased().contains(query)
         }
     }
 

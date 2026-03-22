@@ -90,7 +90,7 @@ func TestMigrationFromV20_CreatesChains(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Verify chains table created by v22
 	id, err := db2.CreateChain(Chain{
@@ -143,7 +143,7 @@ func TestMigrationFromV21_ChainsAndInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Verify all tables exist and are usable
 	for _, tbl := range []string{"chains", "chain_refs", "user_interactions"} {
@@ -175,7 +175,7 @@ func TestMigrationFromV22_UserInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Insert and query to verify table structure
 	err = db2.UpsertUserInteractions([]UserInteraction{
@@ -223,7 +223,7 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Data should survive
 	tracks, err := db2.GetTracks(TrackFilter{Status: "inbox"})
@@ -259,7 +259,7 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Chain data should survive
 	chain, err := db2.GetChainByID(int(chainID))
@@ -292,7 +292,7 @@ func TestMigrationIdempotent_V23HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Data should survive
 	interactions, err := db2.GetUserInteractions("U1", 1000, 2000)
@@ -307,7 +307,7 @@ func TestUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 }
 
 // TestUserVersion_CustomValue verifies UserVersion after manual set.
@@ -555,7 +555,7 @@ PRAGMA user_version = 1;
 	// Verify schema version is now 23
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 29, v)
+	assert.Equal(t, 31, v)
 
 	// Verify data survived all migrations
 	var wsName string

@@ -197,38 +197,39 @@ type Track struct {
 
 // Digest represents an AI-generated summary of channel activity.
 type Digest struct {
-	ID            int
-	ChannelID     string  // "" for cross-channel digests
-	PeriodFrom    float64 // Unix timestamp
-	PeriodTo      float64 // Unix timestamp
-	Type          string  // "channel", "daily", "weekly"
-	Summary       string
-	Topics        string // JSON array
-	Decisions     string // JSON array
-	ActionItems   string // JSON array
-	MessageCount  int
-	Model         string
-	InputTokens   int
-	OutputTokens  int
-	CostUSD       float64
-	CreatedAt     string
-	ReadAt        sql.NullString // NULL = unread, ISO8601 = when read
-	PromptVersion int            // version of prompt used for generation
-	PeopleSignals string         // JSON array of PersonSignals from MAP phase (legacy)
-	Situations    string         // JSON array of Situation objects
+	ID             int
+	ChannelID      string  // "" for cross-channel digests
+	PeriodFrom     float64 // Unix timestamp
+	PeriodTo       float64 // Unix timestamp
+	Type           string  // "channel", "daily", "weekly"
+	Summary        string
+	Topics         string // JSON array
+	Decisions      string // JSON array
+	ActionItems    string // JSON array
+	MessageCount   int
+	Model          string
+	InputTokens    int
+	OutputTokens   int
+	CostUSD        float64
+	CreatedAt      string
+	ReadAt         sql.NullString // NULL = unread, ISO8601 = when read
+	PromptVersion  int            // version of prompt used for generation
+	PeopleSignals  string         // JSON array of PersonSignals from MAP phase (legacy)
+	Situations     string         // JSON array of Situation objects
+	RunningSummary string         // JSON running context for next digest (channel memory)
 }
 
 // Situation represents a notable interaction pattern observed in a channel digest.
 // Each situation involves multiple participants and captures dynamics between people.
 type Situation struct {
-	Topic        string                `json:"topic"`
-	Type         string                `json:"type"` // e.g. "bottleneck", "conflict", "collaboration", etc.
+	Topic        string                 `json:"topic"`
+	Type         string                 `json:"type"` // e.g. "bottleneck", "conflict", "collaboration", etc.
 	Participants []SituationParticipant `json:"participants"`
-	Dynamic      string                `json:"dynamic"`
-	Outcome      string                `json:"outcome"`
-	RedFlags     []string              `json:"red_flags"`
-	Observations []string              `json:"observations"`
-	MessageRefs  []string              `json:"message_refs"`
+	Dynamic      string                 `json:"dynamic"`
+	Outcome      string                 `json:"outcome"`
+	RedFlags     []string               `json:"red_flags"`
+	Observations []string               `json:"observations"`
+	MessageRefs  []string               `json:"message_refs"`
 }
 
 // SituationParticipant is a person involved in a situation with their role.
@@ -290,16 +291,16 @@ type UserProfile struct {
 // Chain represents a thematic thread grouping related decisions and tracks over time.
 type Chain struct {
 	ID         int
-	ParentID   int     // 0 if top-level, otherwise parent chain ID
+	ParentID   int // 0 if top-level, otherwise parent chain ID
 	Title      string
 	Slug       string
-	Status     string  // "active", "resolved", "stale"
+	Status     string // "active", "resolved", "stale"
 	Summary    string
 	ChannelIDs string  // JSON array of channel IDs
 	FirstSeen  float64 // Unix timestamp
 	LastSeen   float64 // Unix timestamp
 	ItemCount  int
-	ReadAt     string  // empty if unread
+	ReadAt     string // empty if unread
 	CreatedAt  string
 	UpdatedAt  string
 }
@@ -350,16 +351,16 @@ type CommunicationGuide struct {
 	ThreadsInitiated         int
 	ThreadsReplied           int
 	AvgMessageLength         float64
-	ActiveHoursJSON          string  // JSON: {"9":12,"10":8,...}
+	ActiveHoursJSON          string // JSON: {"9":12,"10":8,...}
 	VolumeChangePct          float64
-	Summary                  string  // how to communicate effectively with this person
-	CommunicationPreferences string  // preferred style, format, timing
-	AvailabilityPatterns     string  // when they are most responsive
-	DecisionProcess          string  // how they make/participate in decisions
-	SituationalTactics       string  // JSON array: if X happens, do Y
-	EffectiveApproaches      string  // JSON array: what works well
-	Recommendations          string  // JSON array: actionable tips
-	RelationshipContext      string  // peer/report/manager dynamics
+	Summary                  string // how to communicate effectively with this person
+	CommunicationPreferences string // preferred style, format, timing
+	AvailabilityPatterns     string // when they are most responsive
+	DecisionProcess          string // how they make/participate in decisions
+	SituationalTactics       string // JSON array: if X happens, do Y
+	EffectiveApproaches      string // JSON array: what works well
+	Recommendations          string // JSON array: actionable tips
+	RelationshipContext      string // peer/report/manager dynamics
 	Model                    string
 	InputTokens              int
 	OutputTokens             int
@@ -395,19 +396,19 @@ type PeopleCard struct {
 	ThreadsInitiated    int
 	ThreadsReplied      int
 	AvgMessageLength    float64
-	ActiveHoursJSON     string  // JSON: {"9":12,"10":8,...}
+	ActiveHoursJSON     string // JSON: {"9":12,"10":8,...}
 	VolumeChangePct     float64
 	Summary             string
-	CommunicationStyle  string  // driver|collaborator|executor|observer|facilitator
-	DecisionRole        string  // decision-maker|approver|contributor|observer|blocker
-	RedFlags            string  // JSON array
-	Highlights          string  // JSON array
-	Accomplishments     string  // JSON array
-	CommunicationGuide  string  // coaching paragraph (was how_to_communicate)
-	DecisionStyle       string  // how they participate in decisions
-	Tactics             string  // JSON array of "If X, then Y"
+	CommunicationStyle  string // driver|collaborator|executor|observer|facilitator
+	DecisionRole        string // decision-maker|approver|contributor|observer|blocker
+	RedFlags            string // JSON array
+	Highlights          string // JSON array
+	Accomplishments     string // JSON array
+	CommunicationGuide  string // coaching paragraph (was how_to_communicate)
+	DecisionStyle       string // how they participate in decisions
+	Tactics             string // JSON array of "If X, then Y"
 	RelationshipContext string
-	Status              string  // "ready" or "insufficient_data"
+	Status              string // "ready" or "insufficient_data"
 	Model               string
 	InputTokens         int
 	OutputTokens        int

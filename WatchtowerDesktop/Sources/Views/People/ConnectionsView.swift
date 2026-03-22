@@ -5,8 +5,8 @@ struct ConnectionsView: View {
     let profile: UserProfile?
     let allCards: [PeopleCard]
     let userNameResolver: (String) -> String
-    var onNavigateToPerson: ((String) -> Void)? = nil
-    var onUpdateConnections: (([String], [String], String) -> Void)? = nil
+    var onNavigateToPerson: ((String) -> Void)?
+    var onUpdateConnections: (([String], [String], String) -> Void)?
 
     @State private var selectedNode: String?
     @State private var showEditSheet = false
@@ -80,14 +80,16 @@ struct ConnectionsView: View {
         }
         for id in orgPeerIDs {
             nodes.append(GraphNode(
-                userID: id, role: .orgPeer,
+                userID: id,
+                role: .orgPeer,
                 interaction: orgInteractions[id],
                 isOrgConnection: true
             ))
         }
         for id in orgReportIDs {
             nodes.append(GraphNode(
-                userID: id, role: .report,
+                userID: id,
+                role: .report,
                 interaction: orgInteractions[id],
                 isOrgConnection: true
             ))
@@ -100,7 +102,8 @@ struct ConnectionsView: View {
             default: .weakSignal
             }
             nodes.append(GraphNode(
-                userID: i.userB, role: role,
+                userID: i.userB,
+                role: role,
                 interaction: i,
                 isOrgConnection: false
             ))
@@ -167,9 +170,11 @@ struct ConnectionsView: View {
         for ring in stride(from: 0.33, through: 1.0, by: 0.33) {
             let r = maxR * ring
             let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
-            context.stroke(Circle().path(in: rect),
-                          with: .color(.secondary.opacity(0.08)),
-                          lineWidth: 1)
+            context.stroke(
+                Circle().path(in: rect),
+                with: .color(.secondary.opacity(0.08)),
+                lineWidth: 1
+            )
         }
 
         // Draw "ME" node
@@ -196,8 +201,11 @@ struct ConnectionsView: View {
             if node.isOrgConnection {
                 context.stroke(path, with: .color(color.opacity(0.35)), lineWidth: lineWidth)
             } else {
-                context.stroke(path, with: .color(color.opacity(0.25)),
-                              style: StrokeStyle(lineWidth: lineWidth, dash: [5, 3]))
+                context.stroke(
+                    path,
+                    with: .color(color.opacity(0.25)),
+                    style: StrokeStyle(lineWidth: lineWidth, dash: [5, 3])
+                )
             }
 
             // Node circle — size by score
@@ -249,8 +257,8 @@ struct ConnectionsView: View {
         for _ in 0..<8 {
             let ids = Array(positions.keys)
             for i in 0..<ids.count {
-                for j in (i + 1)..<ids.count {
-                    guard var p1 = positions[ids[i]], var p2 = positions[ids[j]] else { continue }
+                for idx in (i + 1)..<ids.count {
+                    guard var p1 = positions[ids[i]], var p2 = positions[ids[idx]] else { continue }
                     let dx = p2.x - p1.x
                     let dy = p2.y - p1.y
                     let dist = sqrt(dx * dx + dy * dy)
@@ -263,7 +271,7 @@ struct ConnectionsView: View {
                         p2.x += nx * overlap
                         p2.y += ny * overlap
                         positions[ids[i]] = p1
-                        positions[ids[j]] = p2
+                        positions[ids[idx]] = p2
                     }
                 }
             }
@@ -280,7 +288,7 @@ struct ConnectionsView: View {
     /// Each role gets a sector of the circle — wider sectors, better distribution.
     private func angleForNode(_ node: GraphNode) -> Double {
         let sameRole = graphNodes.filter { $0.role == node.role }
-        let idx = sameRole.firstIndex(where: { $0.userID == node.userID }) ?? 0
+        let idx = sameRole.firstIndex { $0.userID == node.userID } ?? 0
         let count = max(sameRole.count, 1)
 
         // Sectors spread around full circle with gaps between roles.
@@ -393,34 +401,62 @@ struct ConnectionsView: View {
         VStack(alignment: .leading, spacing: 16) {
             // Org connections
             if !orgManagerID.isEmpty {
-                connectionGroup(title: "I Report To", icon: "person.crop.circle",
-                               color: .blue, userIDs: [orgManagerID])
+                connectionGroup(
+                    title: "I Report To",
+                    icon: "person.crop.circle",
+                    color: .blue,
+                    userIDs: [orgManagerID]
+                )
             }
             if !orgPeerIDs.isEmpty {
-                connectionGroup(title: "Key Peers", icon: "person.2",
-                               color: .orange, userIDs: orgPeerIDs)
+                connectionGroup(
+                    title: "Key Peers",
+                    icon: "person.2",
+                    color: .orange,
+                    userIDs: orgPeerIDs
+                )
             }
             if !orgReportIDs.isEmpty {
-                connectionGroup(title: "My Reports", icon: "person.3",
-                               color: .green, userIDs: orgReportIDs)
+                connectionGroup(
+                    title: "My Reports",
+                    icon: "person.3",
+                    color: .green,
+                    userIDs: orgReportIDs
+                )
             }
 
             // Discovered connections by type
             if !discoveredPeers.isEmpty {
-                connectionGroup(title: "Discovered Peers", icon: "person.2.wave.2",
-                               color: .cyan, userIDs: discoveredPeers.map(\.userB))
+                connectionGroup(
+                    title: "Discovered Peers",
+                    icon: "person.2.wave.2",
+                    color: .cyan,
+                    userIDs: discoveredPeers.map(\.userB
+                ))
             }
             if !iDependOn.isEmpty {
-                connectionGroup(title: "I Depend On", icon: "arrow.up.right.circle",
-                               color: .purple, userIDs: iDependOn.map(\.userB))
+                connectionGroup(
+                    title: "I Depend On",
+                    icon: "arrow.up.right.circle",
+                    color: .purple,
+                    userIDs: iDependOn.map(\.userB
+                ))
             }
             if !dependOnMe.isEmpty {
-                connectionGroup(title: "Depend On Me", icon: "arrow.down.left.circle",
-                               color: .pink, userIDs: dependOnMe.map(\.userB))
+                connectionGroup(
+                    title: "Depend On Me",
+                    icon: "arrow.down.left.circle",
+                    color: .pink,
+                    userIDs: dependOnMe.map(\.userB
+                ))
             }
             if !weakSignals.isEmpty {
-                connectionGroup(title: "Weak Signals", icon: "antenna.radiowaves.left.and.right",
-                               color: .gray, userIDs: weakSignals.map(\.userB))
+                connectionGroup(
+                    title: "Weak Signals",
+                    icon: "antenna.radiowaves.left.and.right",
+                    color: .gray,
+                    userIDs: weakSignals.map(\.userB
+                ))
             }
         }
     }
@@ -452,8 +488,10 @@ struct ConnectionsView: View {
                 Spacer()
                 if let interaction, interaction.interactionScore > 0 {
                     Text("\(Int(interaction.interactionScore))")
-                        .font(.caption2).fontWeight(.bold)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
                         .background(color.opacity(0.15), in: Capsule())
                 }
             }
@@ -520,7 +558,8 @@ struct ConnectionsView: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 4).padding(.vertical, 1)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
         .background(Color.secondary.opacity(0.08), in: Capsule())
     }
 
@@ -609,91 +648,9 @@ struct EditConnectionsSheet: View {
                 .font(.headline)
                 .padding(.top, 12)
 
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search people...", text: $searchText)
-                    .textFieldStyle(.plain)
-            }
-            .padding(8)
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal)
-
-            List {
-                Section("Manager") {
-                    ForEach(usersForManager, id: \.userID) { a in
-                        HStack {
-                            Text("@\(userNameResolver(a.userID))")
-                            Spacer()
-                            if selectedManager == a.userID {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedManager = selectedManager == a.userID ? "" : a.userID
-                        }
-                    }
-                }
-
-                Section("Key Peers") {
-                    ForEach(usersForPeers, id: \.userID) { a in
-                        HStack {
-                            Text("@\(userNameResolver(a.userID))")
-                            Spacer()
-                            if selectedPeers.contains(a.userID) {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if selectedPeers.contains(a.userID) {
-                                selectedPeers.remove(a.userID)
-                            } else {
-                                selectedPeers.insert(a.userID)
-                            }
-                        }
-                    }
-                }
-
-                Section("My Reports") {
-                    ForEach(usersForReports, id: \.userID) { a in
-                        HStack {
-                            Text("@\(userNameResolver(a.userID))")
-                            Spacer()
-                            if selectedReports.contains(a.userID) {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if selectedReports.contains(a.userID) {
-                                selectedReports.remove(a.userID)
-                            } else {
-                                selectedReports.insert(a.userID)
-                            }
-                        }
-                    }
-                }
-            }
-
-            HStack {
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Save") {
-                    onSave(
-                        Array(selectedReports),
-                        Array(selectedPeers),
-                        selectedManager
-                    )
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding()
+            searchBar
+            connectionsList
+            actionButtons
         }
         .frame(width: 400, height: 500)
         .onAppear {
@@ -703,12 +660,104 @@ struct EditConnectionsSheet: View {
         }
     }
 
+    private var searchBar: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search people...", text: $searchText)
+                .textFieldStyle(.plain)
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal)
+    }
+
+    private var connectionsList: some View {
+        List {
+            Section("Manager") {
+                ForEach(usersForManager, id: \.userID) { card in
+                    HStack {
+                        Text("@\(userNameResolver(card.userID))")
+                        Spacer()
+                        if selectedManager == card.userID {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedManager = selectedManager == card.userID ? "" : card.userID
+                    }
+                }
+            }
+
+            Section("Key Peers") {
+                ForEach(usersForPeers, id: \.userID) { card in
+                    HStack {
+                        Text("@\(userNameResolver(card.userID))")
+                        Spacer()
+                        if selectedPeers.contains(card.userID) {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if selectedPeers.contains(card.userID) {
+                            selectedPeers.remove(card.userID)
+                        } else {
+                            selectedPeers.insert(card.userID)
+                        }
+                    }
+                }
+            }
+
+            Section("My Reports") {
+                ForEach(usersForReports, id: \.userID) { card in
+                    HStack {
+                        Text("@\(userNameResolver(card.userID))")
+                        Spacer()
+                        if selectedReports.contains(card.userID) {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if selectedReports.contains(card.userID) {
+                            selectedReports.remove(card.userID)
+                        } else {
+                            selectedReports.insert(card.userID)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack {
+            Button("Cancel", action: onCancel)
+                .keyboardShortcut(.cancelAction)
+            Spacer()
+            Button("Save") {
+                onSave(
+                    Array(selectedReports),
+                    Array(selectedPeers),
+                    selectedManager
+                )
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding()
+    }
+
     private var availableUsers: [PeopleCard] {
         let filtered = allCards
         if searchText.isEmpty { return filtered }
-        let q = searchText.lowercased()
+        let query = searchText.lowercased()
         return filtered.filter {
-            userNameResolver($0.userID).lowercased().contains(q)
+            userNameResolver($0.userID).lowercased().contains(query)
         }
     }
 

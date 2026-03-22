@@ -34,26 +34,38 @@ enum DigestQueries {
     }
 
     static func fetchLatest(_ db: Database, type: String) throws -> Digest? {
-        try Digest.fetchOne(db, sql: """
-            SELECT * FROM digests WHERE type = ?
-            ORDER BY created_at DESC LIMIT 1
-            """, arguments: [type])
+        try Digest.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM digests WHERE type = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+            arguments: [type]
+        )
     }
 
     static func fetchWithDecisions(_ db: Database, limit: Int = 50) throws -> [Digest] {
-        try Digest.fetchAll(db, sql: """
-            SELECT * FROM digests
-            WHERE decisions != '[]' AND decisions IS NOT NULL
-            ORDER BY created_at DESC LIMIT ?
-            """, arguments: [limit])
+        try Digest.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM digests
+                WHERE decisions != '[]' AND decisions IS NOT NULL
+                ORDER BY created_at DESC LIMIT ?
+                """,
+            arguments: [limit]
+        )
     }
 
     static func fetchNewSince(_ db: Database, afterID: Int) throws -> [Digest] {
-        try Digest.fetchAll(db, sql: """
-            SELECT * FROM digests
-            WHERE id > ? AND decisions != '[]' AND decisions IS NOT NULL
-            ORDER BY id ASC
-            """, arguments: [afterID])
+        try Digest.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM digests
+                WHERE id > ? AND decisions != '[]' AND decisions IS NOT NULL
+                ORDER BY id ASC
+                """,
+            arguments: [afterID]
+        )
     }
 
     static func maxID(_ db: Database) throws -> Int {

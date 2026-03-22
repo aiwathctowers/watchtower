@@ -15,7 +15,7 @@ struct TrackParticipant: Decodable, Identifiable, Equatable {
         case stance
     }
 
-    static func == (lhs: TrackParticipant, rhs: TrackParticipant) -> Bool {
+    static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.name == rhs.name && lhs.userID == rhs.userID && lhs.stance == rhs.stance
     }
 }
@@ -38,7 +38,7 @@ struct TrackDecisionOption: Decodable, Identifiable, Equatable {
         case option, supporters, pros, cons
     }
 
-    static func == (lhs: TrackDecisionOption, rhs: TrackDecisionOption) -> Bool {
+    static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.option == rhs.option && lhs.supporters == rhs.supporters && lhs.pros == rhs.pros && lhs.cons == rhs.cons
     }
 }
@@ -68,7 +68,7 @@ struct TrackSubItem: Codable, Identifiable, Equatable {
 
     var isDone: Bool { status == "done" }
 
-    static func == (lhs: TrackSubItem, rhs: TrackSubItem) -> Bool {
+    static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.text == rhs.text && lhs.status == rhs.status
     }
 }
@@ -216,7 +216,7 @@ struct Track: FetchableRecord, Identifiable, Equatable {
     }
 
     var createdDate: Date {
-        if let d = Self.iso8601WithFractional.date(from: createdAt) { return d }
+        if let parsed = Self.iso8601WithFractional.date(from: createdAt) { return parsed }
         return Self.iso8601Standard.date(from: createdAt) ?? Date()
     }
 

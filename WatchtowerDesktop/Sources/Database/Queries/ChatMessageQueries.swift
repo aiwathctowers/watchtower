@@ -18,9 +18,13 @@ enum ChatMessageQueries {
     }
 
     static func fetchByConversation(_ db: Database, conversationID: Int64) throws -> [ChatMessageRecord] {
-        try ChatMessageRecord.fetchAll(db, sql: """
-            SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC
-        """, arguments: [conversationID])
+        try ChatMessageRecord.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at ASC
+                """,
+            arguments: [conversationID]
+        )
     }
 
     @discardableResult

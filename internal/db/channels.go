@@ -238,6 +238,24 @@ func scanChannels(rows *sql.Rows) ([]Channel, error) {
 	return channels, rows.Err()
 }
 
+// UnreadDigestChannelIDs returns distinct channel IDs that have unread channel-type digests.
+func (db *DB) UnreadDigestChannelIDs() ([]string, error) {
+	rows, err := db.Query(`SELECT DISTINCT channel_id FROM digests WHERE read_at IS NULL AND type = 'channel' AND channel_id != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // UpdateChannelLastRead updates only the last_read cursor for a channel.
 func (db *DB) UpdateChannelLastRead(channelID, lastRead string) error {
 	_, err := db.Exec(`UPDATE channels SET last_read = ? WHERE id = ? AND (last_read = '' OR last_read < ?)`,
@@ -260,7 +278,7 @@ func (db *DB) AutoMarkReadFromSlack() (digestsMarked, tracksMarked int64, err er
 	// Slack timestamps are "epoch.seq" strings; we compare period_to (Unix float) against
 	// last_read (Slack ts) by extracting the epoch part.
 	res, err := db.Exec(`
-		UPDATE digests SET read_at = `+now+`
+		UPDATE digests SET read_at = ` + now + `
 		WHERE read_at IS NULL
 		  AND type = 'channel'
 		  AND channel_id != ''
@@ -280,7 +298,7 @@ func (db *DB) AutoMarkReadFromSlack() (digestsMarked, tracksMarked int64, err er
 	// A cross-channel digest covers period_from..period_to. It's read if no unread channel
 	// digests exist in that same time window.
 	res, err = db.Exec(`
-		UPDATE digests SET read_at = `+now+`
+		UPDATE digests SET read_at = ` + now + `
 		WHERE read_at IS NULL
 		  AND type IN ('daily', 'weekly')
 		  AND NOT EXISTS (

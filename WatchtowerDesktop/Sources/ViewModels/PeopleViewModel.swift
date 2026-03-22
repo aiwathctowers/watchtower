@@ -18,9 +18,28 @@ final class PeopleViewModel {
     private(set) var currentProfile: UserProfile?
     private(set) var interactions: [UserInteraction] = []
     private let dbManager: DatabaseManager
+    private var observationTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+    }
+
+    /// Start observing the people_cards table for live updates.
+    func startObserving() {
+        guard observationTask == nil else { return }
+        load()
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM people_cards") ?? 0
+            }
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    self?.load()
+                }
+            } catch {}
+        }
     }
 
     /// The current user's card from the loaded cards list.
@@ -37,9 +56,9 @@ final class PeopleViewModel {
                 let users = try UserQueries.fetchAll(db, activeOnly: false)
 
                 var nameMap: [String: String] = [:]
-                for u in users {
-                    let name = u.displayName.isEmpty ? u.name : u.displayName
-                    nameMap[u.id] = name
+                for user in users {
+                    let name = user.displayName.isEmpty ? user.name : user.displayName
+                    nameMap[user.id] = name
                 }
 
                 let cards: [PeopleCard]
@@ -91,7 +110,7 @@ final class PeopleViewModel {
         let window = availableWindows[index]
         do {
             let result = try dbManager.dbPool.read { db in
-                let c = try PeopleCardQueries.fetchForWindow(
+                let cards = try PeopleCardQueries.fetchForWindow(
                     db, from: window.from, to: window.to
                 )
                 let cs = try PeopleCardQueries.fetchSummary(
@@ -103,7 +122,7 @@ final class PeopleViewModel {
                         db, userID: uid, periodFrom: window.from, periodTo: window.to
                     )
                 }
-                return (c, cs, ints)
+                return (cards, cs, ints)
             }
             cards = result.0
             cardSummary = result.1

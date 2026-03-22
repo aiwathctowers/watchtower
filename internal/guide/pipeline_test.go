@@ -266,7 +266,7 @@ func TestDBPeopleCardOperations(t *testing.T) {
 		RedFlags:           `["flag1"]`,
 		Highlights:         `["highlight1"]`,
 		Accomplishments:    `["shipped v2"]`,
-		CommunicationGuide:   "Be direct",
+		CommunicationGuide: "Be direct",
 		DecisionStyle:      "Quick",
 		Tactics:            `["tactic1"]`,
 		ActiveHoursJSON:    `{"9":5}`,
@@ -363,4 +363,3 @@ func TestComputeTeamNorms(t *testing.T) {
 	assert.InDelta(t, 90, norms.AvgMsgLength, 0.01)
 	assert.InDelta(t, 5, norms.AvgThreadsStart, 0.01)
 }
-

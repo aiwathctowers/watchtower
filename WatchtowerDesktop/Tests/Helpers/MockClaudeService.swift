@@ -31,12 +31,19 @@ final class MockClaudeService: ClaudeServiceProtocol, @unchecked Sendable {
         self.error = error
     }
 
-    func stream(prompt: String, systemPrompt: String?, sessionID: String?, dbPath: String?, model: String?, extraAllowedTools: [String]) -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(
+        prompt: String,
+        systemPrompt: String?,
+        sessionID: String?,
+        dbPath: String?,
+        model: String?,
+        extraAllowedTools: [String]
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
         let eventsToUse: [StreamEvent]
         if !eventSequence.isEmpty {
             let idx = callIndex
             callIndex += 1
-            eventsToUse = idx < eventSequence.count ? eventSequence[idx] : eventSequence.last!
+            eventsToUse = idx < eventSequence.count ? eventSequence[idx] : eventSequence[eventSequence.count - 1]
         } else {
             eventsToUse = events
         }

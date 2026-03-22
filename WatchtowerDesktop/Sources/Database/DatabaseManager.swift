@@ -158,7 +158,8 @@ final class DatabaseManager: Sendable {
     /// Add a channel to the user's starred channels list
     func addStarredChannel(_ channelID: String, for userID: String) throws {
         try dbPool.write { db in
-            let result: String? = try String.fetchOne(db, sql: "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+            let sql = "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?"
+            let result: String? = try String.fetchOne(db, sql: sql, arguments: [userID])
 
             var channels: [String] = []
             if let json = result, !json.isEmpty {
@@ -184,7 +185,8 @@ final class DatabaseManager: Sendable {
     /// Remove a channel from the user's starred channels list
     func removeStarredChannel(_ channelID: String, for userID: String) throws {
         try dbPool.write { db in
-            let result: String? = try String.fetchOne(db, sql: "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?", arguments: [userID])
+            let sql = "SELECT starred_channels FROM user_profile WHERE slack_user_id = ?"
+            let result: String? = try String.fetchOne(db, sql: sql, arguments: [userID])
 
             var channels: [String] = []
             if let json = result, !json.isEmpty {
@@ -268,8 +270,8 @@ enum WatchtowerDatabaseError: LocalizedError {
             "Watchtower database not found. Run 'watchtower auth login && watchtower sync' first."
         case .invalidWorkspaceName(let name):
             "Invalid workspace name: '\(name)'"
-        case .schemaVersionTooOld(let v):
-            "Database schema version \(v) is too old. Run 'watchtower sync' to upgrade."
+        case .schemaVersionTooOld(let ver):
+            "Database schema version \(ver) is too old. Run 'watchtower sync' to upgrade."
         case .missingTable(let name):
             "Database is missing required table: \(name)"
         }

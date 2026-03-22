@@ -1,4 +1,5 @@
 import SwiftUI
+import GRDB
 
 struct SidebarView: View {
     @Binding var selection: SidebarDestination
@@ -6,6 +7,9 @@ struct SidebarView: View {
     @State private var statusCounts: [String: Int] = [:]
     @State private var totalCount: Int = 0
     @State private var ownershipCounts: [String: Int] = [:]
+    @State private var unreadChainCount: Int = 0
+    @State private var unreadDigestCount: Int = 0
+    @State private var countsObservationTask: Task<Void, Never>?
 
     private var isTracksExpanded: Bool { selection == .tracks }
 
@@ -63,8 +67,9 @@ struct SidebarView: View {
         .padding(.horizontal, 8)
         .frame(maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { loadCounts() }
-        .onChange(of: selection) { loadCounts() }
+        .onAppear { startObservingCounts() }
+        .onChange(of: selection) { loadCounts(db: appState.databaseManager!) }
+        .onDisappear { countsObservationTask?.cancel() }
     }
 
     // MARK: - Track Sub-Items
@@ -177,18 +182,7 @@ struct SidebarView: View {
                 Text(item.title)
                     .foregroundStyle(isSelected ? .white : .primary)
                 Spacer()
-                if item == .tracks {
-                    let inboxCount = statusCounts["inbox"] ?? 0
-                    if inboxCount > 0 {
-                        Text("\(inboxCount)")
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.red, in: Capsule())
-                    }
-                }
+                badgeCount(for: item)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -203,22 +197,67 @@ struct SidebarView: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
+    private func badgeCount(for item: SidebarDestination) -> some View {
+        let count: Int = {
+            switch item {
+            case .tracks: return statusCounts["inbox"] ?? 0
+            case .chains: return unreadChainCount
+            default: return 0
+            }
+        }()
+        if count > 0 {
+            Text("\(count)")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(.red, in: Capsule())
+        }
+    }
+
     // MARK: - Data Loading
 
-    private func loadCounts() {
-        guard let db = appState.databaseManager else { return }
+    private func startObservingCounts() {
+        guard countsObservationTask == nil, let db = appState.databaseManager else { return }
+        loadCounts(db: db)
+        let dbPool = db.dbPool
+        countsObservationTask = Task {
+            // Observe both tracks and chains tables for badge updates
+            let observation = ValueObservation.tracking { db -> (Int, Int) in
+                let tracks = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tracks") ?? 0
+                let chains = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chains") ?? 0
+                return (tracks, chains)
+            }
+            do {
+                for try await _ in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    loadCounts(db: appState.databaseManager!)
+                }
+            } catch {}
+        }
+    }
+
+    private func loadCounts(db: DatabaseManager) {
         Task {
-            let result: ([String: Int], Int, [String: Int]) = (try? await db.dbPool.read { db in
+            let result = try? await db.dbPool.read { db -> ([String: Int], Int, [String: Int], Int, Int) in
                 let uid = try TrackQueries.fetchCurrentUserID(db)
-                guard let uid else { return ([:], 0, [:]) }
+                guard let uid else { return ([:], 0, [:], 0, 0) }
                 let counts = try TrackQueries.fetchStatusCounts(db, assigneeUserID: uid)
                 let total = try TrackQueries.fetchTotalCount(db, assigneeUserID: uid)
                 let oCounts = try TrackQueries.fetchOwnershipCounts(db, assigneeUserID: uid)
-                return (counts, total, oCounts)
-            }) ?? ([:], 0, [:])
-            self.statusCounts = result.0
-            self.totalCount = result.1
-            self.ownershipCounts = result.2
+                let unreadChains = try ChainQueries.fetchUnreadCount(db)
+                let unreadDigests = try DigestQueries.unreadDigestCount(db)
+                return (counts, total, oCounts, unreadChains, unreadDigests)
+            }
+            if let r = result {
+                self.statusCounts = r.0
+                self.totalCount = r.1
+                self.ownershipCounts = r.2
+                self.unreadChainCount = r.3
+                self.unreadDigestCount = r.4
+            }
         }
     }
 }

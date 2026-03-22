@@ -20,11 +20,17 @@ struct StatusBarView: View {
 
             Divider().frame(height: 12)
 
-            // Last sync
-            if let lastSync {
-                Text("Synced \(TimeFormatting.relativeTime(from: lastSync))")
-            } else {
-                Text("Never synced")
+            // Last sync (click to open Usage)
+            Group {
+                if let lastSync {
+                    Text("Synced \(TimeFormatting.relativeTime(from: lastSync))")
+                } else {
+                    Text("Never synced")
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                appState.selectedDestination = .usage
             }
 
             Spacer()

@@ -11,7 +11,7 @@ struct DigestTrack: Codable, Identifiable, Equatable {
         case text, assignee, status
     }
 
-    static func == (lhs: DigestTrack, rhs: DigestTrack) -> Bool {
+    static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.text == rhs.text && lhs.assignee == rhs.assignee && lhs.status == rhs.status
     }
 }

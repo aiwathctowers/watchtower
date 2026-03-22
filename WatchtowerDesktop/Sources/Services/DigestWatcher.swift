@@ -84,7 +84,7 @@ final class DigestWatcher {
         }
     }
 
-    private nonisolated func resolveChannelName(for digest: Digest) -> String {
+    nonisolated private func resolveChannelName(for digest: Digest) -> String {
         guard !digest.channelID.isEmpty else { return "cross-channel" }
         do {
             return try dbPool.read { db in

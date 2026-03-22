@@ -128,22 +128,22 @@ struct ProfileSettings: View {
         Task {
             do {
                 let result: (UserProfile?, [User], [Channel]) = try await db.dbPool.read { dbConn in
-                    let p = try ProfileQueries.fetchCurrentProfile(dbConn)
+                    let prof = try ProfileQueries.fetchCurrentProfile(dbConn)
                     let users = try UserQueries.fetchAll(dbConn)
                     let channels = try ChannelQueries.fetchAll(dbConn)
-                    return (p, users, channels)
+                    return (prof, users, channels)
                 }
                 allUsers = result.1
                 allChannels = result.2
-                if let p = result.0 {
-                    profile = p
-                    role = p.role
-                    team = p.team
-                    manager = p.manager
-                    reports = p.decodedReports
-                    peers = p.decodedPeers
-                    starredChannels = p.decodedStarredChannels
-                    starredPeople = p.decodedStarredPeople
+                if let prof = result.0 {
+                    profile = prof
+                    role = prof.role
+                    team = prof.team
+                    manager = prof.manager
+                    reports = prof.decodedReports
+                    peers = prof.decodedPeers
+                    starredChannels = prof.decodedStarredChannels
+                    starredPeople = prof.decodedStarredPeople
                 }
                 isLoading = false
             } catch {

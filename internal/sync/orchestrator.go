@@ -194,26 +194,37 @@ func (o *Orchestrator) runSearchSync(ctx context.Context, opts SyncOptions) erro
 }
 
 // syncChannelReadState fetches channel read cursors from Slack and updates them in the DB.
-// This is lightweight: uses conversations.list to get LastRead for all channels.
+// Uses conversations.info per channel (only for channels with unread digests) because
+// conversations.list does not reliably return last_read for most channel types.
 func (o *Orchestrator) syncChannelReadState(ctx context.Context) {
 	o.logger.Println("syncing channel read state")
-	channels, err := o.slackClient.GetChannels(ctx, []string{"public_channel", "private_channel", "im", "mpim"})
+	channelIDs, err := o.db.UnreadDigestChannelIDs()
 	if err != nil {
-		o.logger.Printf("warning: failed to fetch channels for read state: %v", err)
+		o.logger.Printf("warning: failed to get unread digest channels: %v", err)
 		return
 	}
+	if len(channelIDs) == 0 {
+		o.logger.Println("channel read state: no unread digests, skipping")
+		return
+	}
+
 	var updated int
-	for _, ch := range channels {
-		if ch.LastRead == "" {
+	for _, chID := range channelIDs {
+		lastRead, err := o.slackClient.GetChannelReadCursor(ctx, chID)
+		if err != nil {
+			o.logger.Printf("warning: failed to get read cursor for %s: %v", chID, err)
 			continue
 		}
-		if err := o.db.UpdateChannelLastRead(ch.ID, ch.LastRead); err != nil {
-			o.logger.Printf("warning: failed to update last_read for %s: %v", ch.ID, err)
+		if lastRead == "" {
+			continue
+		}
+		if err := o.db.UpdateChannelLastRead(chID, lastRead); err != nil {
+			o.logger.Printf("warning: failed to update last_read for %s: %v", chID, err)
 			continue
 		}
 		updated++
 	}
-	o.logger.Printf("channel read state: %d/%d channels updated", updated, len(channels))
+	o.logger.Printf("channel read state: %d/%d channels updated (via conversations.info)", updated, len(channelIDs))
 }
 
 // finishSync logs API stats, updates the sync timestamp, and marks sync as done.

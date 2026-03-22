@@ -30,7 +30,7 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         Task { @MainActor in
-            let appState = NotificationDelegate.sharedAppState
+            let appState = Self.sharedAppState
             switch type {
             case "decision":
                 if let digestID = userInfo["digestId"] as? Int {

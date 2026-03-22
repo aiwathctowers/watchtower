@@ -3,9 +3,13 @@ import GRDB
 
 enum PeopleCardQueries {
     static func fetchForWindow(_ db: Database, from: Double, to: Double) throws -> [PeopleCard] {
-        try PeopleCard.fetchAll(db, sql: """
-            SELECT * FROM people_cards WHERE period_from = ? AND period_to = ? ORDER BY message_count DESC
-            """, arguments: [from, to])
+        try PeopleCard.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM people_cards WHERE period_from = ? AND period_to = ? ORDER BY message_count DESC
+                """,
+            arguments: [from, to]
+        )
     }
 
     static func fetchLatestWindow(_ db: Database) throws -> (from: Double, to: Double)? {
@@ -22,9 +26,13 @@ enum PeopleCardQueries {
     }
 
     static func fetchByUser(_ db: Database, userID: String, limit: Int = 10) throws -> [PeopleCard] {
-        try PeopleCard.fetchAll(db, sql: """
-            SELECT * FROM people_cards WHERE user_id = ? ORDER BY period_to DESC LIMIT ?
-            """, arguments: [userID, limit])
+        try PeopleCard.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM people_cards WHERE user_id = ? ORDER BY period_to DESC LIMIT ?
+                """,
+            arguments: [userID, limit]
+        )
     }
 
     static func fetchAvailableWindows(_ db: Database) throws -> [(from: Double, to: Double)] {
@@ -35,8 +43,12 @@ enum PeopleCardQueries {
     }
 
     static func fetchSummary(_ db: Database, from: Double, to: Double) throws -> PeopleCardSummary? {
-        try PeopleCardSummary.fetchOne(db, sql: """
-            SELECT * FROM people_card_summaries WHERE period_from = ? AND period_to = ?
-            """, arguments: [from, to])
+        try PeopleCardSummary.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM people_card_summaries WHERE period_from = ? AND period_to = ?
+                """,
+            arguments: [from, to]
+        )
     }
 }

@@ -8,11 +8,15 @@ enum InteractionQueries {
         periodFrom: Double,
         periodTo: Double
     ) throws -> [UserInteraction] {
-        try UserInteraction.fetchAll(db, sql: """
-            SELECT * FROM user_interactions
-            WHERE user_a = ? AND period_from = ? AND period_to = ?
-            ORDER BY interaction_score DESC
-            """, arguments: [userID, periodFrom, periodTo])
+        try UserInteraction.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM user_interactions
+                WHERE user_a = ? AND period_from = ? AND period_to = ?
+                ORDER BY interaction_score DESC
+                """,
+            arguments: [userID, periodFrom, periodTo]
+        )
     }
 
     /// Fetch top N interactions by score for a user in the latest window.
@@ -23,11 +27,15 @@ enum InteractionQueries {
         periodTo: Double,
         limit: Int = 20
     ) throws -> [UserInteraction] {
-        try UserInteraction.fetchAll(db, sql: """
-            SELECT * FROM user_interactions
-            WHERE user_a = ? AND period_from = ? AND period_to = ?
-            ORDER BY interaction_score DESC
-            LIMIT ?
-            """, arguments: [userID, periodFrom, periodTo, limit])
+        try UserInteraction.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM user_interactions
+                WHERE user_a = ? AND period_from = ? AND period_to = ?
+                ORDER BY interaction_score DESC
+                LIMIT ?
+                """,
+            arguments: [userID, periodFrom, periodTo, limit]
+        )
     }
 }
