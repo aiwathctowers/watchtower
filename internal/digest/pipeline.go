@@ -127,6 +127,8 @@ type Pipeline struct {
 
 	// LastStep* fields are set before each OnProgress callback with the
 	// current step's message count and time window. Read them in OnProgress.
+	// Protected by lastStepMu for concurrent worker access.
+	lastStepMu              sync.Mutex
 	LastStepMessageCount    int
 	LastStepPeriodFrom      time.Time
 	LastStepPeriodTo        time.Time
@@ -339,11 +341,13 @@ func (p *Pipeline) runChainLinker(ctx context.Context) {
 		return
 	}
 	// Reset LastStep* so chains progress doesn't show stale digest metrics.
+	p.lastStepMu.Lock()
 	p.LastStepMessageCount = 0
 	p.LastStepInputTokens = 0
 	p.LastStepOutputTokens = 0
 	p.LastStepCostUSD = 0
 	p.LastStepDurationSeconds = 0
+	p.lastStepMu.Unlock()
 	if p.OnProgress != nil {
 		p.ChainLinker.SetOnProgress(p.OnProgress)
 	}
@@ -509,6 +513,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				}
 
 				c := int(completed.Load())
+				p.lastStepMu.Lock()
 				p.LastStepMessageCount = len(t.msgs)
 				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
 				p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
@@ -516,6 +521,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				p.LastStepInputTokens = 0
 				p.LastStepOutputTokens = 0
 				p.LastStepCostUSD = 0
+				p.lastStepMu.Unlock()
 				if p.OnProgress != nil {
 					p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", t.channelName, len(t.msgs)))
 				}
@@ -582,6 +588,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 						break
 					}
 				}
+				p.lastStepMu.Lock()
 				p.LastStepMessageCount = len(t.msgs)
 				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
 				p.LastStepPeriodTo = time.Unix(int64(lastMsgTS), 0)
@@ -590,14 +597,17 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 					p.LastStepInputTokens = usage.InputTokens
 					p.LastStepOutputTokens = usage.OutputTokens
 					p.LastStepCostUSD = usage.CostUSD
-					totalInput.Add(int64(usage.InputTokens))
-					totalOutput.Add(int64(usage.OutputTokens))
-					totalCostU.Add(int64(usage.CostUSD * 1e6))
-					p.accumulateUsage(usage)
 				} else {
 					p.LastStepInputTokens = 0
 					p.LastStepOutputTokens = 0
 					p.LastStepCostUSD = 0
+				}
+				p.lastStepMu.Unlock()
+				if usage != nil {
+					totalInput.Add(int64(usage.InputTokens))
+					totalOutput.Add(int64(usage.OutputTokens))
+					totalCostU.Add(int64(usage.CostUSD * 1e6))
+					p.accumulateUsage(usage)
 				}
 				done := int(completed.Add(1))
 				if p.OnProgress != nil {

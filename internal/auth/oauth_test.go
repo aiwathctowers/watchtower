@@ -49,9 +49,9 @@ func simulateCallback(redirectURI, state, code, errMsg string) {
 
 func TestLogin_HappyPath(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -126,9 +126,9 @@ func TestLogin_HappyPath(t *testing.T) {
 
 func TestLogin_StateMismatch(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -165,9 +165,9 @@ func TestLogin_StateMismatch(t *testing.T) {
 
 func TestLogin_UserDenied(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -203,9 +203,9 @@ func TestLogin_UserDenied(t *testing.T) {
 }
 
 func TestLogin_Timeout(t *testing.T) {
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) {}
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) {})
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	cfg := OAuthConfig{ClientID: "id", ClientSecret: "secret"}
 	var out bytes.Buffer
@@ -234,9 +234,9 @@ func TestLogin_PortBusy(t *testing.T) {
 	}()
 
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -473,9 +473,9 @@ func TestPrepare_CustomRedirectURI(t *testing.T) {
 
 func TestLogin_SkipBrowserOpen(t *testing.T) {
 	browserOpened := false
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { browserOpened = true }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { browserOpened = true })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -489,9 +489,9 @@ func TestLogin_SkipBrowserOpen(t *testing.T) {
 	}
 	defer func() { exchangeToken = oldExchange }()
 
-	oldClose := closeBrowserFunc
-	closeBrowserFunc = func() {} // no-op
-	defer func() { closeBrowserFunc = oldClose }()
+	oldClose := getCloseBrowserFunc()
+	setCloseBrowserFunc(func() {}) // no-op
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	cfg := OAuthConfig{ClientID: "id", ClientSecret: "secret"}
 	var out bytes.Buffer
@@ -542,13 +542,13 @@ func TestLogin_SkipBrowserOpen(t *testing.T) {
 
 func TestLogin_EmptyTokenFromExchange(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
-	oldClose := closeBrowserFunc
-	closeBrowserFunc = func() {} // no-op
-	defer func() { closeBrowserFunc = oldClose }()
+	oldClose := getCloseBrowserFunc()
+	setCloseBrowserFunc(func() {}) // no-op
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -591,13 +591,13 @@ func TestLogin_EmptyTokenFromExchange(t *testing.T) {
 
 func TestLogin_ExchangeError(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
-	oldClose := closeBrowserFunc
-	closeBrowserFunc = func() {}
-	defer func() { closeBrowserFunc = oldClose }()
+	oldClose := getCloseBrowserFunc()
+	setCloseBrowserFunc(func() {})
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -634,9 +634,9 @@ func TestLogin_ExchangeError(t *testing.T) {
 
 func TestLogin_EmptyCode(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -684,23 +684,23 @@ func TestLogin_EmptyCode(t *testing.T) {
 
 func TestCloseBrowserFunc_NoOp(t *testing.T) {
 	// Verify closeBrowserFunc can be replaced without panicking
-	oldClose := closeBrowserFunc
+	oldClose := getCloseBrowserFunc()
 	called := false
-	closeBrowserFunc = func() { called = true }
-	defer func() { closeBrowserFunc = oldClose }()
+	setCloseBrowserFunc(func() { called = true })
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
-	closeBrowserFunc()
+	getCloseBrowserFunc()()
 	assert.True(t, called)
 }
 
 func TestOpenBrowserFunc_NoOp(t *testing.T) {
 	// Verify openBrowserFunc can be replaced without panicking
-	oldOpen := openBrowserFunc
+	oldOpen := getOpenBrowserFunc()
 	var capturedURL string
-	openBrowserFunc = func(u string) { capturedURL = u }
-	defer func() { openBrowserFunc = oldOpen }()
+	setOpenBrowserFunc(func(u string) { capturedURL = u })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
-	openBrowserFunc("https://example.com")
+	getOpenBrowserFunc()("https://example.com")
 	assert.Equal(t, "https://example.com", capturedURL)
 }
 
@@ -815,9 +815,9 @@ func TestCallbackHandler_ErrorResponse(t *testing.T) {
 	// Test that the callback handler returns the error page HTML when
 	// Slack returns an error parameter
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -866,13 +866,13 @@ func TestCallbackHandler_ErrorResponse(t *testing.T) {
 func TestCallbackHandler_SuccessResponse(t *testing.T) {
 	// Test that the callback handler returns success page HTML
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
-	oldClose := closeBrowserFunc
-	closeBrowserFunc = func() {}
-	defer func() { closeBrowserFunc = oldClose }()
+	oldClose := getCloseBrowserFunc()
+	setCloseBrowserFunc(func() {})
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {
@@ -933,13 +933,13 @@ func TestCallbackHandler_SuccessResponse(t *testing.T) {
 
 func TestLogin_WithExpiresIn(t *testing.T) {
 	var capturedURL atomic.Value
-	oldOpen := openBrowserFunc
-	openBrowserFunc = func(u string) { capturedURL.Store(u) }
-	defer func() { openBrowserFunc = oldOpen }()
+	oldOpen := getOpenBrowserFunc()
+	setOpenBrowserFunc(func(u string) { capturedURL.Store(u) })
+	defer func() { setOpenBrowserFunc(oldOpen) }()
 
-	oldClose := closeBrowserFunc
-	closeBrowserFunc = func() {}
-	defer func() { closeBrowserFunc = oldClose }()
+	oldClose := getCloseBrowserFunc()
+	setCloseBrowserFunc(func() {})
+	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	oldExchange := exchangeToken
 	exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*slack.OAuthV2Response, error) {

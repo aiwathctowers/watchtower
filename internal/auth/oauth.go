@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -66,7 +67,22 @@ var exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redi
 }
 
 // openBrowserFunc can be replaced in tests to avoid opening a real browser.
-var openBrowserFunc = openBrowser
+var (
+	openBrowserMu   sync.Mutex
+	openBrowserFunc = openBrowser
+)
+
+func getOpenBrowserFunc() func(string) {
+	openBrowserMu.Lock()
+	defer openBrowserMu.Unlock()
+	return openBrowserFunc
+}
+
+func setOpenBrowserFunc(f func(string)) {
+	openBrowserMu.Lock()
+	defer openBrowserMu.Unlock()
+	openBrowserFunc = f
+}
 
 // OAuthConfig holds the Slack app credentials for the OAuth flow.
 type OAuthConfig struct {
@@ -237,7 +253,7 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 	} else {
 		fmt.Fprintf(out, "Opening browser for Slack authorization...\n")
 		fmt.Fprintf(out, "If the browser doesn't open, visit this URL:\n\n  %s\n\n", authorizeURL)
-		openBrowserFunc(authorizeURL)
+		getOpenBrowserFunc()(authorizeURL)
 	}
 
 	// Wait for callback or timeout
@@ -267,7 +283,7 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 	// to let the success page display
 	go func() {
 		time.Sleep(2 * time.Second)
-		closeBrowserFunc()
+		getCloseBrowserFunc()()
 	}()
 
 	// Exchange code for token
@@ -454,4 +470,22 @@ end if
 	_ = cmd.Start() // fire-and-forget
 }
 
-var closeBrowserFunc = closeBrowserWindow
+var (
+	closeBrowserMu   sync.Mutex
+	closeBrowserFunc = closeBrowserWindow
+)
+
+// getCloseBrowserFunc returns the current closeBrowserFunc under a lock,
+// avoiding data races when tests replace it concurrently with Login's goroutine.
+func getCloseBrowserFunc() func() {
+	closeBrowserMu.Lock()
+	defer closeBrowserMu.Unlock()
+	return closeBrowserFunc
+}
+
+// setCloseBrowserFunc replaces closeBrowserFunc under a lock (for use in tests).
+func setCloseBrowserFunc(f func()) {
+	closeBrowserMu.Lock()
+	defer closeBrowserMu.Unlock()
+	closeBrowserFunc = f
+}

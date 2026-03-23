@@ -23,6 +23,7 @@ TASK-*.md
 *.pem
 *.key
 *.p12
+*.csr
 cert
 
 # Database files
