@@ -1,0 +1,55 @@
+version: 2
+
+project_name: watchtower
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - main: .
+    binary: watchtower
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X watchtower/cmd.Version={{.Version}}
+      - -X watchtower/cmd.Commit={{.Commit}}
+      - -X watchtower/cmd.BuildDate={{.Date}}
+      - -X watchtower/internal/auth.DefaultClientID={{ .Env.WATCHTOWER_OAUTH_CLIENT_ID }}
+      - -X watchtower/internal/auth.DefaultClientSecret={{ .Env.WATCHTOWER_OAUTH_CLIENT_SECRET }}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/watchtower"
+    description: "CLI tool that syncs Slack workspace to local SQLite with AI-powered analysis"
+    license: "MIT"
+    install: |
+      bin.install "watchtower"
+    test: |
+      system "#{bin}/watchtower", "version"

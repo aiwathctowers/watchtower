@@ -1,0 +1,63 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    # Bugs & correctness
+    - errcheck
+    - govet
+    - staticcheck
+    - typecheck
+    - bodyclose
+    - noctx
+    - sqlclosecheck
+    - gosec
+    - exhaustive
+    - nilerr
+    - predeclared
+
+    # Code quality
+    - unconvert
+    - unused
+    - ineffassign
+    - gosimple
+
+    # Style & consistency
+    - misspell
+    - whitespace
+    - dupword
+
+    # Imports
+    - goimports
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: false
+    exclude-functions:
+      - (*database/sql.Tx).Rollback
+      - (*database/sql.Rows).Close
+      - (io.Closer).Close
+      - encoding/json.Unmarshal
+      - (*os/exec.Cmd).Wait
+      - (*github.com/spf13/viper.Viper).BindEnv
+
+  exhaustive:
+    default-signifies-exhaustive: true
+
+  gosec:
+    excludes:
+      - G104 # covered by errcheck
+      - G304 # file path from variable is expected in CLI tools
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Test files: relax some rules
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - dupword

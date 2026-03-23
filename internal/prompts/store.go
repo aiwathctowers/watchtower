@@ -1,0 +1,137 @@
+// Package prompts manages AI prompt templates with versioning, DB persistence,
+// and fallback to built-in defaults. It supports language-aware loading so
+// prompts can be tuned per-language.
+package prompts
+
+import (
+	"fmt"
+	"log/slog"
+
+	"watchtower/internal/db"
+)
+
+// Prompt IDs — the three main prompts targeted for feedback & tuning.
+const (
+	DigestChannel      = "digest.channel"
+	DigestDaily        = "digest.daily"
+	DigestWeekly       = "digest.weekly"
+	DigestPeriod       = "digest.period"
+	ActionItemsExtract = "actionitems.extract"
+	ActionItemsUpdate  = "actionitems.update"
+	AnalysisUser       = "analysis.user"
+	AnalysisPeriod     = "analysis.period"
+)
+
+// Store loads, caches, and persists prompt templates.
+type Store struct {
+	db     *db.DB
+	logger *slog.Logger
+	seeded bool
+}
+
+// New creates a new prompt store backed by the given database.
+func New(database *db.DB, logger *slog.Logger) *Store {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{db: database, logger: logger}
+}
+
+// Seed inserts all built-in default prompts into the database if they don't
+// already exist. This is safe to call multiple times.
+func (s *Store) Seed() error {
+	if s.seeded {
+		return nil
+	}
+	for id, tmpl := range Defaults {
+		existing, err := s.db.GetPrompt(id)
+		if err != nil {
+			return fmt.Errorf("checking prompt %q: %w", id, err)
+		}
+		if existing != nil {
+			continue // already seeded or customized
+		}
+		if err := s.db.UpsertPrompt(db.Prompt{
+			ID:       id,
+			Template: tmpl,
+			Version:  1,
+		}); err != nil {
+			return fmt.Errorf("seeding prompt %q: %w", id, err)
+		}
+		s.logger.Debug("seeded default prompt", "id", id)
+	}
+	s.seeded = true
+	return nil
+}
+
+// Get returns the current template for a prompt ID.
+// It checks the database first, then falls back to the built-in default.
+func (s *Store) Get(id string) (string, int, error) {
+	p, err := s.db.GetPrompt(id)
+	if err != nil {
+		return "", 0, fmt.Errorf("loading prompt %q: %w", id, err)
+	}
+	if p != nil {
+		return p.Template, p.Version, nil
+	}
+	// Fallback to built-in default
+	if tmpl, ok := Defaults[id]; ok {
+		return tmpl, 0, nil
+	}
+	return "", 0, fmt.Errorf("unknown prompt %q", id)
+}
+
+// GetAll returns all prompts (from DB, with defaults for any missing).
+func (s *Store) GetAll() ([]db.Prompt, error) {
+	dbPrompts, err := s.db.GetAllPrompts()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a map of what's in DB
+	inDB := make(map[string]bool, len(dbPrompts))
+	for _, p := range dbPrompts {
+		inDB[p.ID] = true
+	}
+
+	// Add defaults that aren't in DB yet
+	for id, tmpl := range Defaults {
+		if !inDB[id] {
+			dbPrompts = append(dbPrompts, db.Prompt{
+				ID:       id,
+				Template: tmpl,
+				Version:  0,
+			})
+		}
+	}
+	return dbPrompts, nil
+}
+
+// Update modifies a prompt's template and records the change reason.
+func (s *Store) Update(id, template, reason string) error {
+	return s.db.UpdatePrompt(id, template, reason)
+}
+
+// Rollback reverts a prompt to a specific version.
+func (s *Store) Rollback(id string, version int) error {
+	return s.db.RollbackPrompt(id, version)
+}
+
+// Reset restores a prompt to its built-in default.
+func (s *Store) Reset(id string) error {
+	tmpl, ok := Defaults[id]
+	if !ok {
+		return fmt.Errorf("unknown prompt %q — no default available", id)
+	}
+	return s.db.UpdatePrompt(id, tmpl, "reset to default")
+}
+
+// History returns the version history for a prompt.
+func (s *Store) History(id string) ([]db.PromptHistory, error) {
+	return s.db.GetPromptHistory(id)
+}
+
+// DB returns the underlying database handle (H3 fix: avoids double-open in cmd/prompts.go).
+func (s *Store) DB() *db.DB {
+	return s.db
+}

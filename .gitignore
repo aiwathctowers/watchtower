@@ -1,0 +1,42 @@
+# Build output
+watchtower
+build/
+WatchtowerDesktop/.build/
+WatchtowerDesktop/*.app
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+
+# Claude Code local settings
+.claude/
+
+# Task tracking files
+TASK-*.md
+.ralphex/
+
+# Environment and secrets
+.env*
+*.pem
+*.key
+*.p12
+cert
+
+# Database files
+*.db
+*.sqlite
+
+# Logs
+*.log
+
+# User config (contains tokens)
+config.yaml
+
+# Release artifacts
+dist/
+
+# App bundles (redundant safety)
+*.app/
