@@ -56,8 +56,9 @@ func TestRunPeople_WithCards(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	from := float64(now.AddDate(0, 0, -7).Unix())
-	to := float64(now.Unix())
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	from := float64(today.AddDate(0, 0, -7).Unix())
+	to := float64(today.Unix())
 
 	_, err = database.UpsertPeopleCard(db.PeopleCard{
 		UserID:             "U001",
@@ -106,8 +107,9 @@ func TestRunPeople_UserFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	from := float64(now.AddDate(0, 0, -7).Unix())
-	to := float64(now.Unix())
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	from := float64(today.AddDate(0, 0, -7).Unix())
+	to := float64(today.Unix())
 
 	_, err = database.UpsertPeopleCard(db.PeopleCard{
 		UserID:             "U001",
@@ -231,8 +233,9 @@ func TestShowPeopleList_WithSummary(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	from := float64(now.AddDate(0, 0, -7).Unix())
-	to := float64(now.Unix())
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	from := float64(today.AddDate(0, 0, -7).Unix())
+	to := float64(today.Unix())
 
 	_, err = database.UpsertPeopleCard(db.PeopleCard{
 		UserID:             "U001",

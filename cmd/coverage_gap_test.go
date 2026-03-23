@@ -244,8 +244,9 @@ func TestShowPeopleList_TeamSummary(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	from := float64(now.AddDate(0, 0, -7).Unix())
-	to := float64(now.Unix())
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	from := float64(today.AddDate(0, 0, -7).Unix())
+	to := float64(today.Unix())
 
 	// Insert analyses for two users
 	for _, uid := range []string{"U001", "U002"} {
@@ -294,9 +295,10 @@ func TestRunPeople_PreviousWindowFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	// Insert analysis for previous week
-	from := float64(now.AddDate(0, 0, -14).Unix())
-	to := float64(now.AddDate(0, 0, -7).Unix())
+	from := float64(today.AddDate(0, 0, -14).Unix())
+	to := float64(today.AddDate(0, 0, -7).Unix())
 	_, err = database.UpsertPeopleCard(db.PeopleCard{
 		UserID:             "U001",
 		PeriodFrom:         from,

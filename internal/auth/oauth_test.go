@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// syncBuffer is a goroutine-safe wrapper around bytes.Buffer.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (sb *syncBuffer) Write(p []byte) (int, error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Write(p)
+}
+
+func (sb *syncBuffer) String() string {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.String()
+}
 
 // insecureClient is an HTTP client that skips TLS verification (for self-signed certs).
 var insecureClient = &http.Client{
@@ -494,7 +513,7 @@ func TestLogin_SkipBrowserOpen(t *testing.T) {
 	defer func() { setCloseBrowserFunc(oldClose) }()
 
 	cfg := OAuthConfig{ClientID: "id", ClientSecret: "secret"}
-	var out bytes.Buffer
+	var out syncBuffer
 
 	resultCh := make(chan struct {
 		result *OAuthResult

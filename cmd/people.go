@@ -82,6 +82,7 @@ func runPeople(cmd *cobra.Command, args []string) error {
 	}
 
 	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	offset := 0
 	if peopleFlagPrevious {
 		offset = 1
@@ -89,7 +90,7 @@ func runPeople(cmd *cobra.Command, args []string) error {
 
 	for w := range weeks {
 		weekIdx := w + offset
-		to := now.AddDate(0, 0, -weekIdx*7)
+		to := today.AddDate(0, 0, -weekIdx*7)
 		from := to.AddDate(0, 0, -7)
 		fromUnix := float64(from.Unix())
 		toUnix := float64(to.Unix())
