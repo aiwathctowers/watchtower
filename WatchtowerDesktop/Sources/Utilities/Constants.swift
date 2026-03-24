@@ -4,11 +4,26 @@ enum Constants {
     static let configPath = NSString("~/.config/watchtower/config.yaml").expandingTildeInPath
     static let databasePath = NSString("~/.local/share/watchtower").expandingTildeInPath
     static let bundleID = "com.watchtower.desktop"
+    static let configDir = NSString("~/.config/watchtower").expandingTildeInPath
+
+    /// Safe working directory for subprocesses — avoids TCC prompts for ~/Music, ~/Downloads etc.
+    /// Uses ~/.config/watchtower (already ours, not TCC-protected).
+    nonisolated static func processWorkingDirectory() -> URL {
+        let dir = configDir
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: dir) {
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+        return URL(fileURLWithPath: dir)
+    }
 
     /// App version — reads from Info.plist (set at build time), falls back to hardcoded default.
     static let appVersion: String = {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.2.0"
     }()
+
+    /// UserDefaults key for tracking whether initial pipelines have completed.
+    static let pipelinesCompletedKey = "pipelines_completed"
 
     enum NotificationCategory {
         static let decision = "DECISION"
@@ -44,7 +59,7 @@ enum Constants {
     }
 
     /// Search for a binary in the resolved user PATH, with well-known fallback directories.
-    private nonisolated static func findInPath(_ binary: String) -> String? {
+    nonisolated private static func findInPath(_ binary: String) -> String? {
         let env = resolvedEnvironment()
         guard let pathValue = env["PATH"] else { return nil }
         for dir in pathValue.split(separator: ":") {
@@ -58,7 +73,7 @@ enum Constants {
         let fallbackDirs = [
             "/usr/local/bin",
             "/opt/homebrew/bin",
-            "\(home)/.volta/bin",
+            "\(home)/.volta/bin"
         ]
         for dir in fallbackDirs {
             let fullPath = "\(dir)/\(binary)"
@@ -70,7 +85,7 @@ enum Constants {
         let versionedDirs = [
             "\(home)/.nvm/versions/node",
             "\(home)/.local/share/fnm/node-versions",
-            "\(home)/.fnm/node-versions",
+            "\(home)/.fnm/node-versions"
         ]
         for dir in versionedDirs {
             if let found = searchNodeVersions(dir: dir, binary: binary) {
@@ -81,11 +96,11 @@ enum Constants {
     }
 
     /// Search versioned node manager directories for a binary.
-    private nonisolated static func searchNodeVersions(dir: String, binary: String) -> String? {
+    nonisolated private static func searchNodeVersions(dir: String, binary: String) -> String? {
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
-        for v in versions.sorted().reversed() {
+        for ver in versions.sorted().reversed() {
             for sub in ["bin", "installation/bin"] {
-                let path = "\(dir)/\(v)/\(sub)/\(binary)"
+                let path = "\(dir)/\(ver)/\(sub)/\(binary)"
                 if FileManager.default.isExecutableFile(atPath: path) {
                     return path
                 }
@@ -103,7 +118,9 @@ enum Constants {
                 let shell = env["SHELL"] ?? "/bin/zsh"
                 let pathProc = Process()
                 pathProc.executableURL = URL(fileURLWithPath: shell)
-                pathProc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+                let configDir = NSString("~/.config/watchtower").expandingTildeInPath
+                try? FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
+                pathProc.currentDirectoryURL = URL(fileURLWithPath: configDir)
                 pathProc.arguments = ["-lc", "echo $PATH"]
                 let pathPipe = Pipe()
                 pathProc.standardOutput = pathPipe
@@ -126,13 +143,13 @@ enum Constants {
                 let nvmDirs = [
                     NSHomeDirectory() + "/.nvm/versions/node",
                     NSHomeDirectory() + "/.local/share/fnm/node-versions",
-                    NSHomeDirectory() + "/.fnm/node-versions",
+                    NSHomeDirectory() + "/.fnm/node-versions"
                 ]
                 outer: for nvmDir in nvmDirs {
                     guard let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir) else { continue }
-                    for v in versions.sorted().reversed() {
+                    for ver in versions.sorted().reversed() {
                         for sub in ["bin", "installation/bin"] {
-                            let candidate = "\(nvmDir)/\(v)/\(sub)/claude"
+                            let candidate = "\(nvmDir)/\(ver)/\(sub)/claude"
                             if FileManager.default.isExecutableFile(atPath: candidate) {
                                 let claudeDir = (candidate as NSString).deletingLastPathComponent
                                 if let path = env["PATH"], !path.contains(claudeDir) {

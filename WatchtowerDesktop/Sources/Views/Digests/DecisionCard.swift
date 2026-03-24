@@ -2,11 +2,11 @@ import SwiftUI
 
 struct DecisionCard: View {
     let decision: Decision
-    var slackURL: URL? = nil
-    var feedbackEntityID: String? = nil  // "digestID:decisionIdx"
-    var dbManager: DatabaseManager? = nil
-    var correctedImportance: String? = nil
-    var onImportanceChange: ((String) -> Void)? = nil
+    var slackURL: URL?
+    var feedbackEntityID: String?   // "digestID:decisionIdx"
+    var dbManager: DatabaseManager?
+    var correctedImportance: String?
+    var onImportanceChange: ((String) -> Void)?
 
     private var effectiveImportance: String {
         correctedImportance ?? decision.resolvedImportance

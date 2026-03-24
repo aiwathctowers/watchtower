@@ -23,6 +23,7 @@ TASK-*.md
 *.pem
 *.key
 *.p12
+*.csr
 cert
 
 # Database files
@@ -40,3 +41,4 @@ dist/
 
 # App bundles (redundant safety)
 *.app/
+docs/strategy/*

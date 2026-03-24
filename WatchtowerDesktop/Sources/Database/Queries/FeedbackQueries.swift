@@ -29,11 +29,15 @@ enum FeedbackQueries {
         entityID: String
     ) throws -> Feedback? {
         guard try db.tableExists("feedback") else { return nil }
-        return try Feedback.fetchOne(db, sql: """
-            SELECT * FROM feedback
-            WHERE entity_type = ? AND entity_id = ?
-            ORDER BY created_at DESC LIMIT 1
-            """, arguments: [entityType, entityID])
+        return try Feedback.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM feedback
+                WHERE entity_type = ? AND entity_id = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+            arguments: [entityType, entityID]
+        )
     }
 
     static func getStats(_ db: Database) throws -> [FeedbackStats] {
@@ -57,8 +61,12 @@ enum FeedbackQueries {
 
     static func getAllFeedback(_ db: Database, limit: Int = 100) throws -> [Feedback] {
         guard try db.tableExists("feedback") else { return [] }
-        return try Feedback.fetchAll(db, sql: """
-            SELECT * FROM feedback ORDER BY created_at DESC LIMIT ?
-            """, arguments: [limit])
+        return try Feedback.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM feedback ORDER BY created_at DESC LIMIT ?
+                """,
+            arguments: [limit]
+        )
     }
 }

@@ -2,11 +2,11 @@ import SwiftUI
 
 /// Reusable thumbs up/down feedback buttons for rating AI-generated content.
 struct FeedbackButtons: View {
-    let entityType: String   // "digest", "action_item", "decision"
+    let entityType: String   // "digest", "track", "decision"
     let entityID: String
     let dbManager: DatabaseManager
 
-    @State private var currentRating: Int? = nil  // nil = not rated, +1 = good, -1 = bad
+    @State private var currentRating: Int?   // nil = not rated, +1 = good, -1 = bad
     @State private var isLoading = false
 
     var body: some View {

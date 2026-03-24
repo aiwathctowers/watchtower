@@ -24,13 +24,14 @@ final class ChatHistoryViewModel {
         conversations.first { $0.id == selectedConversationID }
     }
 
-    func load() {
+    func load(completion: (() -> Void)? = nil) {
         Task.detached { [dbManager] in
             let items = try? await dbManager.dbPool.read { db in
                 try ChatConversationQueries.fetchStandalone(db)
             }
             await MainActor.run {
                 self.conversations = items ?? []
+                completion?()
             }
         }
     }
@@ -98,7 +99,7 @@ final class ChatHistoryViewModel {
 
     private func reloadSynchronously() {
         let items = try? dbManager.dbPool.read { db in
-            try ChatConversationQueries.fetchAll(db)
+            try ChatConversationQueries.fetchStandalone(db)
         }
         conversations = items ?? []
     }

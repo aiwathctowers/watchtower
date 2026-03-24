@@ -24,7 +24,7 @@ workspaces:
   test-ws:
     slack_token: "xoxp-test-token"
 `
-	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
+	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o600))
 
 	homeDir := tmpDir
 	wsDBDir := filepath.Join(homeDir, ".local", "share", "watchtower", "test-ws")
@@ -39,13 +39,11 @@ workspaces:
 	require.NoError(t, database.UpsertUser(db.User{ID: "U002", Name: "bob"}))
 	database.Close()
 
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
+	t.Setenv("HOME", homeDir)
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
 
 	return func() {
-		os.Setenv("HOME", oldHome)
 		flagConfig = oldFlagConfig
 	}
 }

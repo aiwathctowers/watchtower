@@ -1,3 +1,4 @@
+// Package auth provides OAuth and authentication handling for Slack integration.
 package auth
 
 import (
@@ -19,6 +20,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -65,7 +67,22 @@ var exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redi
 }
 
 // openBrowserFunc can be replaced in tests to avoid opening a real browser.
-var openBrowserFunc = openBrowser
+var (
+	openBrowserMu   sync.Mutex
+	openBrowserFunc = openBrowser
+)
+
+func getOpenBrowserFunc() func(string) {
+	openBrowserMu.Lock()
+	defer openBrowserMu.Unlock()
+	return openBrowserFunc
+}
+
+func setOpenBrowserFunc(f func(string)) {
+	openBrowserMu.Lock()
+	defer openBrowserMu.Unlock()
+	openBrowserFunc = f
+}
 
 // OAuthConfig holds the Slack app credentials for the OAuth flow.
 type OAuthConfig struct {
@@ -153,18 +170,17 @@ type callbackResult struct {
 	err   string
 }
 
-// Login performs the Slack OAuth V2 flow:
-//  1. Starts a temporary HTTPS server on localhost (self-signed cert)
-//  2. Opens the Slack authorize URL in the user's browser
-//  3. Waits for the callback with an authorization code
-//  4. Exchanges the code for a user token
-//
 // LoginOptions configures the Login flow behaviour.
 type LoginOptions struct {
 	// SkipBrowserOpen disables automatic browser launch; the authorize URL is still printed.
 	SkipBrowserOpen bool
 }
 
+// Login performs the Slack OAuth V2 flow:
+// - Starts a temporary HTTPS server on localhost (self-signed cert)
+// - Opens the Slack authorize URL in the user's browser
+// - Waits for the callback with an authorization code
+// - Exchanges the code for a user token
 func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOptions) (*OAuthResult, error) {
 	var opt LoginOptions
 	if len(opts) > 0 {
@@ -210,18 +226,20 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 		q := r.URL.Query()
 		if errMsg := q.Get("error"); errMsg != "" {
 			resultCh <- callbackResult{err: errMsg}
-			fmt.Fprintf(w, "<html><body><h2>Authorization failed: %s</h2><p>You can close this tab.</p></body></html>", html.EscapeString(errMsg))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, strings.Replace(callbackErrorPage, "{{ERROR}}", html.EscapeString(errMsg), 1))
 			return
 		}
 		resultCh <- callbackResult{
 			code:  q.Get("code"),
 			state: q.Get("state"),
 		}
-		fmt.Fprint(w, "<html><body><h2>Authorization successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, callbackSuccessPage)
 	})
 
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go server.Serve(listener) //nolint:errcheck
+	go server.Serve(listener)
 	defer func() {
 		// Grace period to let the browser receive the HTML response before closing.
 		time.Sleep(500 * time.Millisecond)
@@ -235,7 +253,7 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 	} else {
 		fmt.Fprintf(out, "Opening browser for Slack authorization...\n")
 		fmt.Fprintf(out, "If the browser doesn't open, visit this URL:\n\n  %s\n\n", authorizeURL)
-		openBrowserFunc(authorizeURL)
+		getOpenBrowserFunc()(authorizeURL)
 	}
 
 	// Wait for callback or timeout
@@ -261,6 +279,13 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 		return nil, fmt.Errorf("no authorization code received")
 	}
 
+	// Authorization successful — close the browser window after a brief delay
+	// to let the success page display
+	go func() {
+		time.Sleep(2 * time.Second)
+		getCloseBrowserFunc()()
+	}()
+
 	// Exchange code for token
 	resp, err := exchangeToken(ctx, cfg.ClientID, cfg.ClientSecret, cb.code, redirectURI)
 	if err != nil {
@@ -281,6 +306,52 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 
 	return result, nil
 }
+
+const callbackStyle = `
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+background:#0f0f0f;color:#e5e5e5;display:flex;align-items:center;justify-content:center;
+min-height:100vh;padding:20px}
+.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:16px;padding:48px;
+max-width:440px;width:100%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.4)}
+.icon{width:64px;height:64px;margin:0 auto 24px;border-radius:50%;display:flex;
+align-items:center;justify-content:center;font-size:32px}
+.icon-ok{background:#0d2818;border:2px solid #16a34a}
+.icon-err{background:#2d0f0f;border:2px solid #dc2626}
+h1{font-size:20px;font-weight:600;margin-bottom:8px}
+p{font-size:14px;color:#888;line-height:1.5;margin-bottom:24px}
+.btn{display:inline-block;background:#fff;color:#0f0f0f;font-size:14px;font-weight:600;
+padding:12px 32px;border-radius:10px;text-decoration:none;cursor:pointer;border:none;
+transition:opacity .15s}
+.btn:hover{opacity:.85}
+.hint{font-size:12px;color:#555;margin-top:16px}
+</style>`
+
+const callbackSuccessPage = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watchtower — Authorized</title>` + callbackStyle + `</head><body>
+<div class="card">
+<div class="icon icon-ok">✓</div>
+<h1>Authorization Successful</h1>
+<p>Watchtower has been connected to your Slack workspace.</p>
+<div class="hint">You can close this tab and return to Watchtower.</div>
+</div>
+<script>
+setTimeout(function(){try{window.close()}catch(e){}},2000);
+</script>
+</body></html>`
+
+const callbackErrorPage = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watchtower — Error</title>` + callbackStyle + `</head><body>
+<div class="card">
+<div class="icon icon-err">✕</div>
+<h1>Authorization Failed</h1>
+<p>{{ERROR}}</p>
+<div class="hint">Close this tab and try again in Watchtower.</div>
+</div>
+</body></html>`
 
 // generateSelfSignedCert creates a short-lived self-signed TLS certificate for 127.0.0.1.
 func generateSelfSignedCert() (tls.Certificate, error) {
@@ -354,7 +425,8 @@ func openBrowser(rawURL string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", rawURL)
+		// -n: open in a new window (not existing Safari/Chrome tab)
+		cmd = exec.Command("open", "-n", rawURL)
 	case "linux":
 		cmd = exec.Command("xdg-open", rawURL)
 	default:
@@ -363,4 +435,57 @@ func openBrowser(rawURL string) {
 	if err := cmd.Start(); err == nil {
 		go cmd.Wait() // reap child process to avoid zombie
 	}
+}
+
+// closeBrowserWindow closes the currently active browser window via AppleScript.
+// This is called after successful OAuth callback to auto-close the auth window.
+func closeBrowserWindow() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+
+	// AppleScript to close the front window of the active browser
+	// Tries Safari first, then Chrome, then Firefox
+	script := `
+tell application "System Events"
+	set activeApp to name of first application process whose frontmost is true
+end tell
+
+if activeApp contains "Safari" then
+	tell application "Safari"
+		close (first window whose title contains "Slack")
+	end tell
+else if activeApp contains "Chrome" or activeApp contains "Chromium" then
+	tell application "Google Chrome"
+		close (first window whose title contains "Slack")
+	end tell
+else if activeApp contains "Firefox" then
+	tell application "Firefox"
+		close (first window whose title contains "Slack")
+	end tell
+end if
+`
+
+	cmd := exec.Command("osascript", "-e", script)
+	_ = cmd.Start() // fire-and-forget
+}
+
+var (
+	closeBrowserMu   sync.Mutex
+	closeBrowserFunc = closeBrowserWindow
+)
+
+// getCloseBrowserFunc returns the current closeBrowserFunc under a lock,
+// avoiding data races when tests replace it concurrently with Login's goroutine.
+func getCloseBrowserFunc() func() {
+	closeBrowserMu.Lock()
+	defer closeBrowserMu.Unlock()
+	return closeBrowserFunc
+}
+
+// setCloseBrowserFunc replaces closeBrowserFunc under a lock (for use in tests).
+func setCloseBrowserFunc(f func()) {
+	closeBrowserMu.Lock()
+	defer closeBrowserMu.Unlock()
+	closeBrowserFunc = f
 }

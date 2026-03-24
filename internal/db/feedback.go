@@ -21,49 +21,7 @@ type FeedbackFilter struct {
 
 // GetFeedback returns feedback matching the filter, newest first.
 func (db *DB) GetFeedback(f FeedbackFilter) ([]Feedback, error) {
-	query := `SELECT id, entity_type, entity_id, rating, comment, created_at FROM feedback`
-	var conditions []string
-	var args []any
-
-	if f.EntityType != "" {
-		conditions = append(conditions, "entity_type = ?")
-		args = append(args, f.EntityType)
-	}
-	if f.EntityID != "" {
-		conditions = append(conditions, "entity_id = ?")
-		args = append(args, f.EntityID)
-	}
-	if f.Rating != 0 {
-		conditions = append(conditions, "rating = ?")
-		args = append(args, f.Rating)
-	}
-
-	if len(conditions) > 0 {
-		query += " WHERE "
-		for i, c := range conditions {
-			if i > 0 {
-				query += " AND "
-			}
-			query += c
-		}
-	}
-	query += ` ORDER BY created_at DESC LIMIT 500`
-
-	rows, err := db.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying feedback: %w", err)
-	}
-	defer rows.Close()
-
-	var results []Feedback
-	for rows.Next() {
-		var fb Feedback
-		if err := rows.Scan(&fb.ID, &fb.EntityType, &fb.EntityID, &fb.Rating, &fb.Comment, &fb.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scanning feedback: %w", err)
-		}
-		results = append(results, fb)
-	}
-	return results, rows.Err()
+	return db.GetFeedbackWithLimit(f, 500)
 }
 
 // FeedbackStats holds aggregate feedback counts.
@@ -105,9 +63,11 @@ func (db *DB) GetFeedbackForPrompt(promptID string, limit int) ([]Feedback, erro
 	switch promptID {
 	case "digest.channel", "digest.daily", "digest.weekly", "digest.period":
 		entityType = "digest"
-	case "actionitems.extract", "actionitems.update":
-		entityType = "action_item"
-	case "analysis.user", "analysis.period":
+	case "tracks.extract", "tracks.update":
+		entityType = "track"
+	case "analysis.user", "analysis.period", "people.reduce", "people.team":
+		entityType = "user_analysis"
+	case "guide.user", "guide.period":
 		entityType = "user_analysis"
 	default:
 		return nil, fmt.Errorf("unknown prompt ID %q: cannot determine feedback entity type", promptID)

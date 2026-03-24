@@ -16,11 +16,11 @@ struct DecisionsListView: View {
             items = items.filter { !$0.isRead }
         }
         if !searchText.isEmpty {
-            let q = searchText.lowercased()
+            let query = searchText.lowercased()
             items = items.filter { entry in
-                if entry.decision.text.lowercased().contains(q) { return true }
-                if let name = entry.channelName, name.lowercased().contains(q) { return true }
-                if let by = entry.decision.by, by.lowercased().contains(q) { return true }
+                if entry.decision.text.lowercased().contains(query) { return true }
+                if let name = entry.channelName, name.lowercased().contains(query) { return true }
+                if let by = entry.decision.by, by.lowercased().contains(query) { return true }
                 return false
             }
         }
@@ -33,6 +33,11 @@ struct DecisionsListView: View {
                 expandedEntryIDs.remove(id)
             } else {
                 expandedEntryIDs.insert(id)
+                // Mark decision as read when expanded
+                if let entry = viewModel.decisionEntries.first(where: { $0.id == id }),
+                   !entry.isRead {
+                    viewModel.markDecisionRead(digestID: entry.digestID, decisionIdx: entry.decisionIdx)
+                }
             }
         }
     }
@@ -42,6 +47,16 @@ struct DecisionsListView: View {
             LazyVStack(spacing: 1) {
                 ForEach(filteredEntries) { entry in
                     decisionListItem(entry)
+                        .onAppear {
+                            if entry.id == filteredEntries.last?.id {
+                                viewModel.loadMoreDecisions()
+                            }
+                        }
+                }
+                if viewModel.isLoadingMoreDecisions {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
                 }
             }
             .padding(.vertical, 4)
@@ -113,10 +128,20 @@ struct DecisionsListView: View {
             VStack(alignment: .leading, spacing: 4) {
                 // Channel + importance badge + expand chevron
                 HStack {
-                    Text(entry.channelName.map { "#\($0)" } ?? "Cross-channel")
-                        .font(.caption)
-                        .fontWeight(entry.isRead ? .regular : .medium)
-                        .foregroundStyle(.secondary)
+                    if let chName = entry.channelName,
+                       let url = viewModel.slackChannelURL(channelID: entry.channelID) {
+                        Link(destination: url) {
+                            Text("#\(chName)")
+                                .font(.caption)
+                                .fontWeight(entry.isRead ? .regular : .medium)
+                        }
+                        .buttonStyle(.borderless)
+                    } else {
+                        Text(entry.channelName.map { "#\($0)" } ?? "Cross-channel")
+                            .font(.caption)
+                            .fontWeight(entry.isRead ? .regular : .medium)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Spacer()
 

@@ -53,12 +53,12 @@ struct SidebarProgressView: View {
 
             switch state.status {
             case .running:
-                if let p = state.progress, p.total > 0 {
-                    ProgressView(value: Double(p.done), total: Double(max(p.total, 1)))
+                if let prog = state.progress, prog.total > 0 {
+                    ProgressView(value: Double(prog.done), total: Double(max(prog.total, 1)))
                         .tint(.accentColor)
                         .scaleEffect(y: 0.7)
 
-                    if let status = p.status, !status.isEmpty {
+                    if let status = prog.status, !status.isEmpty {
                         Text(status)
                             .font(.system(size: 9))
                             .foregroundStyle(.tertiary)
@@ -95,6 +95,10 @@ struct SidebarProgressView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            appState.selectedDestination = .usage
+        }
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color(nsColor: .controlBackgroundColor))
@@ -127,9 +131,9 @@ struct SidebarProgressView: View {
     private func formatETA(_ seconds: Double) -> String {
         let s = Int(seconds)
         if s < 60 { return "~\(max(s, 1))s" }
-        let m = s / 60
+        let min = s / 60
         let rem = s % 60
-        if rem == 0 { return "~\(m)m" }
-        return "~\(m)m \(rem)s"
+        if rem == 0 { return "~\(min)m" }
+        return "~\(min)m \(rem)s"
     }
 }

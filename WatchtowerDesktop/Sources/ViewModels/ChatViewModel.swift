@@ -45,6 +45,7 @@ final class ChatViewModel {
     private let claudeService: any ClaudeServiceProtocol
     private let dbManager: DatabaseManager
     private var streamTask: Task<Void, Never>?
+    private var observationTask: Task<Void, Never>?
 
     /// Callback to notify history that title/session changed
     var onConversationUpdated: ((Int64, String?, String?) -> Void)?
@@ -58,11 +59,14 @@ final class ChatViewModel {
         // If switching to a different conversation, load from DB
         if conversationID != conversation.id {
             cancelStream()
+            observationTask?.cancel()
+            observationTask = nil
             messages.removeAll()
             errorMessage = nil
             conversationID = conversation.id
             sessionID = conversation.sessionID
             loadMessages(conversationID: conversation.id)
+            startMessageObservation()
         }
     }
 
@@ -70,76 +74,60 @@ final class ChatViewModel {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming else { return }
 
-        // H9: cancel any previous stream
         streamTask?.cancel()
-
         inputText = ""
-        let userMsg = ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false)
-        messages.append(userMsg)
+        messages.append(ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false))
 
-        // Persist user message
         if let convID = conversationID {
             persistMessage(conversationID: convID, role: "user", text: text)
         }
 
-        let assistantMsg = ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true)
-        messages.append(assistantMsg)
+        messages.append(ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true))
         isStreaming = true
 
-        // Auto-generate title from first user message
-        let isFirstMessage = messages.filter({ $0.role == .user }).count == 1
-        if isFirstMessage, let convID = conversationID {
-            let title = String(text.prefix(80))
-            onConversationUpdated?(convID, title, nil)
-        }
+        autoGenerateTitle(text: text)
 
-        // H2/M5: build system prompt off main thread
         let currentSessionID = sessionID
         let dbPath = dbManager.dbPool.path
         let dbPool = dbManager.dbPool
         let model = selectedModel.rawValue
+        let capturedConvID = conversationID
+        let capturedDBManager = dbManager
+        let capturedClaudeService = claudeService
 
         streamTask = Task { [weak self] in
-            guard let self else { return }
+            let systemPrompt: String? = currentSessionID == nil ? Self.buildSystemPrompt(dbPool: dbPool) : nil
 
-            let systemPrompt: String? = if currentSessionID == nil {
-                Self.buildSystemPrompt(dbPool: dbPool)
-            } else {
-                nil
-            }
-
+            var fullText = ""
+            var newSessionID: String?
             do {
-                let stream = claudeService.stream(
+                let stream = capturedClaudeService.stream(
                     prompt: text,
                     systemPrompt: systemPrompt,
                     sessionID: currentSessionID,
                     dbPath: dbPath,
                     model: model
                 )
-                // Track turn boundaries: after a turnComplete, next delta starts fresh
                 var sawTurnComplete = false
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
-                        if let idx = self.messages.indices.last {
-                            if sawTurnComplete {
-                                // New turn — replace previous turn's text
-                                self.messages[idx].text = chunk
-                                sawTurnComplete = false
-                            } else {
-                                self.messages[idx].text += chunk
-                            }
+                        if sawTurnComplete {
+                            fullText = chunk
+                            sawTurnComplete = false
+                        } else {
+                            fullText += chunk
                         }
-                    case .turnComplete(let fullText):
-                        // End of a conversation turn — replace with clean text
-                        if let idx = self.messages.indices.last {
-                            self.messages[idx].text = fullText
-                        }
+                        self?.updateLastMessage(fullText)
+                    case .turnComplete(let text):
+                        fullText = text
                         sawTurnComplete = true
+                        self?.updateLastMessage(fullText)
                     case .sessionID(let sid):
-                        self.sessionID = sid
-                        if let convID = self.conversationID {
-                            self.onConversationUpdated?(convID, nil, sid)
+                        newSessionID = sid
+                        self?.sessionID = sid
+                        if let convID = capturedConvID {
+                            self?.onConversationUpdated?(convID, nil, sid)
                         }
                     case .done:
                         break
@@ -147,23 +135,57 @@ final class ChatViewModel {
                 }
             } catch {
                 if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
+                    self?.errorMessage = error.localizedDescription
                 }
             }
-            if let idx = self.messages.indices.last {
-                self.messages[idx].isStreaming = false
-                // Persist assistant message (only if non-empty)
-                let assistantText = self.messages[idx].text
-                if !assistantText.isEmpty, let convID = self.conversationID {
-                    self.persistMessage(conversationID: convID, role: "assistant", text: assistantText)
-                }
-            }
-            self.isStreaming = false
 
-            // Touch conversation to update timestamp
-            if let convID = self.conversationID {
-                self.onConversationUpdated?(convID, nil, nil)
+            // Always persist the response, even if self is gone
+            if !fullText.isEmpty, let convID = capturedConvID {
+                Self.persistResponseStatic(dbManager: capturedDBManager, conversationID: convID, text: fullText)
             }
+            if let sid = newSessionID, let convID = capturedConvID {
+                Self.persistSessionStatic(dbManager: capturedDBManager, conversationID: convID, sessionID: sid)
+            }
+
+            self?.finishStream()
+        }
+    }
+
+    private func autoGenerateTitle(text: String) {
+        let isFirstMessage = messages.filter { $0.role == .user }.count == 1
+        if isFirstMessage, let convID = conversationID {
+            onConversationUpdated?(convID, String(text.prefix(80)), nil)
+        }
+    }
+
+    private func updateLastMessage(_ text: String) {
+        if let idx = messages.indices.last {
+            messages[idx].text = text
+        }
+    }
+
+    private func finishStream() {
+        if let idx = messages.indices.last {
+            messages[idx].isStreaming = false
+        }
+        isStreaming = false
+        if let convID = conversationID {
+            onConversationUpdated?(convID, nil, nil)
+        }
+    }
+
+    // MARK: - Static persistence (works even if self is deallocated)
+
+    nonisolated private static func persistResponseStatic(dbManager: DatabaseManager, conversationID: Int64, text: String) {
+        _ = try? dbManager.dbPool.write { db in
+            try ChatMessageQueries.insert(db, conversationID: conversationID, role: "assistant", text: text)
+            try ChatConversationQueries.touch(db, id: conversationID)
+        }
+    }
+
+    nonisolated private static func persistSessionStatic(dbManager: DatabaseManager, conversationID: Int64, sessionID: String) {
+        _ = try? dbManager.dbPool.write { db in
+            try ChatConversationQueries.updateSessionID(db, id: conversationID, sessionID: sessionID)
         }
     }
 
@@ -184,10 +206,35 @@ final class ChatViewModel {
     func newChat() {
         // H9: cancel in-flight stream before clearing
         cancelStream()
+        observationTask?.cancel()
+        observationTask = nil
         messages.removeAll()
         sessionID = nil
         conversationID = nil
         errorMessage = nil
+    }
+
+    // MARK: - Observation
+
+    /// Observe chat_messages for this conversation so background-persisted
+    /// responses (from a stream that outlived a previous ViewModel) appear automatically.
+    private func startMessageObservation() {
+        guard let convID = conversationID else { return }
+        let dbPool = dbManager.dbPool
+        observationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try ChatMessageQueries.fetchByConversation(db, conversationID: convID)
+            }
+            do {
+                for try await records in observation.values(in: dbPool).dropFirst() {
+                    guard !Task.isCancelled else { break }
+                    guard let self, !self.isStreaming else { continue }
+                    if records.count != self.messages.count {
+                        self.messages = records.map { $0.toChatMessage() }
+                    }
+                }
+            } catch {}
+        }
     }
 
     // MARK: - Persistence
@@ -204,7 +251,7 @@ final class ChatViewModel {
     }
 
     private func persistMessage(conversationID: Int64, role: String, text: String) {
-        try? dbManager.dbPool.write { db in
+        _ = try? dbManager.dbPool.write { db in
             try ChatMessageQueries.insert(db, conversationID: conversationID, role: role, text: text)
         }
     }
@@ -216,99 +263,297 @@ final class ChatViewModel {
         do {
             return try dbPool.read { db in
                 let ws = try WorkspaceQueries.fetchWorkspace(db)
-                let name = ws?.name ?? "unknown"
-                let domain = ws?.domain ?? "unknown"
-                let dbPath = dbPool.path
-
-                // Get schema from the database itself
                 let schema = try Self.fetchSchema(db)
-
-                let now = {
-                    let f = DateFormatter()
-                    f.dateFormat = "yyyy-MM-dd HH:mm 'UTC'"
-                    f.timeZone = TimeZone(identifier: "UTC")
-                    return f.string(from: Date())
-                }()
-
-                return """
-                You are Watchtower, an AI assistant that answers questions about a Slack workspace by querying its SQLite database.
-
-                Workspace: "\(name)" (domain: \(domain).slack.com)
-                Current time: \(now)
-                Database: \(dbPath)
-
-                IMPORTANT: You MUST query the database to answer every question. You have NO pre-loaded data — the database is your only source of truth.
-
-                === HOW TO QUERY ===
-                You have MCP tools for SQLite. Use them:
-                - read_query: run SELECT queries (use this for all data retrieval)
-                - list_tables: see all tables
-                - describe_table: see table schema
-
-                Fallback (if MCP tools fail): sqlite3 -header -separator '|' "\(dbPath)" "SQL"
-
-                === DATABASE SCHEMA ===
-                \(schema)
-
-                === QUERY PATTERNS ===
-
-                First, orient yourself — find what channels and users exist:
-                  SELECT name, id, type FROM channels WHERE is_archived = 0 ORDER BY name;
-                  SELECT name, display_name, id FROM users WHERE is_deleted = 0 ORDER BY name;
-
-                Messages in a channel (recent first):
-                  SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = (SELECT id FROM channels WHERE name = 'general') AND m.ts_unix > unixepoch('now', '-1 day') ORDER BY m.ts_unix DESC LIMIT 50;
-
-                Messages from a user:
-                  SELECT m.ts, m.text, c.name FROM messages m JOIN channels c ON m.channel_id = c.id WHERE m.user_id = (SELECT id FROM users WHERE name = 'alice') ORDER BY m.ts_unix DESC LIMIT 30;
-
-                Activity overview:
-                  SELECT c.name, COUNT(*) as cnt FROM messages m JOIN channels c ON m.channel_id = c.id WHERE m.ts_unix > unixepoch('now', '-1 day') GROUP BY c.name ORDER BY cnt DESC;
-
-                Full-text search:
-                  SELECT m.text, u.display_name, c.name, m.ts FROM messages_fts fts JOIN messages m ON fts.channel_id = m.channel_id AND fts.ts = m.ts JOIN users u ON m.user_id = u.id JOIN channels c ON m.channel_id = c.id WHERE messages_fts MATCH 'keyword' ORDER BY m.ts_unix DESC LIMIT 20;
-
-                Thread replies:
-                  SELECT m.ts, u.display_name, m.text FROM messages m JOIN users u ON m.user_id = u.id WHERE m.channel_id = 'C123' AND m.thread_ts = '1234567890.123456' ORDER BY m.ts_unix ASC;
-
-                Permalink format: https://\(domain).slack.com/archives/{channel_id}/p{ts_without_dots}
-                  Example: ts "1740577800.000100" → p1740577800000100
-
-                === IMPORTANT RESTRICTIONS ===
-                - You have NO internet access. Do NOT call any Slack API, WebFetch, or WebSearch tools.
-                - Your ONLY data source is the local SQLite database. Query it, do not try to fetch from Slack.
-
-                === WORKFLOW ===
-                1. Run a SQL query using the read_query MCP tool
-                2. If results are empty or insufficient, broaden the query (wider time range, different search terms)
-                3. Analyze the actual message content from query results
-                4. Respond with insights, organized by channel or topic
-                5. Include Slack permalinks for key messages
-
-                === LINKING RULES ===
-                ALWAYS include Slack links as descriptive markdown — never bare URLs.
-
-                Channel link: [#channel-name](https://\(domain).slack.com/archives/{channel_id})
-                Message link: [описательный текст](https://\(domain).slack.com/archives/{channel_id}/p{ts_no_dots})
-                  To convert ts to permalink: remove the dot. "1740577800.000100" → "p1740577800000100"
-
-                Rules:
-                - Every channel mention (#name) MUST be a link to that channel
-                - Every referenced message or thread MUST have a link with descriptive text in the user's language
-                - Always SELECT channel_id and ts in your queries so you can build links
-
-                === RESPONSE STYLE ===
-                - Be concise and direct — give the answer, not the process
-                - Do NOT describe your search steps, reasoning, or tool usage. Present findings directly.
-                - Match the user's language and tone
-                - Use markdown for readability (headers, bullet lists, bold for emphasis)
-                - Use line breaks between sections for clarity
-                - Highlight: decisions, action items, unanswered questions, unusual activity
-                """
+                return Self.formatSystemPrompt(
+                    workspace: ws,
+                    dbPath: dbPool.path,
+                    schema: schema
+                )
             }
         } catch {
             return "You are Watchtower, an AI assistant for Slack workspace analysis. Query the SQLite database to answer questions."
         }
+    }
+
+    nonisolated static func formatSystemPrompt(
+        workspace ws: Workspace?,
+        dbPath: String,
+        schema: String
+    ) -> String {
+        let name = ws?.name ?? "unknown"
+        let domain = ws?.domain ?? "unknown"
+        let teamID = ws?.id ?? "unknown"
+
+        let now = {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm 'UTC'"
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            return fmt.string(from: Date())
+        }()
+
+        return promptHeader(name: name, domain: domain, now: now, dbPath: dbPath, schema: schema)
+            + promptQueryPatterns(teamID: teamID)
+            + promptRules(teamID: teamID)
+            + promptAppGuide()
+    }
+
+    nonisolated private static func promptHeader(
+        name: String,
+        domain: String,
+        now: String,
+        dbPath: String,
+        schema: String
+    ) -> String {
+        """
+        You are Watchtower, an AI assistant that answers questions about a Slack workspace by querying its SQLite database.
+
+        Workspace: "\(name)" (domain: \(domain).slack.com)
+        Current time: \(now)
+        Database: \(dbPath)
+
+        IMPORTANT: You MUST query the database to answer every question.
+        You have NO pre-loaded data — the database is your only source of truth.
+
+        === HOW TO QUERY ===
+        You have MCP tools for SQLite. Use them:
+        - read_query: run SELECT queries (use this for all data retrieval)
+        - list_tables: see all tables
+        - describe_table: see table schema
+
+        Fallback (if MCP tools fail): sqlite3 -header -separator '|' "\(dbPath)" "SQL"
+
+        === DATABASE SCHEMA ===
+        \(schema)
+
+        """
+    }
+
+    nonisolated private static func promptQueryPatterns(teamID: String) -> String {
+        """
+        === QUERY PATTERNS ===
+
+        First, orient yourself — find what channels and users exist:
+          SELECT name, id, type FROM channels WHERE is_archived = 0 ORDER BY name;
+          SELECT name, display_name, id FROM users WHERE is_deleted = 0 ORDER BY name;
+
+        Messages in a channel (recent first):
+          SELECT m.ts, u.display_name, m.text
+          FROM messages m JOIN users u ON m.user_id = u.id
+          WHERE m.channel_id = (SELECT id FROM channels
+          WHERE name = 'general')
+          AND m.ts_unix > unixepoch('now', '-1 day')
+          ORDER BY m.ts_unix DESC LIMIT 50;
+
+        Messages from a user:
+          SELECT m.ts, m.text, c.name
+          FROM messages m JOIN channels c ON m.channel_id = c.id
+          WHERE m.user_id = (SELECT id FROM users
+          WHERE name = 'alice')
+          ORDER BY m.ts_unix DESC LIMIT 30;
+
+        Activity overview:
+          SELECT c.name, COUNT(*) as cnt
+          FROM messages m JOIN channels c ON m.channel_id = c.id
+          WHERE m.ts_unix > unixepoch('now', '-1 day')
+          GROUP BY c.name ORDER BY cnt DESC;
+
+        Full-text search:
+          SELECT m.text, u.display_name, c.name, m.ts
+          FROM messages_fts fts
+          JOIN messages m ON fts.channel_id = m.channel_id
+            AND fts.ts = m.ts
+          JOIN users u ON m.user_id = u.id
+          JOIN channels c ON m.channel_id = c.id
+          WHERE messages_fts MATCH 'keyword'
+          ORDER BY m.ts_unix DESC LIMIT 20;
+
+        Thread replies:
+          SELECT m.ts, u.display_name, m.text
+          FROM messages m JOIN users u ON m.user_id = u.id
+          WHERE m.channel_id = 'C123'
+          AND m.thread_ts = '1234567890.123456'
+          ORDER BY m.ts_unix ASC;
+
+        Deep link format:
+          slack://channel?team=\(teamID)&id={channel_id}&message={ts}
+          Example: ts "1740577800.000100" →
+          slack://channel?team=\(teamID)&id=C123&message=1740577800.000100
+
+        === IMPORTANT RESTRICTIONS ===
+        - You have NO internet access. Do NOT call any Slack API, WebFetch, or WebSearch tools.
+        - Your ONLY data source is the local SQLite database. Query it, do not try to fetch from Slack.
+
+        """
+    }
+
+    nonisolated private static func promptRules(teamID: String) -> String {
+        """
+        === WORKFLOW ===
+        1. Run a SQL query using the read_query MCP tool
+        2. If results are empty or insufficient, broaden the query (wider time range, different search terms)
+        3. Analyze the actual message content from query results
+        4. Respond with insights, organized by channel or topic
+        5. Include Slack permalinks for key messages
+
+        === LINKING RULES ===
+        ALWAYS include Slack links as descriptive markdown — never bare URLs.
+
+        Channel link: [#channel-name](slack://channel?team=\(teamID)&id={channel_id})
+        Message link: [описательный текст](slack://channel?team=\(teamID)&id={channel_id}&message={ts})
+          Use the raw ts value (with dot). Example: "1740577800.000100" → message=1740577800.000100
+
+        Rules:
+        - Every channel mention (#name) MUST be a link to that channel
+        - Every referenced message or thread MUST have a link with descriptive text in the user's language
+        - Always SELECT channel_id and ts in your queries so you can build links
+
+        === RESPONSE STYLE ===
+        - Be concise and direct — give the answer, not the process
+        - Do NOT describe your search steps, reasoning, or tool usage. Present findings directly.
+        - Match the user's language and tone
+        - Use markdown for readability (headers, bullet lists, bold for emphasis)
+        - Use line breaks between sections for clarity
+        - Highlight: decisions, tracks, unanswered questions, unusual activity
+        """
+    }
+
+    nonisolated private static func promptAppGuide() -> String {
+        """
+
+        === WATCHTOWER APP GUIDE ===
+        You are also an expert on the Watchtower app itself. When users ask about features,
+        how to use the app, or what something means — answer based on this guide.
+
+        Watchtower is a macOS desktop app that syncs a Slack workspace to a local SQLite database
+        and uses AI to generate insights: digests, tracks, discussion chains, and people analytics.
+
+        TABS:
+        - AI Chat: chat with Claude about workspace data, multi-turn with session memory
+        - Tracks: personal action items extracted from Slack (statuses: inbox/active/done/dismissed/snoozed;
+          ownership: mine/delegated/watching; priority: high/medium/low; categories: code_review, decision_needed, task, etc.)
+        - Chains: cross-channel discussion threads linked by AI (active/resolved/stale)
+        - Digests: AI summaries of channel activity (channel/daily/weekly), with topics, decisions, running context
+        - Decisions: flat list of all decisions across digests, with importance ratings
+        - People: team member profiles from AI analysis — communication style, decision role, accomplishments, red flags, activity hours
+        - Search: full-text search across all synced Slack messages
+        - Usage: token consumption and costs by date, model, feature; live pipeline progress
+        - Training: prompt editor, feedback stats, quality score, tuning controls
+
+        SETTINGS: sync interval, workers, history depth, digest model/language, Claude CLI path,
+        profile (role, team, manager, reports, peers), notifications, daemon control, logs, data management.
+
+        BACKGROUND PROCESSES: daemon syncs Slack periodically, then runs pipelines:
+        digest → tracks → people → chains (automatic after each sync).
+
+        KEY CONCEPTS:
+        - Running context: AI maintains per-channel memory (active topics, decisions, open questions)
+        - Situations: extracted interaction patterns used to build people cards
+        - Feedback loop: thumbs up/down + importance corrections improve AI via prompt tuning
+        - Starred items: prioritize specific channels and people in analysis
+
+        When answering about the app, be specific and accurate. Do not invent features that don't exist.
+        """
+    }
+
+    // MARK: - Welcome Message
+
+    /// Send a welcome message in a new chat, using the user's profile for personalization.
+    func sendWelcomeMessage(profile: UserProfile) {
+        guard !isStreaming else { return }
+
+        let welcomePrompt = Self.buildWelcomePrompt(profile: profile)
+
+        messages.append(ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true))
+        isStreaming = true
+
+        let dbPath = dbManager.dbPool.path
+        let dbPool = dbManager.dbPool
+        let model = selectedModel.rawValue
+        let capturedConvID = conversationID
+        let capturedDBManager = dbManager
+        let capturedClaudeService = claudeService
+
+        streamTask = Task { [weak self] in
+            let systemPrompt = Self.buildSystemPrompt(dbPool: dbPool)
+
+            var fullText = ""
+            var newSessionID: String?
+            do {
+                let stream = capturedClaudeService.stream(
+                    prompt: welcomePrompt,
+                    systemPrompt: systemPrompt,
+                    sessionID: nil,
+                    dbPath: dbPath,
+                    model: model
+                )
+                var sawTurnComplete = false
+                for try await event in stream {
+                    switch event {
+                    case .text(let chunk):
+                        if sawTurnComplete {
+                            fullText = chunk
+                            sawTurnComplete = false
+                        } else {
+                            fullText += chunk
+                        }
+                        self?.updateLastMessage(fullText)
+                    case .turnComplete(let text):
+                        fullText = text
+                        sawTurnComplete = true
+                        self?.updateLastMessage(fullText)
+                    case .sessionID(let sid):
+                        newSessionID = sid
+                        self?.sessionID = sid
+                        if let convID = capturedConvID {
+                            self?.onConversationUpdated?(convID, nil, sid)
+                        }
+                    case .done:
+                        break
+                    }
+                }
+            } catch {
+                if !Task.isCancelled {
+                    self?.errorMessage = error.localizedDescription
+                }
+            }
+
+            if !fullText.isEmpty, let convID = capturedConvID {
+                Self.persistResponseStatic(dbManager: capturedDBManager, conversationID: convID, text: fullText)
+            }
+            if let sid = newSessionID, let convID = capturedConvID {
+                Self.persistSessionStatic(dbManager: capturedDBManager, conversationID: convID, sessionID: sid)
+            }
+
+            self?.finishStream()
+        }
+    }
+
+    nonisolated private static func buildWelcomePrompt(profile: UserProfile) -> String {
+        var parts: [String] = []
+        parts.append("This is a NEW conversation. The user just opened the app for the first time after onboarding.")
+        parts.append("Introduce yourself briefly as Watchtower assistant and offer to help.")
+
+        if !profile.role.isEmpty {
+            parts.append("User's role: \(profile.role)")
+        }
+        if !profile.team.isEmpty {
+            parts.append("User's team: \(profile.team)")
+        }
+        if !profile.painPoints.isEmpty, profile.painPoints != "[]" {
+            parts.append("User's pain points from onboarding: \(profile.painPoints)")
+        }
+        if !profile.customPromptContext.isEmpty {
+            parts.append("User's profile context: \(profile.customPromptContext)")
+        }
+
+        parts.append("""
+            Based on the user's role and pain points, suggest 2-3 specific things you can help with RIGHT NOW.
+            For example: reviewing today's activity, checking for pending decisions, summarizing what their team discussed.
+            Keep it short (3-5 sentences), friendly, and actionable. Match the user's language if their profile gives hints.
+            Do NOT ask the user to type anything specific — just offer help naturally.
+            """)
+
+        return parts.joined(separator: "\n")
     }
 
     /// Fetch the database schema (CREATE TABLE statements)

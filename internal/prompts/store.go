@@ -12,14 +12,19 @@ import (
 
 // Prompt IDs — the three main prompts targeted for feedback & tuning.
 const (
-	DigestChannel      = "digest.channel"
-	DigestDaily        = "digest.daily"
-	DigestWeekly       = "digest.weekly"
-	DigestPeriod       = "digest.period"
-	ActionItemsExtract = "actionitems.extract"
-	ActionItemsUpdate  = "actionitems.update"
-	AnalysisUser       = "analysis.user"
-	AnalysisPeriod     = "analysis.period"
+	DigestChannel  = "digest.channel"
+	DigestDaily    = "digest.daily"
+	DigestWeekly   = "digest.weekly"
+	DigestPeriod   = "digest.period"
+	TracksExtract  = "tracks.extract"
+	TracksUpdate   = "tracks.update"
+	AnalysisUser   = "analysis.user"
+	AnalysisPeriod = "analysis.period"
+	GuideUser      = "guide.user"
+	GuidePeriod    = "guide.period"
+	PeopleReduce   = "people.reduce"
+	PeopleTeam     = "people.team"
+	BriefingDaily  = "briefing.daily"
 )
 
 // Store loads, caches, and persists prompt templates.
@@ -79,6 +84,30 @@ func (s *Store) Get(id string) (string, int, error) {
 		return tmpl, 0, nil
 	}
 	return "", 0, fmt.Errorf("unknown prompt %q", id)
+}
+
+// GetForRole returns a prompt template customized for a user's role.
+// It tries role-specific variants first (e.g., "tracks.extract_direction_owner"),
+// then falls back to the standard prompt.
+func (s *Store) GetForRole(id string, role string) (string, int, error) {
+	if role != "" {
+		// Try role-specific variant first
+		roleVariantID := id + "_" + role
+		p, err := s.db.GetPrompt(roleVariantID)
+		if err != nil {
+			s.logger.Debug("error loading role variant", "id", roleVariantID, "err", err)
+		} else if p != nil {
+			s.logger.Debug("loaded role-specific prompt", "id", roleVariantID)
+			return p.Template, p.Version, nil
+		}
+		// Check built-in defaults for role variant
+		if tmpl, ok := Defaults[roleVariantID]; ok {
+			s.logger.Debug("loaded built-in role variant", "id", roleVariantID)
+			return tmpl, 0, nil
+		}
+	}
+	// Fallback to standard prompt
+	return s.Get(id)
 }
 
 // GetAll returns all prompts (from DB, with defaults for any missing).

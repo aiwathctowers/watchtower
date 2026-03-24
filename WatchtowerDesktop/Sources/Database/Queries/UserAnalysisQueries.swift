@@ -7,11 +7,15 @@ enum UserAnalysisQueries {
         periodFrom: Double,
         periodTo: Double
     ) throws -> [UserAnalysis] {
-        try UserAnalysis.fetchAll(db, sql: """
-            SELECT * FROM user_analyses
-            WHERE period_from = ? AND period_to = ?
-            ORDER BY message_count DESC
-            """, arguments: [periodFrom, periodTo])
+        try UserAnalysis.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM user_analyses
+                WHERE period_from = ? AND period_to = ?
+                ORDER BY message_count DESC
+                """,
+            arguments: [periodFrom, periodTo]
+        )
     }
 
     /// Fetch the latest analysis window available.
@@ -36,11 +40,15 @@ enum UserAnalysisQueries {
         userID: String,
         limit: Int = 10
     ) throws -> [UserAnalysis] {
-        try UserAnalysis.fetchAll(db, sql: """
-            SELECT * FROM user_analyses
-            WHERE user_id = ?
-            ORDER BY period_to DESC LIMIT ?
-            """, arguments: [userID, limit])
+        try UserAnalysis.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM user_analyses
+                WHERE user_id = ?
+                ORDER BY period_to DESC LIMIT ?
+                """,
+            arguments: [userID, limit]
+        )
     }
 
     /// Fetch available analysis windows (distinct period ranges).
@@ -55,11 +63,15 @@ enum UserAnalysisQueries {
     /// Count analyses with red flags in the latest window.
     static func countRedFlags(_ db: Database) throws -> Int {
         guard let window = try fetchLatestWindow(db) else { return 0 }
-        return try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM user_analyses
-            WHERE period_from = ? AND period_to = ?
-            AND red_flags != '[]' AND red_flags != ''
-            """, arguments: [window.from, window.to]) ?? 0
+        return try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM user_analyses
+                WHERE period_from = ? AND period_to = ?
+                AND red_flags != '[]' AND red_flags != ''
+                """,
+            arguments: [window.from, window.to]
+        ) ?? 0
     }
 
     /// Fetch period summary for a specific window.
@@ -68,9 +80,13 @@ enum UserAnalysisQueries {
         periodFrom: Double,
         periodTo: Double
     ) throws -> PeriodSummary? {
-        try PeriodSummary.fetchOne(db, sql: """
-            SELECT * FROM period_summaries
-            WHERE period_from = ? AND period_to = ?
-            """, arguments: [periodFrom, periodTo])
+        try PeriodSummary.fetchOne(
+            db,
+            sql: """
+                SELECT * FROM period_summaries
+                WHERE period_from = ? AND period_to = ?
+                """,
+            arguments: [periodFrom, periodTo]
+        )
     }
 }

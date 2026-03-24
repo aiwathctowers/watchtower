@@ -32,11 +32,12 @@ type messageRef struct {
 type ResponseRenderer struct {
 	db       *db.DB
 	domain   string
+	teamID   string
 	renderer *glamour.TermRenderer
 }
 
 // NewResponseRenderer creates a ResponseRenderer.
-func NewResponseRenderer(database *db.DB, domain string) *ResponseRenderer {
+func NewResponseRenderer(database *db.DB, domain, teamID string) *ResponseRenderer {
 	style := styles.DarkStyleConfig
 	// Remove raw markdown prefixes from headings — they look like unrendered
 	// markdown in the terminal. The headings are already distinguished by
@@ -60,6 +61,7 @@ func NewResponseRenderer(database *db.DB, domain string) *ResponseRenderer {
 	return &ResponseRenderer{
 		db:       database,
 		domain:   domain,
+		teamID:   teamID,
 		renderer: r,
 	}
 }
@@ -147,7 +149,7 @@ func (r *ResponseRenderer) resolveRefs(refs []messageRef) []messageRef {
 			continue
 		}
 
-		ref.permalink = slackutil.GeneratePermalink(r.domain, ch.ID, msg.TS)
+		ref.permalink = slackutil.GenerateDeeplink(r.teamID, ch.ID, msg.TS)
 		resolved = append(resolved, ref)
 	}
 	return resolved

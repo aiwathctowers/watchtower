@@ -16,7 +16,7 @@ struct DashboardView: View {
 
                     LazyVGrid(columns: [
                         GridItem(.flexible()),
-                        GridItem(.flexible()),
+                        GridItem(.flexible())
                     ], spacing: 16) {
                         StatsCard(title: "Channels", value: "\(vm.stats.channelCount)", icon: "number")
                         StatsCard(title: "Users", value: "\(vm.stats.userCount)", icon: "person.2")
@@ -24,7 +24,9 @@ struct DashboardView: View {
                         StatsCard(title: "Digests", value: "\(vm.stats.digestCount)", icon: "doc.text")
                     }
 
-                    ActivityFeed(messages: vm.recentActivity)
+                    ActivityFeed(
+                        messages: vm.recentActivity
+                    ) { vm.slackChannelURL(channelID: $0) }
 
                     if let error = vm.errorMessage {
                         Text(error)
@@ -43,7 +45,7 @@ struct DashboardView: View {
             if let db = appState.databaseManager, viewModel == nil {
                 let vm = DashboardViewModel(dbManager: db)
                 viewModel = vm
-                Task { await vm.load() }
+                vm.startObserving()
             }
             daemonManager.startPolling()
         }

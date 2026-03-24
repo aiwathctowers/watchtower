@@ -9,11 +9,9 @@ import (
 
 func TestVersionCommand(t *testing.T) {
 	buf := new(bytes.Buffer)
-	rootCmd.SetOut(buf)
-	rootCmd.SetErr(buf)
-	rootCmd.SetArgs([]string{"version"})
+	versionCmd.SetOut(buf)
 
-	err := rootCmd.Execute()
+	err := versionCmd.RunE(versionCmd, nil)
 	assert.NoError(t, err)
 
 	output := buf.String()

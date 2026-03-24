@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Renders Slack message text with standard emoji (Unicode) and custom emoji (inline images).
 struct MessageTextView: View {
+    private static let emojiPattern = try? NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+
     let rawText: String
     let customEmojiMap: [String: String]
     let imageCache: EmojiImageCache
@@ -24,7 +26,7 @@ struct MessageTextView: View {
 
     /// Split text on :shortcodes: that match custom emoji, returning text and emoji segments.
     private func splitOnCustomEmoji(_ text: String) -> [Segment] {
-        let pattern = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+        guard let pattern = Self.emojiPattern else { return [.text(text)] }
         let nsText = text as NSString
         let matches = pattern.matches(in: text, range: NSRange(location: 0, length: nsText.length))
 
@@ -86,7 +88,7 @@ struct MessageTextView: View {
                         return result + Text(attr)
                     }
                     return result + Text(str)
-                case .emoji(let name, let url):
+                case let .emoji(name, url):
                     if let nsImage = imageCache.image(for: name, url: url) {
                         let image = Image(nsImage: nsImage)
                         return result + Text(image)

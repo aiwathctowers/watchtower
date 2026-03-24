@@ -22,7 +22,7 @@ func TestAddFeedback(t *testing.T) {
 func TestAddFeedbackNegative(t *testing.T) {
 	db := openTestDB(t)
 	id, err := db.AddFeedback(Feedback{
-		EntityType: "action_item",
+		EntityType: "track",
 		EntityID:   "7",
 		Rating:     -1,
 		Comment:    "not relevant to me",
@@ -37,7 +37,7 @@ func TestGetFeedback(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.AddFeedback(Feedback{EntityType: "digest", EntityID: "2", Rating: -1})
 	require.NoError(t, err)
-	_, err = db.AddFeedback(Feedback{EntityType: "action_item", EntityID: "3", Rating: 1})
+	_, err = db.AddFeedback(Feedback{EntityType: "track", EntityID: "3", Rating: 1})
 	require.NoError(t, err)
 
 	// All feedback
@@ -67,20 +67,20 @@ func TestGetFeedbackStats(t *testing.T) {
 	_, _ = db.AddFeedback(Feedback{EntityType: "digest", EntityID: "1", Rating: 1})
 	_, _ = db.AddFeedback(Feedback{EntityType: "digest", EntityID: "2", Rating: 1})
 	_, _ = db.AddFeedback(Feedback{EntityType: "digest", EntityID: "3", Rating: -1})
-	_, _ = db.AddFeedback(Feedback{EntityType: "action_item", EntityID: "1", Rating: -1})
+	_, _ = db.AddFeedback(Feedback{EntityType: "track", EntityID: "1", Rating: -1})
 
 	stats, err := db.GetFeedbackStats()
 	require.NoError(t, err)
 	require.Len(t, stats, 2)
 
-	// Stats are sorted by entity_type
-	assert.Equal(t, "action_item", stats[0].EntityType)
-	assert.Equal(t, 0, stats[0].Positive)
+	// Stats are sorted by entity_type alphabetically
+	assert.Equal(t, "digest", stats[0].EntityType)
+	assert.Equal(t, 2, stats[0].Positive)
 	assert.Equal(t, 1, stats[0].Negative)
-	assert.Equal(t, 1, stats[0].Total)
+	assert.Equal(t, 3, stats[0].Total)
 
-	assert.Equal(t, "digest", stats[1].EntityType)
-	assert.Equal(t, 2, stats[1].Positive)
+	assert.Equal(t, "track", stats[1].EntityType)
+	assert.Equal(t, 0, stats[1].Positive)
 	assert.Equal(t, 1, stats[1].Negative)
-	assert.Equal(t, 3, stats[1].Total)
+	assert.Equal(t, 1, stats[1].Total)
 }

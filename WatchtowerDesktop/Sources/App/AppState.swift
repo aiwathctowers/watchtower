@@ -9,6 +9,15 @@ final class AppState {
     var errorMessage: String?
     var isDBAvailable: Bool { databaseManager != nil }
 
+    /// True while initialize() is running (before DB and onboarding check complete).
+    var isLoading: Bool = true
+
+    /// Whether the user needs to complete the onboarding chat flow.
+    var needsOnboarding: Bool = false
+
+    /// Persistent onboarding state machine — tracks which step the user is on across app restarts.
+    let onboarding = OnboardingStateMachine()
+
     /// Cache for custom workspace emoji images.
     let emojiImageCache = EmojiImageCache()
     /// Map of custom emoji name → image URL, loaded from DB.
@@ -18,8 +27,14 @@ final class AppState {
     private(set) var chatViewModel: ChatViewModel?
     private(set) var chatHistoryViewModel: ChatHistoryViewModel?
 
-    /// Action items status filter (nil = inbox+active).
-    var actionStatusFilter: String?
+    /// Tracks status filter (nil = inbox+active).
+    var trackStatusFilter: String?
+
+    /// Tracks ownership filter (nil = all ownerships).
+    var trackOwnershipFilter: String?
+
+    /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
+    var analysisLegacyMode: Bool = false
 
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
@@ -30,7 +45,7 @@ final class AppState {
     /// Manages app updates from GitHub Releases.
     let updateService = UpdateService()
 
-    /// Manages background pipeline tasks (digests, action items) started after onboarding sync.
+    /// Manages background pipeline tasks (digests, tracks) started after onboarding sync.
     let backgroundTaskManager = BackgroundTaskManager()
 
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
@@ -38,7 +53,9 @@ final class AppState {
         guard let db = databaseManager, chatViewModel == nil else { return }
         let cvm = ChatViewModel(claudeService: ClaudeService(), dbManager: db)
         let hvm = ChatHistoryViewModel(dbManager: db)
-        hvm.load()
+        hvm.load(completion: { [weak self, weak cvm, weak hvm] in
+            self?.maybeCreateWelcomeChat(chatVM: cvm, historyVM: hvm)
+        })
 
         cvm.onConversationUpdated = { [weak hvm] convID, title, sessionID in
             guard let hvm else { return }
@@ -51,12 +68,36 @@ final class AppState {
         chatHistoryViewModel = hvm
     }
 
-    func navigateToDigest(_ digestID: Int) {
-        pendingDigestID = digestID
-        selectedDestination = .digests
+    /// Creates a welcome chat with AI greeting when no conversations exist and user profile is available.
+    private func maybeCreateWelcomeChat(chatVM: ChatViewModel?, historyVM: ChatHistoryViewModel?) {
+        guard let chatVM, let historyVM, let db = databaseManager else { return }
+        guard historyVM.conversations.isEmpty else { return }
+
+        // Load user profile
+        let profile: UserProfile? = try? db.dbPool.read { db in
+            try ProfileQueries.fetchCurrentProfile(db)
+        }
+        guard let profile, profile.onboardingDone else { return }
+
+        // Create conversation and send welcome message
+        guard let conv = historyVM.createConversation() else { return }
+        chatVM.newChat()
+        chatVM.bind(to: conv)
+        historyVM.updateTitle(conv.id, title: "Welcome")
+        chatVM.sendWelcomeMessage(profile: profile)
     }
 
+    func navigateToDigest(_ digestID: Int) {
+        pendingDigestID = digestID
+        selectedDestination = .chains
+    }
+
+    private var isInitializing = false
+
     func initialize() {
+        guard !isInitializing else { return }
+        isInitializing = true
+        isLoading = true
         Task {
             do {
                 let manager = try await Task.detached {
@@ -67,17 +108,91 @@ final class AppState {
                 }.value
                 databaseManager = manager
                 errorMessage = nil
+                // Sync state machine with DB: if profile says done, mark complete
+                if onboarding.currentStep != .complete {
+                    let dbDone = await checkNeedsOnboarding(dbPool: manager.dbPool)
+                    if !dbDone {
+                        onboarding.markComplete()
+                    } else {
+                        onboarding.skipCompleted()
+                    }
+                }
+                needsOnboarding = onboarding.currentStep != .complete
+                analysisLegacyMode = ConfigService().analysisLegacyMode
+                isLoading = false
                 loadCustomEmoji(from: manager)
                 startDigestWatcher(dbPool: manager.dbPool)
+                // Resume pipelines if app was closed mid-generation
+                if !needsOnboarding && !UserDefaults.standard.bool(forKey: Constants.pipelinesCompletedKey) {
+                    backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
+                }
             } catch {
                 errorMessage = error.localizedDescription
                 databaseManager = nil
+                // No DB available — if state machine not complete, onboarding needed
+                needsOnboarding = onboarding.currentStep != .complete
+                if needsOnboarding {
+                    onboarding.skipCompleted()
+                }
+                isLoading = false
             }
         }
         // Check for updates in background (once per 24h)
         Task {
             await updateService.checkIfNeeded()
         }
+    }
+
+    /// Check if onboarding chat is needed (profile missing or onboarding_done == false).
+    private func checkNeedsOnboarding(dbPool: DatabasePool) async -> Bool {
+        do {
+            return try await dbPool.read { db in
+                guard let profile = try ProfileQueries.fetchCurrentProfile(db) else {
+                    return true
+                }
+                return !profile.onboardingDone
+            }
+        } catch {
+            return false // On error, don't block — skip onboarding
+        }
+    }
+
+    /// Called when onboarding flow completes successfully.
+    func completeOnboarding() {
+        onboarding.markComplete()
+        needsOnboarding = false
+    }
+
+    /// Re-triggers the onboarding flow (from Settings).
+    /// Resets to the chat step since connect/settings/claude are already done.
+    func startOnboarding() {
+        onboarding.reset(to: .chat)
+        needsOnboarding = true
+        UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
+    }
+
+    /// Wipe all LLM-generated data, stop daemon, and re-run post-onboarding pipelines.
+    func resetLLMData() async throws {
+        guard let db = databaseManager else { return }
+
+        // 1. Stop running pipelines (if any) — await ensures process exits and releases file locks
+        await backgroundTaskManager.stopAll()
+
+        // 2. Stop daemon
+        let daemon = DaemonManager()
+        daemon.resolvePathIfNeeded()
+        if DaemonManager.checkDaemonRunning() {
+            await daemon.stopDaemon()
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+
+        // 3. Wipe LLM-generated tables
+        try db.wipeLLMData()
+
+        // 4. Reset pipelines flag and re-run
+        UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
+        backgroundTaskManager.tasks.removeAll()
+        backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
     }
 
     private func startDigestWatcher(dbPool: DatabasePool) {

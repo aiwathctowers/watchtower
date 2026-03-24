@@ -179,21 +179,23 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 
 // knownConfigKeys is the set of recognized configuration keys.
 var knownConfigKeys = map[string]bool{
-	"active_workspace":          true,
-	"ai.model":                  true,
-	"ai.context_budget":         true,
-	"sync.workers":              true,
-	"sync.initial_history_days": true,
-	"sync.poll_interval":        true,
-	"sync.sync_threads":         true,
-	"sync.sync_on_wake":         true,
-	"sync.thread_sync_limit":    true,
-	"digest.enabled":            true,
-	"digest.model":              true,
-	"digest.min_messages":       true,
-	"digest.language":           true,
-	"digest.workers":            true,
-	"claude_path":               true,
+	"active_workspace":             true,
+	"ai.model":                     true,
+	"ai.context_budget":            true,
+	"sync.workers":                 true,
+	"sync.initial_history_days":    true,
+	"sync.poll_interval":           true,
+	"sync.sync_threads":            true,
+	"sync.sync_on_wake":            true,
+	"sync.thread_sync_limit":       true,
+	"digest.enabled":               true,
+	"digest.model":                 true,
+	"digest.min_messages":          true,
+	"digest.language":              true,
+	"digest.workers":               true,
+	"digest.action_items_interval": true,
+	"digest.tracks_interval":       true,
+	"claude_path":                  true,
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {

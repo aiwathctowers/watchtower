@@ -1,267 +1,147 @@
-# Watchtower
+<p align="center">
+  <img src="assets/banner.png" alt="Watchtower" width="400" />
+</p>
 
-Slack intelligence platform: syncs your workspace into a local SQLite database, generates AI-powered digests, tracks action items and decisions, analyzes team dynamics — all from the terminal or a native macOS app.
+<p align="center">
+  AI-powered Slack intelligence for macOS.<br/>
+  Syncs your workspace locally, generates briefings, tracks action items, and analyzes team dynamics.
+</p>
 
-**What it does:**
-- Syncs channels, users, messages, and threads from Slack into a local database
-- AI-generated digests — channel summaries, daily rollups, weekly trends
-- Action items extraction — finds tasks, decisions, and follow-ups assigned to you
-- People analytics — communication patterns, decision roles, activity trends
-- Natural-language Q&A about your workspace via Claude
-- "Catchup" summaries of what happened while you were away
-- Full-text search across all messages (FTS5 with stemming)
-- Watch list for high-priority channels and people
-- Native macOS desktop app with real-time updates
-- Self-improving prompts via feedback loop
-- All data stays on your machine. Read-only Slack access.
+## What is Watchtower?
+
+Watchtower is a native macOS app that turns your Slack workspace into an actionable knowledge base. A background daemon syncs messages into a local SQLite database, then AI pipelines distill them into briefings, digests, tracks, and people analytics — all without leaving your desktop.
 
 ```
-[Slack API] → [SQLite DB] → [AI Pipeline] → [CLI / Desktop App]
-                                ↓
-                          Digests, Actions,
-                          People, Decisions
+[Slack API] → [Local SQLite] → [AI Pipelines] → [Desktop App]
+                                      ↓
+                              Briefings · Digests
+                              Tracks · People · Chains
 ```
 
-## Quick Start
+**Key principles:** all data stays on your machine, read-only Slack access, AI runs via Claude CLI.
 
-```bash
-# Install CLI + desktop app
-curl -fsSL https://raw.githubusercontent.com/vadimtrunov/watchtower/main/scripts/install.sh | bash
+## Features
 
-# Login via Slack OAuth (opens browser)
-watchtower auth login
+- **Daily Briefings** — personalized morning overview: what needs attention, your tasks for the day, what happened, team pulse, coaching tips
+- **AI Chat** — ask questions about your workspace in natural language, with multi-turn conversations and model selection
+- **Tracks** — action items extracted from conversations: tasks, reviews, approvals, follow-ups with priority, status, and ownership
+- **Digests** — channel summaries, daily rollups, weekly trends with running context that preserves topic continuity
+- **Chains** — cross-channel discussion threads automatically linked by AI
+- **People Analytics** — communication styles, decision roles, activity patterns, team health metrics
+- **Full-text Search** — FTS5 search across all synced messages
+- **Self-improving AI** — feedback loop with prompt tuning based on your ratings
+- **Native Notifications** — alerts for new briefings, tracks, and digests
 
-# Sync your workspace
-watchtower sync
-
-# Ask questions
-watchtower ask "what did the team discuss today?"
-
-# See AI-generated digests
-watchtower digest
-
-# Check your action items
-watchtower actions
-```
-
-## Installation
+## Install
 
 ### One-liner (recommended)
 
-Downloads the latest release, installs the desktop app to `/Applications`, and sets up the `watchtower` CLI.
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vadimtrunov/watchtower/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aiwathctowers/watchtower/main/scripts/install.sh | bash
 ```
 
-### Homebrew
+Installs the desktop app to `/Applications` and the `watchtower` CLI to your PATH.
+
+### From source
+
+Requires Go 1.25+, Swift 5.10+, macOS 14+.
 
 ```bash
-brew tap vadimtrunov/tap
-brew install watchtower
-```
-
-### From source (Go 1.25+)
-
-```bash
-go install github.com/vadimtrunov/watchtower@latest
-```
-
-### From source (clone)
-
-```bash
-git clone https://github.com/vadimtrunov/watchtower.git
+git clone https://github.com/aiwathctowers/watchtower.git
 cd watchtower
-make install
+make app          # Full release build → build/Watchtower.app
+# or
+make app-dev      # Fast dev build
 ```
 
 ### Pre-built binaries
 
-Download from [Releases](https://github.com/vadimtrunov/watchtower/releases). Available for macOS (Apple Silicon).
+Download from [Releases](https://github.com/aiwathctowers/watchtower/releases) (macOS Apple Silicon).
 
-## Prerequisites
-
-1. **Slack** — `watchtower auth login` handles OAuth automatically. No manual token setup needed.
-
-2. **Claude CLI** (for AI features) — install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or set an API key:
-   ```bash
-   watchtower config set ai.api_key "sk-ant-..."
-   # or: export ANTHROPIC_API_KEY="sk-ant-..."
-   ```
-
-For manual token setup or custom Slack apps, see [docs/usage.md](docs/usage.md#manual-token-setup).
-
-## Commands
-
-### Core
-
-| Command | Description |
-|---------|-------------|
-| `watchtower` | Interactive REPL mode |
-| `watchtower ask "<question>"` | One-shot AI query about your workspace |
-| `watchtower catchup` | Summary since last check |
-| `watchtower sync` | Incremental sync from Slack |
-| `watchtower sync --daemon` | Run as background daemon (polls every 15m) |
-| `watchtower status` | Database stats and sync health |
-
-### Intelligence
-
-| Command | Description |
-|---------|-------------|
-| `watchtower digest` | Channel and daily AI digests |
-| `watchtower actions` | Action items assigned to you |
-| `watchtower decisions` | Decisions extracted from conversations |
-| `watchtower trends` | Weekly trending topics and team pulse |
-| `watchtower people` | Team communication analysis |
-| `watchtower people @user` | Detailed profile for a specific user |
-
-### Management
-
-| Command | Description |
-|---------|-------------|
-| `watchtower auth login` | OAuth login via browser |
-| `watchtower config init` | Setup wizard |
-| `watchtower config set <key> <val>` | Set config value |
-| `watchtower config show` | Show current config |
-| `watchtower watch add <target>` | Add channel/user to watch list |
-| `watchtower watch remove <target>` | Remove from watch list |
-| `watchtower watch list` | Show watch list |
-| `watchtower channels` | List synced channels |
-| `watchtower users` | List synced users |
-| `watchtower logs` | View sync log output |
-| `watchtower version` | Print version |
-
-### Prompt tuning
-
-| Command | Description |
-|---------|-------------|
-| `watchtower feedback <good\|bad> <type> <id>` | Rate AI output quality |
-| `watchtower prompts list` | List all prompt templates |
-| `watchtower prompts show <id>` | View a prompt template |
-| `watchtower prompts history <id>` | Prompt version history |
-| `watchtower prompts reset <id>` | Reset prompt to default |
-| `watchtower tune [id]` | AI-suggested prompt improvements |
-
-### Examples
+## Getting Started
 
 ```bash
-# Sync and get a channel summary
-watchtower sync
-watchtower ask "summarize #engineering for today"
+# 1. Login via Slack OAuth (opens browser)
+watchtower auth login
 
-# Catchup on watched channels only, last 4 hours
-watchtower catchup --since 4h --watched-only
-
-# Full re-sync (re-fetches history within configured window)
-watchtower sync --full
-
-# Run sync as a daemon (polls every 15m by default)
+# 2. Start the background daemon
 watchtower sync --daemon
 
-# View digests for a specific channel
-watchtower digest --channel general
-
-# See your action items
-watchtower actions --status inbox
-
-# Check team decisions from this week
-watchtower decisions --since 7d
-
-# Analyze a team member
-watchtower people @alice
-
-# Add high-priority watch
-watchtower watch add #incidents --priority high
-
-# Rate a digest and improve prompts
-watchtower feedback good digest abc123
-watchtower tune --apply
-
-# Interactive mode
-watchtower
-> what were the key decisions made this week?
-> /catchup
-> /status
-> /quit
+# 3. Open Watchtower.app — data appears automatically
 ```
 
-## Desktop App
+**Prerequisites:**
+- **Slack** — OAuth login handled automatically
+- **Claude CLI** — install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) for AI features (or set `ANTHROPIC_API_KEY`)
 
-Native macOS app (SwiftUI) that provides a visual interface over the same SQLite database. Real-time updates via GRDB observation when the daemon writes new data.
+## How It Works
 
-Features:
-- **Dashboard** — sync status, activity feed, quick stats
-- **AI Chat** — conversational interface powered by Claude CLI subprocess
-- **Digests** — browse channel/daily/weekly summaries with feedback buttons
-- **Actions** — action items with priority/status filters and Slack deep links
-- **Decisions** — extracted decisions with context and participants
-- **People** — communication analytics, activity charts, role analysis
-- **Search** — full-text search across all synced messages
-- **Notifications** — native macOS alerts for new action items and digests
-- **Training** — prompt editor, feedback stats, version history
+The daemon (`watchtower sync --daemon`) polls Slack and runs five AI pipelines in sequence after each sync:
 
-The desktop app is a read-only UI layer — sync, digest generation, and Slack API interaction run in the Go CLI daemon. See [docs/desktop-app.md](docs/desktop-app.md) for architecture details.
+1. **Digests** — channel summaries with running context
+2. **Tracks** — personal action items for the current user
+3. **Chains** — cross-channel discussion linking
+4. **People** — team member profiles from interaction patterns
+5. **Briefings** — daily aggregation of all above (once per day)
 
-### Building the desktop app
-
-```bash
-# Build everything (Go CLI + Swift desktop + .app bundle)
-bash scripts/build-app.sh
-
-# Or build Swift app separately
-cd WatchtowerDesktop && swift build
-```
-
-## First Sync
-
-The initial sync uses Slack's search API for fast bootstrapping — no need to enumerate every channel. Subsequent syncs are incremental and typically take seconds.
-
-For a full history sync (`watchtower sync --full`), timing depends on workspace size due to Slack API rate limits (~50 requests/minute for message history):
-
-| Workspace size | Estimated full sync |
-|----------------|---------------------|
-| Small (<50 channels) | 2-5 minutes |
-| Medium (~200 channels) | 10-20 minutes |
-| Large (500+ channels) | 1-2 hours |
-
-To limit history depth:
-
-```bash
-watchtower config set sync.initial_history_days 7
-```
+The desktop app reads the same SQLite database via GRDB and updates in real-time.
 
 ## Configuration
 
 Config file: `~/.config/watchtower/config.yaml`
 
 ```yaml
-active_workspace: my-company
-workspaces:
-  my-company:
-    slack_token: "xoxp-..."       # or env: WATCHTOWER_SLACK_TOKEN
-ai:
-  api_key: ""                     # or env: ANTHROPIC_API_KEY
-  model: "claude-sonnet-4-6"
 sync:
+  poll_interval: "15m"
   workers: 5
   initial_history_days: 30
-  poll_interval: "15m"
-  sync_threads: true
 digest:
   enabled: true
   model: "claude-haiku-4-5-20251001"
-  min_messages: 5
+briefing:
+  enabled: true
+  hour: 8
 ```
 
-Environment variables override config file values. See [docs/usage.md](docs/usage.md#configuration-reference) for the full schema.
+Settings are also editable from the desktop app (Settings tab).
 
 ## Data Storage
 
-- Database: `~/.local/share/watchtower/<workspace>/watchtower.db`
-- Sync log: `~/.local/share/watchtower/<workspace>/watchtower.log`
-- Config: `~/.config/watchtower/config.yaml`
+| What | Where |
+|------|-------|
+| Database | `~/.local/share/watchtower/<workspace>/watchtower.db` |
+| Config | `~/.config/watchtower/config.yaml` |
+| Logs | `~/.local/share/watchtower/<workspace>/watchtower.log` |
 
-All data is local. Messages are stored in SQLite with WAL mode for concurrent read/write. Full-text search uses FTS5 with porter stemming. The desktop app reads the same database via GRDB.
+All data is local. SQLite with WAL mode for concurrent access. The desktop app and daemon share the same database.
+
+## CLI Reference
+
+The CLI provides full access to all features and is required for the daemon:
+
+```bash
+watchtower sync [--daemon|--full]   # Sync Slack data
+watchtower ask "<question>"         # AI query
+watchtower digest                   # View digests
+watchtower tracks                   # View action items
+watchtower briefing                 # View daily briefing
+watchtower people [@user]           # People analytics
+watchtower chains                   # Discussion chains
+watchtower config set <key> <val>   # Configure
+watchtower feedback <good|bad> ...  # Rate AI output
+watchtower tune [--apply]           # Improve prompts via AI
+```
+
+## Development
+
+```bash
+make build        # Build Go CLI only
+make test         # Go tests
+make test-swift   # Swift tests (395 tests)
+make lint-all     # Go + Swift linting
+make app-dev      # Fast dev build (CLI + desktop)
+make app          # Release build with notarization
+```
 
 ## License
 

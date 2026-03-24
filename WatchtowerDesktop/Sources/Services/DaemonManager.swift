@@ -78,11 +78,11 @@ final class DaemonManager {
     }
 
     /// Run a process off the main thread
-    private nonisolated static func runProcess(path: String, arguments: [String]) async throws -> Int32 {
+    nonisolated private static func runProcess(path: String, arguments: [String]) async throws -> Int32 {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
-            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            process.currentDirectoryURL = Constants.processWorkingDirectory()
             process.arguments = arguments
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice
@@ -97,7 +97,7 @@ final class DaemonManager {
         isDaemonRunning()
     }
 
-    private nonisolated static func isDaemonRunning() -> Bool {
+    nonisolated private static func isDaemonRunning() -> Bool {
         let dataPath = Constants.databasePath
         let fm = FileManager.default
 
@@ -121,7 +121,7 @@ final class DaemonManager {
         return false
     }
 
-    private nonisolated static func findWatchtowerSync() -> String? {
+    nonisolated private static func findWatchtowerSync() -> String? {
         Constants.findCLIPath()
     }
 }

@@ -1,3 +1,4 @@
+// Package sync provides Slack workspace synchronization orchestration and message syncing.
 package sync
 
 import (

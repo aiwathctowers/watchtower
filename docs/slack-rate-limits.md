@@ -4,53 +4,53 @@ Reference: [docs.slack.dev/apis/web-api/rate-limits](https://docs.slack.dev/apis
 
 ## Tiers
 
-| Tier | Requests/min | Описание |
-|------|-------------|----------|
-| Tier 1 | 1+ | Минимальный, редкий доступ |
-| Tier 2 | 20+ | Периодические burst'ы |
-| Tier 3 | 50+ | Спорадические burst'ы |
-| Tier 4 | 100+ | Щедрый burst |
+| Tier | Requests/min | Description |
+|------|-------------|-------------|
+| Tier 1 | 1+ | Minimal, rare access |
+| Tier 2 | 20+ | Periodic bursts |
+| Tier 3 | 50+ | Sporadic bursts |
+| Tier 4 | 100+ | Generous burst |
 
-Значения `N+` означают "не менее N" — реальный запас чуть больше, но Slack не публикует точные burst-лимиты.
+Values `N+` mean "at least N" — the actual allowance is slightly higher, but Slack does not publish exact burst limits.
 
-## Методы, используемые Watchtower
+## Methods Used by Watchtower
 
-| Метод | Tier | Где используем |
-|-------|------|---------------|
-| `team.info` | Tier 3 (~50/min) | Sync: метаданные workspace |
-| `users.list` | Tier 2 (~20/min) | Sync: список пользователей |
-| `conversations.list` | Tier 2 (~20/min) | Sync: список каналов |
-| `conversations.history` | Tier 3 (~50/min) * | Sync: сообщения каналов |
-| `conversations.replies` | Tier 3 (~50/min) * | Sync: треды |
+| Method | Tier | Usage |
+|--------|------|-------|
+| `team.info` | Tier 3 (~50/min) | Sync: workspace metadata |
+| `users.list` | Tier 2 (~20/min) | Sync: user list |
+| `conversations.list` | Tier 2 (~20/min) | Sync: channel list |
+| `conversations.history` | Tier 3 (~50/min) * | Sync: channel messages |
+| `conversations.replies` | Tier 3 (~50/min) * | Sync: threads |
 
-### * Ограничение для non-Marketplace приложений (с мая 2025)
+### * Restriction for Non-Marketplace Apps (since May 2025)
 
-Источник: [changelog/2025-05-terms-rate-limit-update-and-faq](https://api.slack.com/changelog/2025-05-terms-rate-limit-update-and-faq)
+Source: [changelog/2025-05-terms-rate-limit-update-and-faq](https://api.slack.com/changelog/2025-05-terms-rate-limit-update-and-faq)
 
-С **29 мая 2025** для приложений, не одобренных в Slack Marketplace:
-- `conversations.history` — понижен до **Tier 1 (1 req/min)**
-- `conversations.replies` — понижен до **Tier 1 (1 req/min)**
+Starting **May 29, 2025**, for apps not approved in the Slack Marketplace:
+- `conversations.history` — downgraded to **Tier 1 (1 req/min)**
+- `conversations.replies` — downgraded to **Tier 1 (1 req/min)**
 
-С **2 сентября 2025** это распространяется на все существующие установки.
+Starting **September 2, 2025**, this applies to all existing installations.
 
-Watchtower — кастомное приложение (не из Marketplace), поэтому **действуют ограничения Tier 1** для history и replies.
+Watchtower is a custom app (not from the Marketplace), so **Tier 1 restrictions apply** for history and replies.
 
-## Как считаются лимиты
+## How Limits Are Counted
 
-- **Per method, per workspace, per app** — лимит на каждый метод отдельно, на каждый workspace отдельно
-- При превышении: HTTP `429 Too Many Requests` с заголовком `Retry-After` (секунды до повторного запроса)
-- Рекомендация Slack: закладывать **1 запрос в секунду** как baseline
+- **Per method, per workspace, per app** — each method has a separate limit per workspace
+- When exceeded: HTTP `429 Too Many Requests` with `Retry-After` header (seconds until next request)
+- Slack recommendation: budget **1 request per second** as baseline
 
-## Влияние на Watchtower
+## Impact on Watchtower
 
-При Tier 1 для `conversations.history` и `conversations.replies` (1 req/min каждый):
+With Tier 1 for `conversations.history` and `conversations.replies` (1 req/min each):
 
-| Операция | Оценка времени |
-|----------|---------------|
-| 100 каналов, history | ~100 минут |
-| 1000 тредов, replies | ~1000 минут (~17 часов) |
+| Operation | Estimated Time |
+|-----------|---------------|
+| 100 channels, history | ~100 minutes |
+| 1000 threads, replies | ~1000 minutes (~17 hours) |
 
-Это делает thread sync основным bottleneck. Варианты:
-1. Увеличить `Retry-After` backoff (уже реализовано в `internal/slack/ratelimit.go`)
-2. Опубликовать приложение в Slack Marketplace (возвращает Tier 3)
-3. Отключить sync тредов (`sync.sync_threads: false`) для быстрого первого sync
+This makes thread sync the main bottleneck. Options:
+1. Increase `Retry-After` backoff (already implemented in `internal/slack/ratelimit.go`)
+2. Publish the app on Slack Marketplace (restores Tier 3)
+3. Disable thread sync (`sync.sync_threads: false`) for a faster initial sync

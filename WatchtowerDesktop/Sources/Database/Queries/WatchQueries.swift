@@ -6,10 +6,14 @@ enum WatchQueries {
     }
 
     static func isWatched(_ db: Database, entityType: String, entityID: String) throws -> Bool {
-        let count = try Int.fetchOne(db, sql: """
-            SELECT COUNT(*) FROM watch_list
-            WHERE entity_type = ? AND entity_id = ?
-            """, arguments: [entityType, entityID])
+        let count = try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*) FROM watch_list
+                WHERE entity_type = ? AND entity_id = ?
+                """,
+            arguments: [entityType, entityID]
+        )
         return (count ?? 0) > 0
     }
 

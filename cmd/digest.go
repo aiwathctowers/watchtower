@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
@@ -52,6 +53,13 @@ var digestSummaryCmd = &cobra.Command{
 	RunE:  runDigestSummary,
 }
 
+var digestResetContextCmd = &cobra.Command{
+	Use:   "reset-context [channel]",
+	Short: "Reset running context (channel memory) for digests",
+	Long:  "Clears the running summary used for incremental context in digest generation. Without arguments, resets all channels. With a channel name, resets only that channel.",
+	RunE:  runDigestResetContext,
+}
+
 var (
 	digestStatsFlagDays    int
 	digestSummaryFlagFrom  string
@@ -65,6 +73,7 @@ func init() {
 	digestCmd.AddCommand(digestGenerateCmd)
 	digestCmd.AddCommand(digestStatsCmd)
 	digestCmd.AddCommand(digestSummaryCmd)
+	digestCmd.AddCommand(digestResetContextCmd)
 	digestCmd.Flags().StringVar(&digestFlagChannel, "channel", "", "show digest for a specific channel")
 	digestCmd.Flags().IntVar(&digestFlagDays, "days", 1, "number of days to show")
 	digestGenerateCmd.Flags().IntVar(&digestGenFlagSince, "since", 1, "generate digests for the last N days")
@@ -243,37 +252,99 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	if days <= 0 {
 		days = 1
 	}
-	sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
 
 	logger := log.New(io.Discard, "", 0)
 	if flagVerbose {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
-	pipe.SinceOverride = sinceUnix
+	pipe.ChainLinker = chains.New(database, cfg, gen, logger)
+
+	// Only set SinceOverride when --since was explicitly passed.
+	// Without it, Run() uses isFirstRun() → runInitialDayByDay() for full history.
+	if cmd.Flags().Changed("since") {
+		sinceUnix := float64(time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix())
+		pipe.SinceOverride = sinceUnix
+	}
 
 	if digestGenFlagProgressJSON {
 		type pj struct {
-			Pipeline     string  `json:"pipeline"`
-			Done         int     `json:"done"`
-			Total        int     `json:"total"`
-			Status       string  `json:"status,omitempty"`
-			InputTokens  int     `json:"input_tokens"`
-			OutputTokens int     `json:"output_tokens"`
-			CostUSD      float64 `json:"cost_usd"`
-			Error        string  `json:"error,omitempty"`
-			Finished     bool    `json:"finished"`
-			ItemsFound   int     `json:"items_found"`
+			Pipeline         string  `json:"pipeline"`
+			Done             int     `json:"done"`
+			Total            int     `json:"total"`
+			Status           string  `json:"status,omitempty"`
+			InputTokens      int     `json:"input_tokens"`
+			OutputTokens     int     `json:"output_tokens"`
+			CostUSD          float64 `json:"cost_usd"`
+			Error            string  `json:"error,omitempty"`
+			Finished         bool    `json:"finished"`
+			ItemsFound       int     `json:"items_found"`
+			MessageCount     int     `json:"message_count,omitempty"`
+			PeriodFrom       string  `json:"period_from,omitempty"`
+			PeriodTo         string  `json:"period_to,omitempty"`
+			StepDurationSec  float64 `json:"step_duration_seconds,omitempty"`
+			StepInputTokens  int     `json:"step_input_tokens,omitempty"`
+			StepOutputTokens int     `json:"step_output_tokens,omitempty"`
+			StepCostUSD      float64 `json:"step_cost_usd,omitempty"`
+			TotalAPITokens   int     `json:"total_api_tokens,omitempty"`
 		}
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
 
+		runID, _ := database.CreatePipelineRun("digests", "cli")
+
 		pipe.OnProgress = func(done, total int, status string) {
-			emit(pj{Pipeline: "digest", Done: done, Total: total, Status: status})
+			inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
+			p := pj{Pipeline: "digest", Done: done, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+			if pipe.LastStepMessageCount > 0 {
+				p.MessageCount = pipe.LastStepMessageCount
+				p.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
+				p.PeriodTo = pipe.LastStepPeriodTo.Format(time.RFC3339)
+			}
+			if pipe.LastStepDurationSeconds > 0 {
+				p.StepDurationSec = pipe.LastStepDurationSeconds
+			}
+			p.StepInputTokens = pipe.LastStepInputTokens
+			p.StepOutputTokens = pipe.LastStepOutputTokens
+			p.StepCostUSD = pipe.LastStepCostUSD
+			emit(p)
+
+			// Log step to DB
+			if runID > 0 && p.StepDurationSec > 0 {
+				var pFrom, pTo *float64
+				if pipe.LastStepMessageCount > 0 {
+					f := float64(pipe.LastStepPeriodFrom.Unix())
+					t := float64(pipe.LastStepPeriodTo.Unix())
+					pFrom, pTo = &f, &t
+				}
+				_ = database.InsertPipelineStep(db.PipelineStep{
+					RunID: runID, Step: done, Total: total, Status: status,
+					InputTokens: p.StepInputTokens, OutputTokens: p.StepOutputTokens,
+					CostUSD: p.StepCostUSD, TotalAPITokens: totalAPI,
+					MessageCount: pipe.LastStepMessageCount,
+					PeriodFrom:   pFrom, PeriodTo: pTo,
+					DurationSeconds: p.StepDurationSec,
+				})
+			}
 		}
 		n, usage, err := pipe.Run(cmd.Context())
+
+		// Auto-mark digests as read based on Slack read cursors
+		// (important for onboarding where digest generate runs standalone).
+		if markDigests, _, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
+			logger.Printf("warning: auto-mark read failed: %v", markErr)
+		} else if markDigests > 0 {
+			logger.Printf("auto-marked %d digests as read (based on Slack read state)", markDigests)
+		}
+
 		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n}
+		if pipe.LastStepMessageCount > 0 {
+			final.MessageCount = pipe.LastStepMessageCount
+			final.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
+			final.PeriodTo = pipe.LastStepPeriodTo.Format(time.RFC3339)
+		}
 		if usage != nil {
 			final.InputTokens = usage.InputTokens
 			final.OutputTokens = usage.OutputTokens
@@ -283,15 +354,49 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			final.Error = err.Error()
 		}
 		emit(final)
+
+		// Complete run in DB
+		if runID > 0 {
+			var errMsg string
+			if err != nil {
+				errMsg = err.Error()
+			}
+			inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+			if usage != nil {
+				inTok, outTok, cost = usage.InputTokens, usage.OutputTokens, usage.CostUSD
+			}
+			_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+		}
 		return nil
 	}
 
 	spinner := ui.NewSpinner(out, fmt.Sprintf("Generating digests for the last %d day(s) using %s...", days, cfg.Digest.Model))
 
+	runID, _ := database.CreatePipelineRun("digests", "cli")
+
 	n, usage, err := pipe.Run(cmd.Context())
 	if err != nil {
 		spinner.Stop("failed")
+		if runID > 0 {
+			_ = database.CompletePipelineRun(runID, 0, 0, 0, 0, 0, nil, nil, err.Error())
+		}
 		return fmt.Errorf("digest pipeline: %w", err)
+	}
+
+	// Auto-mark digests as read based on Slack read cursors.
+	if markDigests, _, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
+		logger.Printf("warning: auto-mark read failed: %v", markErr)
+	} else if markDigests > 0 {
+		logger.Printf("auto-marked %d digests as read (based on Slack read state)", markDigests)
+	}
+
+	// Complete run in DB
+	if runID > 0 {
+		inTok, outTok, cost := 0, 0, 0.0
+		if usage != nil {
+			inTok, outTok, cost = usage.InputTokens, usage.OutputTokens, usage.CostUSD
+		}
+		_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, 0, nil, nil, "")
 	}
 
 	if n == 0 {
@@ -450,7 +555,8 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	gen, savePool := cliPooledGenerator(cfg, logger)
+	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
 
 	result, usage, err := pipe.RunPeriodSummary(cmd.Context(), from, to)
@@ -507,4 +613,48 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 
 func joinTopics(topics []string) string {
 	return strings.Join(topics, ", ")
+}
+
+func runDigestResetContext(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+
+	var channelID string
+	if len(args) > 0 {
+		channelName := strings.TrimPrefix(args[0], "#")
+		ch, err := database.GetChannelByName(channelName)
+		if err != nil {
+			return fmt.Errorf("channel %q not found: %w", channelName, err)
+		}
+		channelID = ch.ID
+	}
+
+	affected, err := database.ResetRunningSummary(channelID, "")
+	if err != nil {
+		return fmt.Errorf("resetting running context: %w", err)
+	}
+
+	if channelID != "" {
+		fmt.Fprintf(out, "Reset running context for channel %s (%d digests updated).\n", args[0], affected)
+	} else {
+		fmt.Fprintf(out, "Reset running context for all channels (%d digests updated).\n", affected)
+	}
+
+	return nil
 }

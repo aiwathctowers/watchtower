@@ -58,7 +58,7 @@ func TestConfigSet(t *testing.T) {
 
 	// Create an initial config file
 	initial := "active_workspace: test\n"
-	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o644))
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
@@ -89,7 +89,7 @@ workspaces:
 ai:
   model: "claude-sonnet-4-6"
 `
-	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o644))
+	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o600))
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath

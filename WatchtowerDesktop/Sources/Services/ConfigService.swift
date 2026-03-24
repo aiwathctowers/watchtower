@@ -15,6 +15,8 @@ final class ConfigService {
     var digestMinMessages: Int?
     var digestLanguage: String?
     var aiModel: String?
+    var analysisLegacyMode: Bool = false
+    var briefingHour: Int = 8
     var claudePath: String?
     var parseError: String?
 
@@ -54,6 +56,14 @@ final class ConfigService {
                 digestLanguage = digest["language"] as? String
             }
 
+            if let analysis = yaml["analysis"] as? [String: Any] {
+                analysisLegacyMode = (analysis["legacy_mode"] as? Bool) ?? false
+            }
+
+            if let briefing = yaml["briefing"] as? [String: Any] {
+                briefingHour = (briefing["hour"] as? Int) ?? 8
+            }
+
             if let ai = yaml["ai"] as? [String: Any] {
                 aiModel = ai["model"] as? String
             }
@@ -73,27 +83,32 @@ final class ConfigService {
 
         // Sync section
         var sync = (yaml["sync"] as? [String: Any]) ?? [:]
-        if let v = syncInterval, !v.isEmpty { sync["poll_interval"] = v } else { sync.removeValue(forKey: "poll_interval") }
-        if let v = syncWorkers { sync["workers"] = v } else { sync.removeValue(forKey: "workers") }
+        if let val = syncInterval, !val.isEmpty { sync["poll_interval"] = val } else { sync.removeValue(forKey: "poll_interval") }
+        if let val = syncWorkers { sync["workers"] = val } else { sync.removeValue(forKey: "workers") }
         sync["sync_threads"] = syncThreads
-        if let v = initialHistoryDays { sync["initial_history_days"] = v } else { sync.removeValue(forKey: "initial_history_days") }
+        if let val = initialHistoryDays { sync["initial_history_days"] = val } else { sync.removeValue(forKey: "initial_history_days") }
         if !sync.isEmpty { yaml["sync"] = sync } else { yaml.removeValue(forKey: "sync") }
 
         // Digest section
         var digest = (yaml["digest"] as? [String: Any]) ?? [:]
         digest["enabled"] = digestEnabled
-        if let v = digestModel, !v.isEmpty { digest["model"] = v } else { digest.removeValue(forKey: "model") }
-        if let v = digestMinMessages { digest["min_messages"] = v } else { digest.removeValue(forKey: "min_messages") }
-        if let v = digestLanguage, !v.isEmpty { digest["language"] = v } else { digest.removeValue(forKey: "language") }
+        if let val = digestModel, !val.isEmpty { digest["model"] = val } else { digest.removeValue(forKey: "model") }
+        if let val = digestMinMessages { digest["min_messages"] = val } else { digest.removeValue(forKey: "min_messages") }
+        if let val = digestLanguage, !val.isEmpty { digest["language"] = val } else { digest.removeValue(forKey: "language") }
         if !digest.isEmpty { yaml["digest"] = digest } else { yaml.removeValue(forKey: "digest") }
+
+        // Briefing section
+        var briefing = (yaml["briefing"] as? [String: Any]) ?? [:]
+        briefing["hour"] = briefingHour
+        yaml["briefing"] = briefing
 
         // AI section
         var ai = (yaml["ai"] as? [String: Any]) ?? [:]
-        if let v = aiModel, !v.isEmpty { ai["model"] = v } else { ai.removeValue(forKey: "model") }
+        if let val = aiModel, !val.isEmpty { ai["model"] = val } else { ai.removeValue(forKey: "model") }
         if !ai.isEmpty { yaml["ai"] = ai } else { yaml.removeValue(forKey: "ai") }
 
         // Claude path override
-        if let v = claudePath, !v.isEmpty { yaml["claude_path"] = v } else { yaml.removeValue(forKey: "claude_path") }
+        if let val = claudePath, !val.isEmpty { yaml["claude_path"] = val } else { yaml.removeValue(forKey: "claude_path") }
 
         let output = try Yams.dump(object: yaml, allowUnicode: true)
 

@@ -26,7 +26,7 @@ func threadMux(channelMessages map[string][]map[string]any, threadReplies map[st
 	mux := baseMux()
 
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		channelID := r.Form.Get("channel")
 
 		msgs, ok := channelMessages[channelID]
@@ -44,7 +44,7 @@ func threadMux(channelMessages map[string][]map[string]any, threadReplies map[st
 	})
 
 	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		channelID := r.Form.Get("channel")
 		threadTS := r.Form.Get("ts")
 		key := channelID + ":" + threadTS
@@ -248,7 +248,7 @@ func TestSyncThreadsNonFatalErrorSkipsThread(t *testing.T) {
 
 	mux := baseMux()
 	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		_ = r.ParseForm()
 		channelID := r.Form.Get("channel")
 
 		msgs, ok := channelMsgs[channelID]

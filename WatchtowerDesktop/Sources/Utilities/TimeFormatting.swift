@@ -2,15 +2,15 @@ import Foundation
 
 enum TimeFormatting {
     private static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt
     }()
 
     private static let isoFormatterNoFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
+        return fmt
     }()
 
     /// Parse ISO8601 string to Date
@@ -45,16 +45,16 @@ enum TimeFormatting {
 
     // M4: static DateFormatter to avoid per-call allocation
     private static let shortDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d"
+        return fmt
     }()
 
     private static let mediumDateTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        return fmt
     }()
 
     /// Format unix timestamp to display string
@@ -64,9 +64,9 @@ enum TimeFormatting {
     }
 
     private static let shortTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return fmt
     }()
 
     /// Short time only (e.g. "14:32") for grouped message hover
@@ -80,9 +80,9 @@ enum TimeFormatting {
     }
 
     private static let shortDateTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d, HH:mm"
-        return f
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d, HH:mm"
+        return fmt
     }()
 
     /// Short date + time from unix timestamp (e.g. "Mar 8, 14:32")

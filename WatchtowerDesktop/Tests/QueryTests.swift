@@ -230,8 +230,13 @@ final class DigestQueryTests: XCTestCase {
         let db = try TestDatabase.create()
         try db.write { db in
             try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400, decisions: "[]")
-            try TestDatabase.insertDigest(db, channelID: "C002", periodFrom: 1700000000, periodTo: 1700086400,
-                                          decisions: #"[{"text":"Use Go"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C002",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                decisions: #"[{"text":"Use Go"}]"#
+            )
         }
         let withDecisions = try db.read { try DigestQueries.fetchWithDecisions($0) }
         XCTAssertEqual(withDecisions.count, 1)
@@ -241,10 +246,20 @@ final class DigestQueryTests: XCTestCase {
     func testFetchNewSince() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400,
-                                          decisions: #"[{"text":"Old"}]"#)
-            try TestDatabase.insertDigest(db, channelID: "C002", periodFrom: 1700086400, periodTo: 1700172800,
-                                          decisions: #"[{"text":"New"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C001",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                decisions: #"[{"text":"Old"}]"#
+            )
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C002",
+                periodFrom: 1700086400,
+                periodTo: 1700172800,
+                decisions: #"[{"text":"New"}]"#
+            )
         }
         let newer = try db.read { try DigestQueries.fetchNewSince($0, afterID: 1) }
         XCTAssertEqual(newer.count, 1)
@@ -501,12 +516,27 @@ final class UserAnalysisQueryTests: XCTestCase {
     func testCountRedFlags() throws {
         let db = try TestDatabase.create()
         try db.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["Low engagement"]"#)
-            try TestDatabase.insertUserAnalysis(db, userID: "U002", periodFrom: 100, periodTo: 200,
-                                                 redFlags: "[]")
-            try TestDatabase.insertUserAnalysis(db, userID: "U003", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["Issue 1","Issue 2"]"#)
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U001",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: #"["Low engagement"]"#
+            )
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U002",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: "[]"
+            )
+            try TestDatabase.insertUserAnalysis(
+                db,
+                userID: "U003",
+                periodFrom: 100,
+                periodTo: 200,
+                redFlags: #"["Issue 1","Issue 2"]"#
+            )
         }
         let count = try db.read { try UserAnalysisQueries.countRedFlags($0) }
         XCTAssertEqual(count, 2) // U001 and U003 have red flags
@@ -700,7 +730,7 @@ final class ChatConversationQueryTests: XCTestCase {
             try ChatConversationQueries.touch(db, id: conv.id)
         }
         let updated = try db.read { try ChatConversationQueries.fetchByID($0, id: conv.id) }
-        XCTAssertTrue(updated!.updatedAt > originalUpdated)
+        XCTAssertTrue(try XCTUnwrap(updated).updatedAt > originalUpdated)
     }
 
     func testDisplayTitle() throws {
@@ -712,8 +742,129 @@ final class ChatConversationQueryTests: XCTestCase {
         XCTAssertEqual(conv.displayTitle, "New Chat")
 
         let conv2 = try db.write { db -> ChatConversation in
-            return try ChatConversationQueries.create(db, title: "My Chat")
+            try ChatConversationQueries.create(db, title: "My Chat")
         }
         XCTAssertEqual(conv2.displayTitle, "My Chat")
+    }
+}
+
+// MARK: - ProfileQueries
+
+final class ProfileQueryTests: XCTestCase {
+
+    func testFetchProfileNotFound() throws {
+        let db = try TestDatabase.create()
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U_NONE") }
+        XCTAssertNil(profile)
+    }
+
+    func testFetchCurrentProfileNoWorkspace() throws {
+        let db = try TestDatabase.create()
+        let profile = try db.read { try ProfileQueries.fetchCurrentProfile($0) }
+        XCTAssertNil(profile)
+    }
+
+    func testInsertAndFetchProfile() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(
+                db,
+                slackUserID: "U123",
+                role: "Engineering Manager",
+                team: "Platform",
+                reports: #"["U456","U789"]"#,
+                manager: "U000",
+                onboardingDone: true
+            )
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertNotNil(profile)
+        XCTAssertEqual(profile?.slackUserID, "U123")
+        XCTAssertEqual(profile?.role, "Engineering Manager")
+        XCTAssertEqual(profile?.team, "Platform")
+        XCTAssertEqual(profile?.decodedReports, ["U456", "U789"])
+        XCTAssertEqual(profile?.manager, "U000")
+        XCTAssertTrue(profile?.onboardingDone ?? false)
+    }
+
+    func testFetchCurrentProfile() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertWorkspace(db, id: "T001", name: "Test")
+            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U123' WHERE id = 'T001'")
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC")
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchCurrentProfile($0) }
+        XCTAssertNotNil(profile)
+        XCTAssertEqual(profile?.role, "IC")
+    }
+
+    func testUpsertProfileUpdate() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC", team: "Backend")
+        }
+
+        // Read, modify, upsert
+        let original = try XCTUnwrap(db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") })
+        var updated = original
+        updated.role = "Tech Lead"
+        updated.team = "Platform"
+
+        try db.write { db in
+            try ProfileQueries.upsertProfile(db, profile: updated)
+        }
+
+        let result = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertEqual(result?.role, "Tech Lead")
+        XCTAssertEqual(result?.team, "Platform")
+    }
+
+    func testUpdateField() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123", role: "IC")
+            try ProfileQueries.updateField(db, slackUserID: "U123", field: "role", value: "EM")
+        }
+
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertEqual(profile?.role, "EM")
+    }
+
+    func testUpdateFieldRejectsInvalidField() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(db, slackUserID: "U123")
+            // Should be silently ignored — "id" is not in allowed fields
+            try ProfileQueries.updateField(db, slackUserID: "U123", field: "id", value: "999")
+        }
+        // No crash, id unchanged
+        let profile = try db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") }
+        XCTAssertNotNil(profile)
+    }
+
+    func testProfileJSONDecoders() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertProfile(
+                db,
+                slackUserID: "U123",
+                reports: #"["U1","U2"]"#,
+                peers: #"["U3"]"#,
+                starredChannels: #"["C1","C2","C3"]"#,
+                starredPeople: #"["U4"]"#,
+                painPoints: #"["lost decisions"]"#,
+                trackFocus: #"["blockers","deadlines"]"#
+            )
+        }
+        let profile = try XCTUnwrap(db.read { try ProfileQueries.fetchProfile($0, slackUserID: "U123") })
+        XCTAssertEqual(profile.decodedReports, ["U1", "U2"])
+        XCTAssertEqual(profile.decodedPeers, ["U3"])
+        XCTAssertEqual(profile.decodedStarredChannels, ["C1", "C2", "C3"])
+        XCTAssertEqual(profile.decodedStarredPeople, ["U4"])
+        XCTAssertEqual(profile.decodedPainPoints, ["lost decisions"])
+        XCTAssertEqual(profile.decodedTrackFocus, ["blockers", "deadlines"])
     }
 }

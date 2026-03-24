@@ -1,3 +1,4 @@
+// Package ui provides UI components and formatting utilities for CLI output.
 package ui
 
 import (

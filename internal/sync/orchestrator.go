@@ -1,3 +1,4 @@
+// Package sync provides Slack workspace synchronization orchestration and message syncing.
 package sync
 
 import (
@@ -175,14 +176,55 @@ func (o *Orchestrator) runSearchSync(ctx context.Context, opts SyncOptions) erro
 		}
 	}
 
-	// Phase 3: user profiles
-	o.logger.Println("phase 3: syncing user profiles")
+	// Phase 3: sync channel read state (search sync doesn't call conversations.list)
+	o.syncChannelReadState(ctx)
+
+	// Phase 4: user profiles
+	o.logger.Println("phase 4: syncing user profiles")
 	o.progress.SetPhase(PhaseUsers)
 	if err := o.syncUserProfiles(ctx); err != nil {
 		return fmt.Errorf("user profile sync: %w", err)
 	}
 
+	// Phase 5: lazy thread loading — backfill parent messages for orphan replies.
+	// Non-blocking: errors are logged and skipped, does not fail the sync.
+	o.syncOrphanThreads(ctx)
+
 	return o.finishSync()
+}
+
+// syncChannelReadState fetches channel read cursors from Slack and updates them in the DB.
+// Uses conversations.info per channel (only for channels with unread digests) because
+// conversations.list does not reliably return last_read for most channel types.
+func (o *Orchestrator) syncChannelReadState(ctx context.Context) {
+	o.logger.Println("syncing channel read state")
+	channelIDs, err := o.db.UnreadDigestChannelIDs()
+	if err != nil {
+		o.logger.Printf("warning: failed to get unread digest channels: %v", err)
+		return
+	}
+	if len(channelIDs) == 0 {
+		o.logger.Println("channel read state: no unread digests, skipping")
+		return
+	}
+
+	var updated int
+	for _, chID := range channelIDs {
+		lastRead, err := o.slackClient.GetChannelReadCursor(ctx, chID)
+		if err != nil {
+			o.logger.Printf("warning: failed to get read cursor for %s: %v", chID, err)
+			continue
+		}
+		if lastRead == "" {
+			continue
+		}
+		if err := o.db.UpdateChannelLastRead(chID, lastRead); err != nil {
+			o.logger.Printf("warning: failed to update last_read for %s: %v", chID, err)
+			continue
+		}
+		updated++
+	}
+	o.logger.Printf("channel read state: %d/%d channels updated (via conversations.info)", updated, len(channelIDs))
 }
 
 // finishSync logs API stats, updates the sync timestamp, and marks sync as done.
@@ -196,6 +238,14 @@ func (o *Orchestrator) finishSync() error {
 	o.logger.Printf("sync complete: %d API calls (tier2: %d, tier3: %d, tier4: %d), %d retries",
 		total, counts[watchtowerslack.Tier2], counts[watchtowerslack.Tier3], counts[watchtowerslack.Tier4], retries)
 	o.slackClient.ResetAPIStats()
+
+	// Auto-mark digests as read based on Slack read cursors.
+	digestsMarked, _, err := o.db.AutoMarkReadFromSlack()
+	if err != nil {
+		o.logger.Printf("warning: auto-mark read failed: %v", err)
+	} else if digestsMarked > 0 {
+		o.logger.Printf("auto-marked %d digests as read (based on Slack read state)", digestsMarked)
+	}
 
 	// Update workspace synced_at so the desktop app shows accurate "last synced" time.
 	if err := o.db.TouchSyncedAt(); err != nil {
@@ -358,6 +408,7 @@ func (o *Orchestrator) syncMetadata(ctx context.Context, opts SyncOptions) error
 			IsMember:   ch.IsMember,
 			DMUserID:   sql.NullString{String: ch.User, Valid: ch.User != ""},
 			NumMembers: ch.NumMembers,
+			LastRead:   ch.LastRead,
 		}); err != nil {
 			return fmt.Errorf("upserting channel %s: %w", ch.ID, err)
 		}

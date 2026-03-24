@@ -1,28 +1,84 @@
 import SwiftUI
 
 struct PersonDetailView: View {
-    let analysis: UserAnalysis
+    let card: PeopleCard
     let userName: String
-    let history: [UserAnalysis]
+    let history: [PeopleCard]
     let userNameResolver: (String) -> String
-    var onClose: (() -> Void)? = nil
+    var onClose: (() -> Void)?
+    var isCurrentUser: Bool = false
+    var profile: UserProfile?
+    var interactions: [UserInteraction] = []
+    var onUpdateConnections: (([String], [String], String) -> Void)?
+    var allCards: [PeopleCard] = []
+
+    @State private var selectedTab = 0  // 0 = Overview, 1 = Connections
 
     var body: some View {
+        VStack(spacing: 0) {
+            if isCurrentUser {
+                Picker("", selection: $selectedTab) {
+                    Text("Overview").tag(0)
+                    Text("Connections").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+            }
+
+            if selectedTab == 0 || !isCurrentUser {
+                overviewContent
+            } else {
+                ConnectionsView(
+                    interactions: interactions,
+                    profile: profile,
+                    allCards: allCards,
+                    userNameResolver: userNameResolver,
+                    onNavigateToPerson: { _ in
+                        // Navigation is handled by parent (PeopleListView)
+                    },
+                    onUpdateConnections: onUpdateConnections
+                )
+            }
+        }
+    }
+
+    private var overviewContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 statsGrid
+                if isCurrentUser { profileContextSection }
+                insufficientDataBanner
                 summarySection
                 accomplishmentsSection
-                styleDetailsSection
+                communicationGuideSection
+                decisionStyleSection
+                tacticsSection
                 redFlagsSection
-                concernsSection
                 highlightsSection
-                recommendationsSection
                 activityHoursChart
                 historySection
             }
             .padding(20)
+        }
+    }
+
+    // MARK: - Profile Context (My Card only)
+
+    @ViewBuilder
+    private var profileContextSection: some View {
+        if let profile, !profile.customPromptContext.isEmpty {
+            GroupBox {
+                Text(profile.customPromptContext)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+            } label: {
+                Label("How the system understands you", systemImage: "brain")
+                    .foregroundStyle(.purple)
+            }
         }
     }
 
@@ -31,13 +87,13 @@ struct PersonDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(analysis.styleEmoji)
+                Text(card.styleEmoji)
                     .font(.largeTitle)
                 VStack(alignment: .leading) {
                     Text("@\(userName)")
                         .font(.title2)
                         .fontWeight(.bold)
-                    Text("\(analysis.periodFromDate.formatted(.dateTime.month().day())) – \(analysis.periodToDate.formatted(.dateTime.month().day()))")
+                    Text("\(card.periodFromDate.formatted(.dateTime.month().day())) – \(card.periodToDate.formatted(.dateTime.month().day()))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -55,8 +111,8 @@ struct PersonDetailView: View {
             }
 
             HStack(spacing: 8) {
-                Badge(text: analysis.communicationStyle, color: .accentColor)
-                Badge(text: analysis.decisionRole, color: .purple)
+                Badge(text: card.communicationStyle, color: .accentColor)
+                Badge(text: card.decisionRole, color: .purple)
             }
         }
     }
@@ -67,17 +123,20 @@ struct PersonDetailView: View {
         LazyVGrid(columns: [
             GridItem(.flexible()),
             GridItem(.flexible()),
-            GridItem(.flexible()),
+            GridItem(.flexible())
         ], spacing: 12) {
-            StatCard(title: "Messages", value: "\(analysis.messageCount)",
-                     detail: analysis.volumeChangePct != 0
-                        ? String(format: "%+.0f%% vs prev", analysis.volumeChangePct)
-                        : nil,
-                     detailColor: analysis.volumeChangePct < -30 ? .red : .secondary)
-            StatCard(title: "Channels", value: "\(analysis.channelsActive)", detail: nil)
-            StatCard(title: "Avg Length", value: "\(Int(analysis.avgMessageLength))", detail: "chars")
-            StatCard(title: "Threads Started", value: "\(analysis.threadsInitiated)", detail: nil)
-            StatCard(title: "Thread Replies", value: "\(analysis.threadsReplied)", detail: nil)
+            StatCard(
+                title: "Messages",
+                value: "\(card.messageCount)",
+                detail: card.volumeChangePct != 0
+                    ? String(format: "%+.0f%% vs prev", card.volumeChangePct)
+                    : nil,
+                detailColor: card.volumeChangePct < -30 ? .red : .secondary
+            )
+            StatCard(title: "Channels", value: "\(card.channelsActive)", detail: nil)
+            StatCard(title: "Avg Length", value: "\(Int(card.avgMessageLength))", detail: "chars")
+            StatCard(title: "Threads Started", value: "\(card.threadsInitiated)", detail: nil)
+            StatCard(title: "Thread Replies", value: "\(card.threadsReplied)", detail: nil)
         }
     }
 
@@ -85,9 +144,9 @@ struct PersonDetailView: View {
 
     @ViewBuilder
     private var summarySection: some View {
-        if !analysis.summary.isEmpty {
+        if !card.summary.isEmpty {
             GroupBox("Summary") {
-                Text(analysis.summary)
+                Text(card.summary)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(4)
@@ -99,7 +158,7 @@ struct PersonDetailView: View {
 
     @ViewBuilder
     private var accomplishmentsSection: some View {
-        let items = analysis.parsedAccomplishments
+        let items = card.parsedAccomplishments
         if !items.isEmpty {
             GroupBox {
                 VStack(alignment: .leading, spacing: 6) {
@@ -122,16 +181,80 @@ struct PersonDetailView: View {
         }
     }
 
-    // MARK: - Style Details
+    // MARK: - Insufficient Data Banner
 
     @ViewBuilder
-    private var styleDetailsSection: some View {
-        if !analysis.styleDetails.isEmpty {
-            GroupBox("Communication Style Analysis") {
-                Text(analysis.styleDetails)
+    private var insufficientDataBanner: some View {
+        if card.isInsufficientData {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(.orange)
+                Text("Not enough data for full analysis. Results will improve as more messages are collected.")
+                    .font(.subheadline)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: - Communication Guide
+
+    @ViewBuilder
+    private var communicationGuideSection: some View {
+        if !card.communicationGuide.isEmpty {
+            GroupBox {
+                Text(card.communicationGuide)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(4)
+            } label: {
+                Label("Communication Guide", systemImage: "bubble.left.and.text.bubble.right")
+                    .foregroundStyle(.blue)
+            }
+        }
+    }
+
+    // MARK: - Decision Style
+
+    @ViewBuilder
+    private var decisionStyleSection: some View {
+        if !card.decisionStyle.isEmpty {
+            GroupBox {
+                Text(card.decisionStyle)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+            } label: {
+                Label("Decision Style", systemImage: "arrow.triangle.branch")
+                    .foregroundStyle(.purple)
+            }
+        }
+    }
+
+    // MARK: - Tactics
+
+    @ViewBuilder
+    private var tacticsSection: some View {
+        let items = card.parsedTactics
+        if !items.isEmpty {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(items, id: \.self) { item in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "lightbulb.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text(item)
+                                .font(.subheadline)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(4)
+            } label: {
+                Label("Tactics", systemImage: "lightbulb")
+                    .foregroundStyle(.orange)
             }
         }
     }
@@ -140,7 +263,7 @@ struct PersonDetailView: View {
 
     @ViewBuilder
     private var redFlagsSection: some View {
-        let flags = analysis.parsedRedFlags
+        let flags = card.parsedRedFlags
         if !flags.isEmpty {
             GroupBox {
                 VStack(alignment: .leading, spacing: 6) {
@@ -163,38 +286,11 @@ struct PersonDetailView: View {
         }
     }
 
-    // MARK: - Concerns
-
-    @ViewBuilder
-    private var concernsSection: some View {
-        let items = analysis.parsedConcerns
-        if !items.isEmpty {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(items, id: \.self) { item in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                            Text(item)
-                                .font(.subheadline)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(4)
-            } label: {
-                Label("Concerns", systemImage: "exclamationmark.circle")
-                    .foregroundStyle(.orange)
-            }
-        }
-    }
-
     // MARK: - Highlights
 
     @ViewBuilder
     private var highlightsSection: some View {
-        let items = analysis.parsedHighlights
+        let items = card.parsedHighlights
         if !items.isEmpty {
             GroupBox {
                 VStack(alignment: .leading, spacing: 6) {
@@ -217,38 +313,11 @@ struct PersonDetailView: View {
         }
     }
 
-    // MARK: - Recommendations
-
-    @ViewBuilder
-    private var recommendationsSection: some View {
-        let items = analysis.parsedRecommendations
-        if !items.isEmpty {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(items, id: \.self) { item in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "lightbulb.fill")
-                                .foregroundStyle(.yellow)
-                                .font(.caption)
-                            Text(item)
-                                .font(.subheadline)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(4)
-            } label: {
-                Label("Recommendations", systemImage: "lightbulb")
-                    .foregroundStyle(.yellow)
-            }
-        }
-    }
-
     // MARK: - Activity Hours
 
     @ViewBuilder
     private var activityHoursChart: some View {
-        let hours = analysis.parsedActiveHours
+        let hours = card.parsedActiveHours
         if !hours.isEmpty {
             let maxCount = max(hours.values.max() ?? 1, 1)
             GroupBox("Activity Hours (UTC)") {
@@ -293,7 +362,11 @@ struct PersonDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(history) { entry in
                         HStack {
-                            Text("\(entry.periodFromDate.formatted(.dateTime.month().day())) – \(entry.periodToDate.formatted(.dateTime.month().day()))")
+                            let from = entry.periodFromDate
+                                .formatted(.dateTime.month().day())
+                            let to = entry.periodToDate
+                                .formatted(.dateTime.month().day())
+                            Text("\(from) – \(to)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 

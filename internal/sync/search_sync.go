@@ -210,8 +210,8 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 	}
 
 	o.progress.SetDiscovery(page, page, len(seenChannels), len(seenUsers))
-	o.logger.Printf("search sync complete: %d channels, %d users, %d messages from %d pages",
-		len(seenChannels), len(seenUsers), totalMessages, page)
+	o.logger.Printf("search sync complete: %d channels, %d users, %d messages from %d pages (query=%q, initial_history_days=%d)",
+		len(seenChannels), len(seenUsers), totalMessages, page, query, days)
 	return nil
 }
 

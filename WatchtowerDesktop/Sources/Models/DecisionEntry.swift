@@ -21,9 +21,9 @@ struct DecisionEntry: Identifiable, Equatable {
         correctedImportance ?? decision.resolvedImportance
     }
 
-    /// Returns a copy with the specified fields overridden.
-    func with(isRead: Bool? = nil, correctedImportance: String?? = nil) -> DecisionEntry {
-        DecisionEntry(
+    /// Returns a copy with isRead overridden.
+    func with(isRead: Bool) -> Self {
+        Self(
             decision: decision,
             digestID: digestID,
             decisionIdx: decisionIdx,
@@ -33,8 +33,25 @@ struct DecisionEntry: Identifiable, Equatable {
             digestType: digestType,
             date: date,
             messageTS: messageTS,
-            isRead: isRead ?? self.isRead,
-            correctedImportance: correctedImportance ?? self.correctedImportance
+            isRead: isRead,
+            correctedImportance: correctedImportance
+        )
+    }
+
+    /// Returns a copy with correctedImportance overridden.
+    func with(correctedImportance: String?) -> Self {
+        Self(
+            decision: decision,
+            digestID: digestID,
+            decisionIdx: decisionIdx,
+            channelID: channelID,
+            channelName: channelName,
+            digestSummary: digestSummary,
+            digestType: digestType,
+            date: date,
+            messageTS: messageTS,
+            isRead: isRead,
+            correctedImportance: correctedImportance
         )
     }
 }

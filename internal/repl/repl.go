@@ -1,9 +1,11 @@
+// Package repl provides an interactive REPL for Claude interaction with workspace data.
 package repl
 
 import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,6 +26,7 @@ type Deps struct {
 	DB        *db.DB
 	DBPath    string
 	Domain    string
+	TeamID    string
 	Workspace string
 }
 
@@ -97,10 +100,16 @@ func Run(deps Deps) error {
 	fmt.Println(dimStyle.Render("Type /help for commands, Ctrl+C to quit"))
 	fmt.Println()
 
-	scanner := bufio.NewScanner(os.Stdin)
+	return r.loop(os.Stdin)
+}
+
+// loop reads from the given reader line by line, dispatching commands until
+// the reader is exhausted or the context is cancelled.
+func (r *REPL) loop(input io.Reader) error {
+	scanner := bufio.NewScanner(input)
 	for {
 		select {
-		case <-ctx.Done():
+		case <-r.ctx.Done():
 			return nil
 		default:
 		}
@@ -108,11 +117,11 @@ func Run(deps Deps) error {
 		if !scanner.Scan() {
 			break
 		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		r.processInput(input)
+		r.processInput(line)
 	}
 
 	return scanner.Err()
@@ -137,7 +146,7 @@ func (r *REPL) runAIQuery(question string) {
 
 	var systemPrompt string
 	if r.sessionID == "" {
-		systemPrompt = ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.DBPath, db.Schema)
+		systemPrompt = ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema, cfg.Digest.Language)
 	}
 	userMessage := ai.AssembleUserMessage(question, timeHints)
 
@@ -183,7 +192,7 @@ func (r *REPL) runAIQuery(question string) {
 	}
 
 	// Render markdown + resolve sources, print formatted output.
-	renderer := ai.NewResponseRenderer(r.deps.DB, r.deps.Domain)
+	renderer := ai.NewResponseRenderer(r.deps.DB, r.deps.Domain, r.deps.TeamID)
 	rendered, err := renderer.Render(fullResponse.String())
 	if err != nil {
 		rendered = fullResponse.String()

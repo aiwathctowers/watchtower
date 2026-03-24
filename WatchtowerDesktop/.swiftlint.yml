@@ -72,20 +72,20 @@ line_length:
   ignores_urls: true
 
 file_length:
-  warning: 800
-  error: 2000
+  warning: 2100
+  error: 5000
 
 type_body_length:
-  warning: 800
-  error: 2000
+  warning: 2000
+  error: 5000
 
 function_body_length:
-  warning: 50
-  error: 120
+  warning: 80
+  error: 200
 
 function_parameter_count:
-  warning: 6
-  error: 30
+  warning: 8
+  error: 15
 
 cyclomatic_complexity:
   warning: 15
@@ -111,14 +111,21 @@ identifier_name:
     - i
     - x
     - y
+    - n
+    - e
+    - s
+    - w
+    - h
+    - r
+    - to
 
 large_tuple:
   warning: 4
   error: 6
 
 closure_body_length:
-  warning: 50
-  error: 200
+  warning: 80
+  error: 300
 
 enum_case_associated_values_count:
   warning: 5

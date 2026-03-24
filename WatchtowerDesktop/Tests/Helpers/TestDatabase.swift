@@ -110,14 +110,14 @@ enum TestDatabase {
         summary: String = "Test summary",
         topics: String = "[]",
         decisions: String = "[]",
-        actionItems: String = "[]",
+        tracksJSON: String = "[]",
         messageCount: Int = 10,
         model: String = "haiku"
     ) throws {
         try db.execute(sql: """
             INSERT INTO digests (channel_id, period_from, period_to, type, summary, topics, decisions, action_items, message_count, model)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: [channelID, periodFrom, periodTo, type, summary, topics, decisions, actionItems, messageCount, model])
+            """, arguments: [channelID, periodFrom, periodTo, type, summary, topics, decisions, tracksJSON, messageCount, model])
     }
 
     static func insertWatchItem(
@@ -181,7 +181,7 @@ enum TestDatabase {
                              styleDetails, recommendations, concerns, model])
     }
 
-    static func insertActionItem(
+    static func insertTrack(
         _ db: Database,
         channelID: String = "C001",
         assigneeUserID: String = "U001",
@@ -195,13 +195,20 @@ enum TestDatabase {
         dueDate: Double? = nil,
         periodFrom: Double = 1700000000,
         periodTo: Double = 1700086400,
-        model: String = "haiku"
+        model: String = "haiku",
+        ownership: String = "mine",
+        ballOn: String = "",
+        ownerUserID: String = ""
     ) throws {
-        var cols = "channel_id, assignee_user_id, assignee_raw, text, context, source_message_ts, source_channel_name, status, priority, period_from, period_to, model"
-        var placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+        var cols = "channel_id, assignee_user_id, assignee_raw, "
+            + "text, context, source_message_ts, source_channel_name, "
+            + "status, priority, period_from, period_to, model, "
+            + "ownership, ball_on, owner_user_id"
+        var placeholders = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
         var args: [any DatabaseValueConvertible] = [
             channelID, assigneeUserID, assigneeRaw, text, context,
-            sourceMessageTS, sourceChannelName, status, priority, periodFrom, periodTo, model
+            sourceMessageTS, sourceChannelName, status, priority, periodFrom, periodTo, model,
+            ownership, ballOn, ownerUserID
         ]
         if let dueDate {
             cols += ", due_date"
@@ -209,7 +216,7 @@ enum TestDatabase {
             args.append(dueDate)
         }
         try db.execute(
-            sql: "INSERT INTO action_items (\(cols)) VALUES (\(placeholders))",
+            sql: "INSERT INTO tracks (\(cols)) VALUES (\(placeholders))",
             arguments: StatementArguments(args)
         )
     }
@@ -259,7 +266,10 @@ enum TestDatabase {
         is_deleted   INTEGER NOT NULL DEFAULT 0,
         subtype      TEXT NOT NULL DEFAULT '',
         permalink    TEXT NOT NULL DEFAULT '',
-        ts_unix      REAL GENERATED ALWAYS AS (CASE WHEN INSTR(ts, '.') > 0 THEN CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL) ELSE CAST(ts AS REAL) END) STORED,
+        ts_unix      REAL GENERATED ALWAYS AS (
+            CASE WHEN INSTR(ts, '.') > 0
+            THEN CAST(SUBSTR(ts, 1, INSTR(ts, '.') - 1) AS REAL)
+            ELSE CAST(ts AS REAL) END) STORED,
         raw_json     TEXT NOT NULL DEFAULT '{}',
         PRIMARY KEY (channel_id, ts)
     );
@@ -324,8 +334,20 @@ enum TestDatabase {
         cost_usd      REAL NOT NULL DEFAULT 0,
         created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         read_at       TEXT,
+        prompt_version INTEGER NOT NULL DEFAULT 0,
+        people_signals TEXT NOT NULL DEFAULT '[]',
+        situations     TEXT NOT NULL DEFAULT '[]',
+        running_summary TEXT NOT NULL DEFAULT '',
         UNIQUE(channel_id, type, period_from, period_to)
     );
+    CREATE TABLE IF NOT EXISTS digest_participants (
+        digest_id      INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+        user_id        TEXT NOT NULL,
+        situation_idx  INTEGER NOT NULL DEFAULT 0,
+        role           TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (digest_id, user_id, situation_idx)
+    );
+    CREATE INDEX IF NOT EXISTS idx_digest_participants_user ON digest_participants(user_id);
     CREATE TABLE IF NOT EXISTS decision_reads (
         digest_id    INTEGER NOT NULL,
         decision_idx INTEGER NOT NULL,
@@ -357,6 +379,7 @@ enum TestDatabase {
         input_tokens        INTEGER NOT NULL DEFAULT 0,
         output_tokens       INTEGER NOT NULL DEFAULT 0,
         cost_usd            REAL NOT NULL DEFAULT 0,
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
         created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         UNIQUE(user_id, period_from, period_to)
     );
@@ -379,7 +402,7 @@ enum TestDatabase {
         alias_for  TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
-    CREATE TABLE IF NOT EXISTS action_items (
+    CREATE TABLE IF NOT EXISTS tracks (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         channel_id          TEXT NOT NULL,
         assignee_user_id    TEXT NOT NULL,
@@ -403,26 +426,351 @@ enum TestDatabase {
         cost_usd            REAL NOT NULL DEFAULT 0,
         created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         completed_at        TEXT,
-        participants        TEXT NOT NULL DEFAULT '',
-        source_refs         TEXT NOT NULL DEFAULT '',
+        participants        TEXT NOT NULL DEFAULT '[]',
+        source_refs         TEXT NOT NULL DEFAULT '[]',
         requester_name      TEXT NOT NULL DEFAULT '',
         requester_user_id   TEXT NOT NULL DEFAULT '',
         category            TEXT NOT NULL DEFAULT '',
         blocking            TEXT NOT NULL DEFAULT '',
-        tags                TEXT NOT NULL DEFAULT '',
+        tags                TEXT NOT NULL DEFAULT '[]',
         decision_summary    TEXT NOT NULL DEFAULT '',
-        decision_options    TEXT NOT NULL DEFAULT '',
-        related_digest_ids  TEXT NOT NULL DEFAULT '',
-        sub_items           TEXT NOT NULL DEFAULT ''
+        decision_options    TEXT NOT NULL DEFAULT '[]',
+        related_digest_ids  TEXT NOT NULL DEFAULT '[]',
+        sub_items           TEXT NOT NULL DEFAULT '[]',
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
+        ownership           TEXT NOT NULL DEFAULT 'mine',
+        ball_on             TEXT NOT NULL DEFAULT '',
+        owner_user_id       TEXT NOT NULL DEFAULT '',
+        fingerprint         TEXT NOT NULL DEFAULT '[]'
     );
-    CREATE TABLE IF NOT EXISTS action_item_history (
+    CREATE TABLE IF NOT EXISTS track_history (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        action_item_id  INTEGER NOT NULL,
+        track_id        INTEGER NOT NULL,
         event           TEXT NOT NULL,
         field           TEXT NOT NULL DEFAULT '',
         old_value       TEXT NOT NULL DEFAULT '',
         new_value       TEXT NOT NULL DEFAULT '',
         created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
+    CREATE TABLE IF NOT EXISTS feedback (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis')),
+        entity_id   TEXT NOT NULL,
+        rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),
+        comment     TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_entity ON feedback(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(entity_type, rating);
+    CREATE TABLE IF NOT EXISTS prompts (
+        id         TEXT PRIMARY KEY,
+        template   TEXT NOT NULL,
+        version    INTEGER NOT NULL DEFAULT 1,
+        language   TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS prompt_history (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        prompt_id  TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+        version    INTEGER NOT NULL,
+        template   TEXT NOT NULL,
+        reason     TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_history_prompt ON prompt_history(prompt_id);
+    CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
+    CREATE TABLE IF NOT EXISTS chains (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        parent_id   INTEGER DEFAULT NULL,
+        title       TEXT NOT NULL,
+        slug        TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'active',
+        summary     TEXT NOT NULL DEFAULT '',
+        channel_ids TEXT NOT NULL DEFAULT '[]',
+        first_seen  REAL NOT NULL,
+        last_seen   REAL NOT NULL,
+        item_count  INTEGER NOT NULL DEFAULT 0,
+        read_at     TEXT,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE TABLE IF NOT EXISTS chain_refs (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+        ref_type      TEXT NOT NULL,
+        digest_id     INTEGER NOT NULL DEFAULT 0,
+        decision_idx  INTEGER NOT NULL DEFAULT 0,
+        track_id      INTEGER NOT NULL DEFAULT 0,
+        channel_id    TEXT NOT NULL DEFAULT '',
+        timestamp     REAL NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status);
+    CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id);
+    CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id);
+    CREATE TABLE IF NOT EXISTS user_interactions (
+        user_a              TEXT NOT NULL,
+        user_b              TEXT NOT NULL,
+        period_from         REAL NOT NULL,
+        period_to           REAL NOT NULL,
+        messages_to         INTEGER NOT NULL DEFAULT 0,
+        messages_from       INTEGER NOT NULL DEFAULT 0,
+        shared_channels     INTEGER NOT NULL DEFAULT 0,
+        thread_replies_to   INTEGER NOT NULL DEFAULT 0,
+        thread_replies_from INTEGER NOT NULL DEFAULT 0,
+        shared_channel_ids  TEXT NOT NULL DEFAULT '[]',
+        dm_messages_to      INTEGER NOT NULL DEFAULT 0,
+        dm_messages_from    INTEGER NOT NULL DEFAULT 0,
+        mentions_to         INTEGER NOT NULL DEFAULT 0,
+        mentions_from       INTEGER NOT NULL DEFAULT 0,
+        reactions_to        INTEGER NOT NULL DEFAULT 0,
+        reactions_from      INTEGER NOT NULL DEFAULT 0,
+        interaction_score   REAL NOT NULL DEFAULT 0,
+        connection_type     TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (user_a, user_b, period_from, period_to)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_interactions_a ON user_interactions(user_a, period_from, period_to);
+
+    CREATE TABLE IF NOT EXISTS people_cards (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id             TEXT NOT NULL,
+        period_from         REAL NOT NULL,
+        period_to           REAL NOT NULL,
+        message_count       INTEGER NOT NULL DEFAULT 0,
+        channels_active     INTEGER NOT NULL DEFAULT 0,
+        threads_initiated   INTEGER NOT NULL DEFAULT 0,
+        threads_replied     INTEGER NOT NULL DEFAULT 0,
+        avg_message_length  REAL NOT NULL DEFAULT 0,
+        active_hours_json   TEXT NOT NULL DEFAULT '{}',
+        volume_change_pct   REAL NOT NULL DEFAULT 0,
+        summary             TEXT NOT NULL DEFAULT '',
+        communication_style TEXT NOT NULL DEFAULT '',
+        decision_role       TEXT NOT NULL DEFAULT '',
+        red_flags           TEXT NOT NULL DEFAULT '[]',
+        highlights          TEXT NOT NULL DEFAULT '[]',
+        accomplishments     TEXT NOT NULL DEFAULT '[]',
+        communication_guide TEXT NOT NULL DEFAULT '',
+        decision_style      TEXT NOT NULL DEFAULT '',
+        tactics             TEXT NOT NULL DEFAULT '[]',
+        relationship_context TEXT NOT NULL DEFAULT '',
+        status              TEXT NOT NULL DEFAULT 'active',
+        model               TEXT NOT NULL DEFAULT '',
+        input_tokens        INTEGER NOT NULL DEFAULT 0,
+        output_tokens       INTEGER NOT NULL DEFAULT 0,
+        cost_usd            REAL NOT NULL DEFAULT 0,
+        prompt_version      INTEGER NOT NULL DEFAULT 0,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(user_id, period_from, period_to)
+    );
+    CREATE TABLE IF NOT EXISTS people_card_summaries (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        period_from   REAL NOT NULL,
+        period_to     REAL NOT NULL,
+        summary       TEXT NOT NULL DEFAULT '',
+        attention     TEXT NOT NULL DEFAULT '[]',
+        tips          TEXT NOT NULL DEFAULT '[]',
+        model         TEXT NOT NULL DEFAULT '',
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd      REAL NOT NULL DEFAULT 0,
+        prompt_version INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(period_from, period_to)
+    );
+
+    CREATE TABLE IF NOT EXISTS briefings (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id     TEXT NOT NULL DEFAULT '',
+        user_id          TEXT NOT NULL,
+        date             TEXT NOT NULL,
+        role             TEXT NOT NULL DEFAULT '',
+        attention        TEXT NOT NULL DEFAULT '[]',
+        your_day         TEXT NOT NULL DEFAULT '[]',
+        what_happened    TEXT NOT NULL DEFAULT '[]',
+        team_pulse       TEXT NOT NULL DEFAULT '[]',
+        coaching         TEXT NOT NULL DEFAULT '[]',
+        model            TEXT NOT NULL DEFAULT '',
+        input_tokens     INTEGER NOT NULL DEFAULT 0,
+        output_tokens    INTEGER NOT NULL DEFAULT 0,
+        cost_usd         REAL NOT NULL DEFAULT 0,
+        prompt_version   INTEGER NOT NULL DEFAULT 0,
+        read_at          TEXT,
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(user_id, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_briefings_user_date ON briefings(user_id, date DESC);
+
+    CREATE TABLE IF NOT EXISTS user_profile (
+        id                    INTEGER PRIMARY KEY,
+        slack_user_id         TEXT NOT NULL UNIQUE,
+        role                  TEXT NOT NULL DEFAULT '',
+        team                  TEXT NOT NULL DEFAULT '',
+        responsibilities      TEXT NOT NULL DEFAULT '[]',
+        reports               TEXT NOT NULL DEFAULT '[]',
+        peers                 TEXT NOT NULL DEFAULT '[]',
+        manager               TEXT NOT NULL DEFAULT '',
+        starred_channels      TEXT NOT NULL DEFAULT '[]',
+        starred_people        TEXT NOT NULL DEFAULT '[]',
+        pain_points           TEXT NOT NULL DEFAULT '[]',
+        track_focus           TEXT NOT NULL DEFAULT '[]',
+        onboarding_done       INTEGER NOT NULL DEFAULT 0,
+        custom_prompt_context TEXT NOT NULL DEFAULT '',
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
     """
+
+    // MARK: - Briefing Fixtures
+
+    static func insertBriefing(
+        _ db: Database,
+        userID: String = "U001",
+        date: String = "2024-01-15",
+        role: String = "engineer",
+        attention: String = "[]",
+        yourDay: String = "[]",
+        whatHappened: String = "[]",
+        teamPulse: String = "[]",
+        coaching: String = "[]",
+        model: String = "haiku",
+        readAt: String? = nil
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO briefings (user_id, date, role, attention, your_day,
+                what_happened, team_pulse, coaching, model, read_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [userID, date, role, attention, yourDay,
+                             whatHappened, teamPulse, coaching, model, readAt])
+    }
+
+    // MARK: - Profile Fixtures
+
+    static func insertProfile(
+        _ db: Database,
+        slackUserID: String = "U001",
+        role: String = "",
+        team: String = "",
+        responsibilities: String = "[]",
+        reports: String = "[]",
+        peers: String = "[]",
+        manager: String = "",
+        starredChannels: String = "[]",
+        starredPeople: String = "[]",
+        painPoints: String = "[]",
+        trackFocus: String = "[]",
+        onboardingDone: Bool = false,
+        customPromptContext: String = ""
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO user_profile
+                (slack_user_id, role, team, responsibilities, reports, peers, manager,
+                 starred_channels, starred_people, pain_points, track_focus,
+                 onboarding_done, custom_prompt_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                slackUserID, role, team, responsibilities, reports, peers, manager,
+                starredChannels, starredPeople, painPoints, trackFocus,
+                onboardingDone ? 1 : 0, customPromptContext
+            ])
+    }
+
+    // MARK: - People Card Fixtures
+
+    static func insertPeopleCard(
+        _ db: Database,
+        userID: String = "U001",
+        periodFrom: Double = 1700000000,
+        periodTo: Double = 1700604800,
+        messageCount: Int = 100,
+        channelsActive: Int = 5,
+        threadsInitiated: Int = 10,
+        threadsReplied: Int = 20,
+        avgMessageLength: Double = 42.5,
+        activeHoursJSON: String = #"{"9":12,"10":8,"14":15}"#,
+        volumeChangePct: Double = 15.0,
+        summary: String = "Active contributor",
+        communicationStyle: String = "driver",
+        decisionRole: String = "approver",
+        redFlags: String = "[]",
+        highlights: String = #"["Great leadership"]"#,
+        accomplishments: String = "[]",
+        communicationGuide: String = "",
+        decisionStyle: String = "",
+        tactics: String = "[]",
+        relationshipContext: String = "",
+        status: String = "ok",
+        model: String = "haiku"
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO people_cards (user_id, period_from, period_to, message_count, channels_active,
+                threads_initiated, threads_replied, avg_message_length, active_hours_json,
+                volume_change_pct, summary, communication_style, decision_role, red_flags, highlights,
+                accomplishments, communication_guide, decision_style, tactics, relationship_context, status, model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [userID, periodFrom, periodTo, messageCount, channelsActive,
+                             threadsInitiated, threadsReplied, avgMessageLength, activeHoursJSON,
+                             volumeChangePct, summary, communicationStyle, decisionRole, redFlags, highlights,
+                             accomplishments, communicationGuide, decisionStyle, tactics, relationshipContext, status, model])
+    }
+
+    // MARK: - People Card Summary Fixtures
+
+    static func insertPeopleCardSummary(
+        _ db: Database,
+        periodFrom: Double = 1700000000,
+        periodTo: Double = 1700604800,
+        summary: String = "Team is collaborating well",
+        attention: String = #"["Alice is overloaded"]"#,
+        tips: String = #"["Consider redistributing tasks"]"#,
+        model: String = "haiku",
+        inputTokens: Int = 500,
+        outputTokens: Int = 200,
+        costUSD: Double = 0.001,
+        promptVersion: Int = 1
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO people_card_summaries (period_from, period_to, summary, attention, tips,
+                model, input_tokens, output_tokens, cost_usd, prompt_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [periodFrom, periodTo, summary, attention, tips,
+                             model, inputTokens, outputTokens, costUSD, promptVersion])
+    }
+
+    // MARK: - Chain Fixtures
+
+    static func insertChain(
+        _ db: Database,
+        title: String = "Test Chain",
+        slug: String = "test-chain",
+        status: String = "active",
+        summary: String = "A test chain",
+        channelIDs: String = "[\"C001\"]",
+        firstSeen: Double = 1700000000,
+        lastSeen: Double = 1700086400,
+        itemCount: Int = 2
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO chains (title, slug, status, summary, channel_ids, first_seen, last_seen, item_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [title, slug, status, summary, channelIDs, firstSeen, lastSeen, itemCount])
+    }
+
+    static func insertChainRef(
+        _ db: Database,
+        chainID: Int = 1,
+        refType: String = "decision",
+        digestID: Int = 0,
+        decisionIdx: Int = 0,
+        trackID: Int = 0,
+        channelID: String = "C001",
+        timestamp: Double = 1700000000
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO chain_refs (chain_id, ref_type, digest_id, decision_idx, track_id, channel_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [chainID, refType, digestID, decisionIdx, trackID, channelID, timestamp])
+    }
 }

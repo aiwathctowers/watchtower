@@ -46,7 +46,14 @@ struct ThreadView: View {
                                     .padding(.vertical, 4)
                             }
 
-                            MessageRow(message: msg, dbManager: dbManager, isGrouped: isGrouped, onThreadTap: nil, customEmojiMap: customEmojiMap, emojiImageCache: emojiImageCache)
+                            MessageRow(
+                                message: msg,
+                                dbManager: dbManager,
+                                isGrouped: isGrouped,
+                                onThreadTap: nil,
+                                customEmojiMap: customEmojiMap,
+                                emojiImageCache: emojiImageCache
+                            )
                         }
                     }
                     .padding()

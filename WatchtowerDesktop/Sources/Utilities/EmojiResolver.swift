@@ -6,6 +6,8 @@ import GRDB
 /// Custom emojis are identified and returned as references for image rendering.
 @MainActor
 final class EmojiResolver: Observable {
+    private static let emojiPattern = try? NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+
     /// Map of custom emoji name → image URL
     private(set) var customEmojiMap: [String: String] = [:]
 
@@ -37,7 +39,7 @@ final class EmojiResolver: Observable {
         // First resolve standard emoji
         let withStandard = SlackEmoji.resolve(text)
 
-        let pattern = try! NSRegularExpression(pattern: #":([a-zA-Z0-9_+\-]+):"#)
+        guard let pattern = Self.emojiPattern else { return [.text(SlackEmoji.resolve(text))] }
         let nsText = withStandard as NSString
         let matches = pattern.matches(in: withStandard, range: NSRange(location: 0, length: nsText.length))
 

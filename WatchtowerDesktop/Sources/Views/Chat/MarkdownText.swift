@@ -66,13 +66,13 @@ struct MarkdownText: View {
 
     /// Returns true if the line is a block-level start (not a paragraph continuation).
     private static func isBlockStart(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("```") { return true }
-        if parseHeader(t) != nil { return true }
-        if t.hasPrefix("- ") || t.hasPrefix("* ") { return true }
-        if isNumberedListItem(t) { return true }
-        if t.hasPrefix("> ") { return true }
-        if t == "---" || t == "***" || t == "___" { return true }
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("```") { return true }
+        if parseHeader(trimmed) != nil { return true }
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") { return true }
+        if isNumberedListItem(trimmed) { return true }
+        if trimmed.hasPrefix("> ") { return true }
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" { return true }
         return false
     }
 
@@ -84,121 +84,113 @@ struct MarkdownText: View {
         var i = 0
 
         while i < lines.count {
-            let line = lines[i]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
 
-            // Skip blank lines
             if trimmed.isEmpty {
                 i += 1
                 continue
             }
 
-            // Horizontal rule
-            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-                blocks.append(.divider)
+            if let block = parseSingleLineBlock(trimmed) {
+                blocks.append(block)
                 i += 1
-                continue
-            }
-
-            // Fenced code block
-            if trimmed.hasPrefix("```") {
-                var codeLines: [String] = []
-                i += 1
-                while i < lines.count {
-                    if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                        i += 1
-                        break
-                    }
-                    codeLines.append(lines[i])
-                    i += 1
-                }
-                blocks.append(.codeBlock(codeLines.joined(separator: "\n")))
-                continue
-            }
-
-            // Header
-            if let (level, content) = Self.parseHeader(trimmed) {
-                blocks.append(.header(level, content))
-                i += 1
-                continue
-            }
-
-            // Blockquote
-            if trimmed.hasPrefix("> ") {
-                var quoteLines: [String] = []
-                while i < lines.count {
-                    let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    if l.hasPrefix("> ") {
-                        quoteLines.append(String(l.dropFirst(2)))
-                    } else if l.isEmpty || Self.isBlockStart(l) {
-                        break
-                    } else {
-                        break
-                    }
-                    i += 1
-                }
-                blocks.append(.blockquote(quoteLines.joined(separator: "\n")))
-                continue
-            }
-
-            // Bullet list (- or *)
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                var items: [String] = []
-                while i < lines.count {
-                    let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    if l.hasPrefix("- ") {
-                        items.append(String(l.dropFirst(2)))
-                    } else if l.hasPrefix("* ") {
-                        items.append(String(l.dropFirst(2)))
-                    } else if l.isEmpty {
-                        break
-                    } else if !items.isEmpty && !Self.isBlockStart(l) {
-                        // Continuation of last item
-                        items[items.count - 1] += " " + l
-                    } else {
-                        break
-                    }
-                    i += 1
-                }
-                blocks.append(.bulletList(items))
-                continue
-            }
-
-            // Numbered list
-            if Self.isNumberedListItem(trimmed) {
-                var items: [String] = []
-                while i < lines.count {
-                    let l = lines[i].trimmingCharacters(in: .whitespaces)
-                    if Self.isNumberedListItem(l) {
-                        items.append(Self.numberedListContent(l))
-                    } else if l.isEmpty {
-                        break
-                    } else if !items.isEmpty && !Self.isBlockStart(l) {
-                        items[items.count - 1] += " " + l
-                    } else {
-                        break
-                    }
-                    i += 1
-                }
-                blocks.append(.numberedList(items))
-                continue
-            }
-
-            // Regular paragraph — collect lines until a blank line or block element
-            var paraLines: [String] = []
-            while i < lines.count {
-                let l = lines[i]
-                let t = l.trimmingCharacters(in: .whitespaces)
-                if t.isEmpty || Self.isBlockStart(t) { break }
-                paraLines.append(l)
-                i += 1
-            }
-            if !paraLines.isEmpty {
-                blocks.append(.paragraph(paraLines.joined(separator: "\n")))
+            } else if trimmed.hasPrefix("```") {
+                blocks.append(parseCodeBlock(lines: lines, index: &i))
+            } else if trimmed.hasPrefix("> ") {
+                blocks.append(parseBlockquote(lines: lines, index: &i))
+            } else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                blocks.append(parseBulletList(lines: lines, index: &i))
+            } else if Self.isNumberedListItem(trimmed) {
+                blocks.append(parseNumberedList(lines: lines, index: &i))
+            } else {
+                blocks.append(parseParagraph(lines: lines, index: &i))
             }
         }
 
         return blocks
+    }
+
+    private func parseSingleLineBlock(_ trimmed: String) -> Block? {
+        if ["---", "***", "___"].contains(trimmed) { return .divider }
+        if let (level, content) = Self.parseHeader(trimmed) {
+            return .header(level, content)
+        }
+        return nil
+    }
+
+    private func parseCodeBlock(lines: [String], index i: inout Int) -> Block {
+        var codeLines: [String] = []
+        i += 1
+        while i < lines.count {
+            if lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                i += 1
+                break
+            }
+            codeLines.append(lines[i])
+            i += 1
+        }
+        return .codeBlock(codeLines.joined(separator: "\n"))
+    }
+
+    private func parseBlockquote(lines: [String], index i: inout Int) -> Block {
+        var quoteLines: [String] = []
+        while i < lines.count {
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("> ") else { break }
+            quoteLines.append(String(line.dropFirst(2)))
+            i += 1
+        }
+        return .blockquote(quoteLines.joined(separator: "\n"))
+    }
+
+    private func parseBulletList(lines: [String], index i: inout Int) -> Block {
+        var items: [String] = []
+        while i < lines.count {
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("- ") {
+                items.append(String(line.dropFirst(2)))
+            } else if line.hasPrefix("* ") {
+                items.append(String(line.dropFirst(2)))
+            } else if line.isEmpty {
+                break
+            } else if !items.isEmpty && !Self.isBlockStart(line) {
+                items[items.count - 1] += " " + line
+            } else {
+                break
+            }
+            i += 1
+        }
+        return .bulletList(items)
+    }
+
+    private func parseNumberedList(lines: [String], index i: inout Int) -> Block {
+        var items: [String] = []
+        while i < lines.count {
+            let line = lines[i].trimmingCharacters(in: .whitespaces)
+            if Self.isNumberedListItem(line) {
+                items.append(Self.numberedListContent(line))
+            } else if line.isEmpty {
+                break
+            } else if !items.isEmpty && !Self.isBlockStart(line) {
+                items[items.count - 1] += " " + line
+            } else {
+                break
+            }
+            i += 1
+        }
+        return .numberedList(items)
+    }
+
+    private func parseParagraph(lines: [String], index i: inout Int) -> Block {
+        var paraLines: [String] = []
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || Self.isBlockStart(trimmed) { break }
+            paraLines.append(line)
+            i += 1
+        }
+        return .paragraph(paraLines.joined(separator: "\n"))
     }
 
     // MARK: - Rendering
@@ -209,7 +201,7 @@ struct MarkdownText: View {
         case .paragraph(let text):
             inlineMarkdown(text)
 
-        case .header(let level, let text):
+        case let .header(level, text):
             inlineMarkdown(text)
                 .font(headerFont(level))
                 .fontWeight(.bold)

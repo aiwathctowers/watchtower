@@ -65,3 +65,50 @@ func TestUpdateCheckpointConvertsToUTC(t *testing.T) {
 	// Should be stored in UTC
 	assert.Equal(t, "2025-06-15T14:00:00Z", cp.LastCheckedAt)
 }
+
+func TestDetermineSinceTime_ExplicitDuration(t *testing.T) {
+	db := openTestDB(t)
+
+	before := time.Now()
+	since, err := db.DetermineSinceTime(2 * time.Hour)
+	require.NoError(t, err)
+
+	expected := before.Add(-2 * time.Hour)
+	assert.WithinDuration(t, expected, since, 2*time.Second)
+}
+
+func TestDetermineSinceTime_FromCheckpoint(t *testing.T) {
+	db := openTestDB(t)
+
+	ts := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, db.UpdateCheckpoint(ts))
+
+	since, err := db.DetermineSinceTime(0)
+	require.NoError(t, err)
+	assert.Equal(t, ts, since)
+}
+
+func TestDetermineSinceTime_Default24Hours(t *testing.T) {
+	db := openTestDB(t)
+
+	before := time.Now()
+	since, err := db.DetermineSinceTime(0)
+	require.NoError(t, err)
+
+	expected := before.Add(-24 * time.Hour)
+	assert.WithinDuration(t, expected, since, 2*time.Second)
+}
+
+func TestDetermineSinceTime_DurationOverridesCheckpoint(t *testing.T) {
+	db := openTestDB(t)
+
+	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, db.UpdateCheckpoint(ts))
+
+	before := time.Now()
+	since, err := db.DetermineSinceTime(1 * time.Hour)
+	require.NoError(t, err)
+
+	expected := before.Add(-1 * time.Hour)
+	assert.WithinDuration(t, expected, since, 2*time.Second)
+}

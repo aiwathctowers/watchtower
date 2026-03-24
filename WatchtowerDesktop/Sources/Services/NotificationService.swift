@@ -1,6 +1,16 @@
 import Foundation
 import UserNotifications
 
+/// FNV-1a hash for stable, collision-resistant notification identifiers.
+private func fnv1aHash(_ string: String) -> UInt64 {
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in string.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    return hash
+}
+
 final class NotificationService: Sendable {
     static let shared = NotificationService()
 
@@ -20,8 +30,8 @@ final class NotificationService: Sendable {
         content.sound = .default
         content.userInfo = ["digestId": digestID, "type": "decision"]
 
-        // M7: stable identifier using digestID + decision hash (not hashValue which varies per launch)
-        let stableHash = decision.text.utf8.reduce(0) { $0 &+ Int($1) }
+        // Stable identifier using digestID + FNV-1a hash of text (collision-resistant).
+        let stableHash = fnv1aHash(decision.text)
         let request = UNNotificationRequest(
             identifier: "decision-\(digestID)-\(stableHash)",
             content: content,
@@ -30,32 +40,32 @@ final class NotificationService: Sendable {
         UNUserNotificationCenter.current().add(request)
     }
 
-    func sendActionItemUpdateNotification(text: String, channelName: String, itemID: Int) {
+    func sendTrackUpdateNotification(text: String, channelName: String, itemID: Int) {
         let content = UNMutableNotificationContent()
-        content.title = "Update on action item"
+        content.title = "Update on track"
         content.body = "#\(channelName): \(String(text.prefix(200)))"
         content.sound = .default
-        content.userInfo = ["type": "action_item_update", "actionItemId": itemID]
+        content.userInfo = ["type": "track_update", "trackId": itemID]
 
         let request = UNNotificationRequest(
-            identifier: "action-update-\(itemID)-\(Int(Date().timeIntervalSince1970))",
+            identifier: "track-update-\(itemID)-\(Int(Date().timeIntervalSince1970))",
             content: content,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
     }
 
-    func sendActionItemNotification(text: String, channelName: String, priority: String) {
+    func sendTrackNotification(text: String, channelName: String, priority: String) {
         let content = UNMutableNotificationContent()
         let prefix = priority == "high" ? "Urgent: " : ""
-        content.title = "\(prefix)Action needed in \(channelName)"
+        content.title = "\(prefix)New track in #\(channelName)"
         content.body = String(text.prefix(200))
         content.sound = .default
-        content.userInfo = ["type": "action_item"]
+        content.userInfo = ["type": "track"]
 
-        let stableHash = text.utf8.reduce(0) { $0 &+ Int($1) }
+        let stableHash = fnv1aHash(text)
         let request = UNNotificationRequest(
-            identifier: "action-item-\(stableHash)",
+            identifier: "track-\(stableHash)",
             content: content,
             trigger: nil
         )
@@ -71,6 +81,23 @@ final class NotificationService: Sendable {
 
         let request = UNNotificationRequest(
             identifier: "test-\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func sendBriefingNotification(attentionCount: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Morning Briefing Ready"
+        content.body = attentionCount > 0
+            ? "\(attentionCount) items need attention"
+            : "Your daily briefing is ready"
+        content.sound = .default
+        content.userInfo = ["type": "briefing"]
+
+        let request = UNNotificationRequest(
+            identifier: "briefing-\(Int(Date().timeIntervalSince1970))",
             content: content,
             trigger: nil
         )

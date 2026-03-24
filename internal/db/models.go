@@ -35,6 +35,7 @@ type Channel struct {
 	IsMember   bool
 	DMUserID   sql.NullString
 	NumMembers int
+	LastRead   string // Slack conversations.mark cursor (message ts)
 	UpdatedAt  string
 }
 
@@ -152,8 +153,8 @@ type CustomEmoji struct {
 	AliasFor string // Target emoji name if this is an alias
 }
 
-// ActionItem represents an AI-extracted action item for a user.
-type ActionItem struct {
+// Track represents an AI-extracted track for a user.
+type Track struct {
 	ID                int
 	ChannelID         string
 	AssigneeUserID    string
@@ -189,31 +190,57 @@ type ActionItem struct {
 	RelatedDigestIDs  string  // JSON array of related digest IDs
 	SubItems          string  // JSON array of sub-tasks with statuses
 	PromptVersion     int     // version of prompt used for generation
+	Ownership         string  // "mine", "delegated", "watching"
+	BallOn            string  // user_id of the person who needs to act next
+	OwnerUserID       string  // owner of the track (for delegated = report's user_id)
+	Fingerprint       string  // JSON array of extracted entities (ticket IDs, user_ids, IPs, CVEs)
 }
 
 // Digest represents an AI-generated summary of channel activity.
 type Digest struct {
-	ID            int
-	ChannelID     string  // "" for cross-channel digests
-	PeriodFrom    float64 // Unix timestamp
-	PeriodTo      float64 // Unix timestamp
-	Type          string  // "channel", "daily", "weekly"
-	Summary       string
-	Topics        string // JSON array
-	Decisions     string // JSON array
-	ActionItems   string // JSON array
-	MessageCount  int
-	Model         string
-	InputTokens   int
-	OutputTokens  int
-	CostUSD       float64
-	CreatedAt     string
-	ReadAt        sql.NullString // NULL = unread, ISO8601 = when read
-	PromptVersion int            // version of prompt used for generation
+	ID             int
+	ChannelID      string  // "" for cross-channel digests
+	PeriodFrom     float64 // Unix timestamp
+	PeriodTo       float64 // Unix timestamp
+	Type           string  // "channel", "daily", "weekly"
+	Summary        string
+	Topics         string // JSON array
+	Decisions      string // JSON array
+	ActionItems    string // JSON array
+	MessageCount   int
+	Model          string
+	InputTokens    int
+	OutputTokens   int
+	CostUSD        float64
+	CreatedAt      string
+	ReadAt         sql.NullString // NULL = unread, ISO8601 = when read
+	PromptVersion  int            // version of prompt used for generation
+	PeopleSignals  string         // JSON array of PersonSignals from MAP phase (legacy)
+	Situations     string         // JSON array of Situation objects
+	RunningSummary string         // JSON running context for next digest (channel memory)
+}
+
+// Situation represents a notable interaction pattern observed in a channel digest.
+// Each situation involves multiple participants and captures dynamics between people.
+type Situation struct {
+	Topic        string                 `json:"topic"`
+	Type         string                 `json:"type"` // e.g. "bottleneck", "conflict", "collaboration", etc.
+	Participants []SituationParticipant `json:"participants"`
+	Dynamic      string                 `json:"dynamic"`
+	Outcome      string                 `json:"outcome"`
+	RedFlags     []string               `json:"red_flags"`
+	Observations []string               `json:"observations"`
+	MessageRefs  []string               `json:"message_refs"`
+}
+
+// SituationParticipant is a person involved in a situation with their role.
+type SituationParticipant struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"` // e.g. "blocker", "initiator", "affected", "resolver"
 }
 
 // DigestDecisionRow represents a single decision extracted from a digest,
-// used by the action items pipeline to provide decision context.
+// used by the tracks pipeline to provide decision context.
 type DigestDecisionRow struct {
 	DigestID    int
 	ChannelName string
@@ -224,7 +251,7 @@ type DigestDecisionRow struct {
 // Feedback represents a user rating on AI-generated content.
 type Feedback struct {
 	ID         int
-	EntityType string // "digest", "action_item", "decision"
+	EntityType string // "digest", "track", "decision", "user_analysis"
 	EntityID   string // entity-specific ID
 	Rating     int    // +1 = good, -1 = bad
 	Comment    string
@@ -242,9 +269,195 @@ type ImportanceCorrection struct {
 	CreatedAt          string
 }
 
+// UserProfile stores the current user's role, team, relationships, and personalization data.
+type UserProfile struct {
+	ID                  int
+	SlackUserID         string
+	Role                string
+	Team                string
+	Responsibilities    string // JSON array of strings
+	Reports             string // JSON array of Slack user_ids
+	Peers               string // JSON array of Slack user_ids
+	Manager             string // Slack user_id
+	StarredChannels     string // JSON array of channel_ids
+	StarredPeople       string // JSON array of Slack user_ids
+	PainPoints          string // JSON array from onboarding
+	TrackFocus          string // JSON array of focus areas
+	OnboardingDone      bool
+	CustomPromptContext string
+	CreatedAt           string
+	UpdatedAt           string
+}
+
+// Chain represents a thematic thread grouping related decisions and tracks over time.
+type Chain struct {
+	ID         int
+	ParentID   int // 0 if top-level, otherwise parent chain ID
+	Title      string
+	Slug       string
+	Status     string // "active", "resolved", "stale"
+	Summary    string
+	ChannelIDs string  // JSON array of channel IDs
+	FirstSeen  float64 // Unix timestamp
+	LastSeen   float64 // Unix timestamp
+	ItemCount  int
+	ReadAt     string // empty if unread
+	CreatedAt  string
+	UpdatedAt  string
+}
+
+// ChainRef links a chain to a decision (in a digest), a track, or a digest itself.
+type ChainRef struct {
+	ID          int
+	ChainID     int
+	RefType     string // "decision", "track", "digest"
+	DigestID    int    // for decisions/digests: digest ID (0 if track)
+	DecisionIdx int    // for decisions: index in digest.decisions[] (0 otherwise)
+	TrackID     int    // for tracks: track ID (0 otherwise)
+	ChannelID   string
+	Timestamp   float64 // Unix timestamp
+	CreatedAt   string
+}
+
+// UserInteraction stores interaction metrics between two users for a time window.
+type UserInteraction struct {
+	UserA             string  // current user
+	UserB             string  // the other person
+	PeriodFrom        float64 // window start (Unix ts)
+	PeriodTo          float64 // window end (Unix ts)
+	MessagesTo        int     // A's messages in channels where B is active
+	MessagesFrom      int     // B's messages in channels where A is active
+	SharedChannels    int     // channels where both posted
+	ThreadRepliesTo   int     // A replied to B's threads
+	ThreadRepliesFrom int     // B replied to A's threads
+	SharedChannelIDs  string  // JSON array of shared channel IDs
+	DMMessagesTo      int     // A's DM messages to B
+	DMMessagesFrom    int     // B's DM messages to A
+	MentionsTo        int     // A @-mentioned B
+	MentionsFrom      int     // B @-mentioned A
+	ReactionsTo       int     // A reacted to B's messages
+	ReactionsFrom     int     // B reacted to A's messages
+	InteractionScore  float64 // weighted composite score
+	ConnectionType    string  // peer, i_depend, depends_on_me, weak
+}
+
+// CommunicationGuide represents an AI-generated communication coaching guide for a user.
+type CommunicationGuide struct {
+	ID                       int
+	UserID                   string
+	PeriodFrom               float64
+	PeriodTo                 float64
+	MessageCount             int
+	ChannelsActive           int
+	ThreadsInitiated         int
+	ThreadsReplied           int
+	AvgMessageLength         float64
+	ActiveHoursJSON          string // JSON: {"9":12,"10":8,...}
+	VolumeChangePct          float64
+	Summary                  string // how to communicate effectively with this person
+	CommunicationPreferences string // preferred style, format, timing
+	AvailabilityPatterns     string // when they are most responsive
+	DecisionProcess          string // how they make/participate in decisions
+	SituationalTactics       string // JSON array: if X happens, do Y
+	EffectiveApproaches      string // JSON array: what works well
+	Recommendations          string // JSON array: actionable tips
+	RelationshipContext      string // peer/report/manager dynamics
+	Model                    string
+	InputTokens              int
+	OutputTokens             int
+	CostUSD                  float64
+	PromptVersion            int
+	CreatedAt                string
+}
+
+// GuideSummary is a cross-user team communication health summary.
+type GuideSummary struct {
+	ID            int
+	PeriodFrom    float64
+	PeriodTo      float64
+	Summary       string // team communication health overview
+	Tips          string // JSON array: team-level tips
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	CostUSD       float64
+	PromptVersion int
+	CreatedAt     string
+}
+
+// PeopleCard is a unified per-user card combining analysis + guide data.
+// Generated by the REDUCE phase from situations in channel digests.
+type PeopleCard struct {
+	ID                  int
+	UserID              string
+	PeriodFrom          float64
+	PeriodTo            float64
+	MessageCount        int
+	ChannelsActive      int
+	ThreadsInitiated    int
+	ThreadsReplied      int
+	AvgMessageLength    float64
+	ActiveHoursJSON     string // JSON: {"9":12,"10":8,...}
+	VolumeChangePct     float64
+	Summary             string
+	CommunicationStyle  string // driver|collaborator|executor|observer|facilitator
+	DecisionRole        string // decision-maker|approver|contributor|observer|blocker
+	RedFlags            string // JSON array
+	Highlights          string // JSON array
+	Accomplishments     string // JSON array
+	CommunicationGuide  string // coaching paragraph (was how_to_communicate)
+	DecisionStyle       string // how they participate in decisions
+	Tactics             string // JSON array of "If X, then Y"
+	RelationshipContext string
+	Status              string // "ready" or "insufficient_data"
+	Model               string
+	InputTokens         int
+	OutputTokens        int
+	CostUSD             float64
+	PromptVersion       int
+	CreatedAt           string
+}
+
+// PeopleCardSummary is a cross-user team health summary for a time window.
+type PeopleCardSummary struct {
+	ID            int
+	PeriodFrom    float64
+	PeriodTo      float64
+	Summary       string // team communication health overview
+	Attention     string // JSON array: who needs attention and why
+	Tips          string // JSON array: team-level tips
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	CostUSD       float64
+	PromptVersion int
+	CreatedAt     string
+}
+
+// Briefing represents a daily personalized briefing for the user.
+type Briefing struct {
+	ID            int
+	WorkspaceID   string
+	UserID        string
+	Date          string // YYYY-MM-DD
+	Role          string
+	Attention     string // JSON array of AttentionItem
+	YourDay       string // JSON array of YourDayItem
+	WhatHappened  string // JSON array of WhatHappenedItem
+	TeamPulse     string // JSON array of TeamPulseItem
+	Coaching      string // JSON array of CoachingItem
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	CostUSD       float64
+	PromptVersion int
+	ReadAt        sql.NullString // NULL = unread, ISO8601 = when read
+	CreatedAt     string
+}
+
 // Prompt represents an editable AI prompt template.
 type Prompt struct {
-	ID        string // "digest.channel", "actionitems.extract", "analysis.user", etc.
+	ID        string // "digest.channel", "tracks.extract", "analysis.user", etc.
 	Template  string
 	Version   int
 	Language  string // "" = auto-detect, "en", "ru", etc.

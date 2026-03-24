@@ -58,3 +58,42 @@ func TestGeneratePermalink(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateDeeplink(t *testing.T) {
+	tests := []struct {
+		name      string
+		teamID    string
+		channelID string
+		ts        string
+		want      string
+	}{
+		{
+			name:      "channel only",
+			teamID:    "T0123ABC",
+			channelID: "C024BE91L",
+			ts:        "",
+			want:      "slack://channel?team=T0123ABC&id=C024BE91L",
+		},
+		{
+			name:      "message with timestamp",
+			teamID:    "T0123ABC",
+			channelID: "C024BE91L",
+			ts:        "1234567890.123456",
+			want:      "slack://channel?team=T0123ABC&id=C024BE91L&message=1234567890.123456",
+		},
+		{
+			name:      "dm channel",
+			teamID:    "T001",
+			channelID: "D0123ABC",
+			ts:        "1609459200.001200",
+			want:      "slack://channel?team=T001&id=D0123ABC&message=1609459200.001200",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GenerateDeeplink(tt.teamID, tt.channelID, tt.ts)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

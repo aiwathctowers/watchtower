@@ -8,18 +8,27 @@ final class SearchViewModel {
     var results: [SearchResult] = []
     var isSearching = false
     var errorMessage: String?
+    private(set) var workspaceTeamID: String?
 
     private let dbManager: DatabaseManager
     private var searchTask: Task<Void, Never>?
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+        self.workspaceTeamID = try? dbManager.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT id FROM workspace LIMIT 1")
+        }
+    }
+
+    func slackChannelURL(channelID: String) -> URL? {
+        guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)")
     }
 
     func search() {
         searchTask?.cancel()
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             results = []
             return
         }
@@ -32,7 +41,7 @@ final class SearchViewModel {
             self.isSearching = true
             do {
                 self.results = try await dbManager.dbPool.read { db in
-                    try SearchQueries.search(db, query: q)
+                    try SearchQueries.search(db, query: trimmed)
                 }
                 self.errorMessage = nil
             } catch {

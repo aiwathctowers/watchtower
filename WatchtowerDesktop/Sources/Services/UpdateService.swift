@@ -23,10 +23,12 @@ final class UpdateService {
         return false
     }
 
-    private static let repo = "vadimtrunov/watchtower"
+    private static let repo = "aiwatchtowers/watchtower"
     private static let lastCheckKey = "lastUpdateCheckDate"
     private static let cacheDir: URL = {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return FileManager.default.temporaryDirectory.appendingPathComponent("com.watchtower.desktop/updates", isDirectory: true)
+        }
         return caches.appendingPathComponent("com.watchtower.desktop/updates", isDirectory: true)
     }()
 
@@ -273,7 +275,7 @@ final class UpdateService {
         return (localURL, response)
     }
 
-    private nonisolated func runProcess(path: String, arguments: [String]) async throws -> Int32 {
+    nonisolated private func runProcess(path: String, arguments: [String]) async throws -> Int32 {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
@@ -296,10 +298,10 @@ final class UpdateService {
         let currentParts = parse(current)
 
         for i in 0..<max(newParts.count, currentParts.count) {
-            let n = i < newParts.count ? newParts[i] : 0
-            let c = i < currentParts.count ? currentParts[i] : 0
-            if n > c { return true }
-            if n < c { return false }
+            let nv = i < newParts.count ? newParts[i] : 0
+            let cv = i < currentParts.count ? currentParts[i] : 0
+            if nv > cv { return true }
+            if nv < cv { return false }
         }
         return false
     }

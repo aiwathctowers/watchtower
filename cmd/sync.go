@@ -16,14 +16,16 @@ import (
 	"time"
 
 	"encoding/json"
-	"watchtower/internal/actionitems"
-	"watchtower/internal/analysis"
+	"watchtower/internal/briefing"
+	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
+	"watchtower/internal/guide"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
+	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
 
 	"github.com/spf13/cobra"
@@ -118,12 +120,14 @@ func runSyncStop(cfg *config.Config) error {
 	// Poll until process exits (10s timeout).
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			daemon.RemovePID(pidPath)
-			fmt.Println("Daemon stopped.")
-			return nil //nolint:nilerr // err means process exited, which is the desired outcome
+		if err := syscall.Kill(pid, 0); err == nil {
+			// Process still alive, keep waiting
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
-		time.Sleep(200 * time.Millisecond)
+		daemon.RemovePID(pidPath)
+		fmt.Println("Daemon stopped.")
+		return nil
 	}
 	return fmt.Errorf("daemon (PID %d) did not exit within 10 seconds", pid)
 }
@@ -255,13 +259,21 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if syncFlagDaemon {
 		d := daemon.New(orch, cfg)
 		d.SetLogger(logger)
+		d.SetDB(database)
 		d.SetPIDPath(pidFilePath(cfg))
 		if cfg.Digest.Enabled {
-			gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+			gen, cleanupPool := cliPooledGenerator(cfg, logger)
+			defer cleanupPool()
 			pipe := digest.New(database, cfg, gen, logger)
+			chainsPipe := chains.New(database, cfg, gen, logger)
+			pipe.ChainLinker = chainsPipe
 			d.SetDigestPipeline(pipe)
-			d.SetAnalysisPipeline(analysis.New(database, cfg, gen, logger))
-			d.SetActionItemsPipeline(actionitems.New(database, cfg, gen, logger))
+			d.SetChainsPipeline(chainsPipe)
+			d.SetTracksPipeline(tracks.New(database, cfg, gen, logger))
+			d.SetPeoplePipeline(guide.New(database, cfg, gen, logger))
+			if cfg.Briefing.Enabled {
+				d.SetBriefingPipeline(briefing.New(database, cfg, gen, logger))
+			}
 		}
 		return d.Run(ctx)
 	}
@@ -327,6 +339,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if syncErr != nil {
 				return fmt.Errorf("sync failed: %w", syncErr)
 			}
+			// Skip post-sync pipelines in --progress-json mode: the desktop app
+			// runs them independently via BackgroundTaskManager after onboarding.
 			if !syncFlagProgressJSON {
 				runPostSyncPipelines(ctx, database, cfg, logger)
 			}
@@ -355,7 +369,7 @@ func printProgress(w io.Writer, p *sync.Progress, workspace string) {
 	}
 	output := p.Render(workspace)
 	fmt.Fprintln(w, output)
-	progressLines.Store(int32(strings.Count(output, "\n") + 1)) //nolint:gosec // safe conversion within expected range
+	progressLines.Store(int32(strings.Count(output, "\n") + 1))
 }
 
 func isTerminal(f *os.File) bool {
@@ -390,12 +404,16 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 	}
 
 	out := os.Stdout
-	gen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
+	var chainCtxForTracks string
+	gen, cleanup := cliPooledGenerator(cfg, logger)
+	defer cleanup()
 
-	// Digests
+	// Digests (with chains linked between channel digests and rollups)
 	fmt.Fprintln(out)
 	digestSpinner := ui.NewSpinner(out, "Generating digests...")
 	pipe := digest.New(database, cfg, gen, logger)
+	chainsPipe := chains.New(database, cfg, gen, logger)
+	pipe.ChainLinker = chainsPipe
 	pipe.OnProgress = func(done, total int, status string) {
 		digestSpinner.UpdateProgress(done, total, status)
 	}
@@ -413,34 +431,42 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		digestSpinner.Stop("No new digests needed")
 	}
 
-	// People analysis (independent, runs before action items)
-	analysisSpinner := ui.NewSpinner(out, "Running people analysis...")
-	analysisPipe := analysis.New(database, cfg, gen, logger)
-	analysisPipe.OnProgress = func(done, total int, status string) {
-		analysisSpinner.UpdateProgress(done, total, status)
-	}
-	pn, err := analysisPipe.Run(ctx)
-	if err != nil {
-		analysisSpinner.Stop(fmt.Sprintf("People analysis error: %v", err))
-	} else if pn > 0 {
-		analysisSpinner.Stop(fmt.Sprintf("Analyzed %d user(s)", pn))
-	} else {
-		analysisSpinner.Stop("No new analyses needed")
+	// Inject chain context into tracks pipeline for chain-aware extraction.
+	if chainCtx, err := chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
+		chainCtxForTracks = chainCtx
 	}
 
-	// Action items (depends on digests for related_digest_ids)
-	actionSpinner := ui.NewSpinner(out, "Extracting action items...")
-	actionPipe := actionitems.New(database, cfg, gen, logger)
-	actionPipe.OnProgress = func(done, total int, status string) {
-		actionSpinner.UpdateProgress(done, total, status)
+	// People cards (REDUCE phase: reads signals from channel digests)
+	{
+		peopleSpinner := ui.NewSpinner(out, "Generating people cards...")
+		peoplePipe := guide.New(database, cfg, gen, logger)
+		peoplePipe.OnProgress = func(done, total int, status string) {
+			peopleSpinner.UpdateProgress(done, total, status)
+		}
+		pn, err := peoplePipe.Run(ctx)
+		if err != nil {
+			peopleSpinner.Stop(fmt.Sprintf("People cards error: %v", err))
+		} else if pn > 0 {
+			peopleSpinner.Stop(fmt.Sprintf("Generated %d people card(s)", pn))
+		} else {
+			peopleSpinner.Stop("No new people cards needed")
+		}
 	}
-	an, err := actionPipe.Run(ctx)
+
+	// Tracks (depends on digests + chains for context)
+	trackSpinner := ui.NewSpinner(out, "Extracting tracks...")
+	trackPipe := tracks.New(database, cfg, gen, logger)
+	trackPipe.ChainContext = chainCtxForTracks
+	trackPipe.OnProgress = func(done, total int, status string) {
+		trackSpinner.UpdateProgress(done, total, status)
+	}
+	an, err := trackPipe.Run(ctx)
 	if err != nil {
-		actionSpinner.Stop(fmt.Sprintf("Action items error: %v", err))
+		trackSpinner.Stop(fmt.Sprintf("Tracks error: %v", err))
 	} else if an > 0 {
-		actionSpinner.Stop(fmt.Sprintf("Extracted %d action item(s)", an))
+		trackSpinner.Stop(fmt.Sprintf("Extracted %d track(s)", an))
 	} else {
-		actionSpinner.Stop("No new action items")
+		trackSpinner.Stop("No new tracks")
 	}
 }
 

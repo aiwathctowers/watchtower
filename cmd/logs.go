@@ -46,7 +46,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	logPath := syncLogFilePath(cfg)
 
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		return fmt.Errorf("no log file found at %s\nRun 'watchtower sync' first to generate logs.", logPath)
+		return fmt.Errorf("no log file found at %s; run 'watchtower sync' first to generate logs", logPath)
 	}
 
 	if err := printLastLines(cmd.OutOrStdout(), logPath, logsFlagLines); err != nil {

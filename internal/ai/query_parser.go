@@ -1,3 +1,4 @@
+// Package ai provides AI/Claude integration for querying and analyzing workspace data.
 package ai
 
 import (

@@ -288,6 +288,207 @@ func TestGetChannelListWithFilter(t *testing.T) {
 	assert.Equal(t, "secret", items[0].Name)
 }
 
+func TestGetChannelListWithArchivedFilter(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C001", Name: "active-ch", Type: "public", IsArchived: false}))
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C002", Name: "archived-ch", Type: "public", IsArchived: true}))
+
+	// Filter for non-archived
+	f := false
+	items, err := db.GetChannelList(ChannelFilter{IsArchived: &f}, ChannelSortName)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "active-ch", items[0].Name)
+
+	// Filter for archived
+	tr := true
+	items, err = db.GetChannelList(ChannelFilter{IsArchived: &tr}, ChannelSortName)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "archived-ch", items[0].Name)
+}
+
+func TestGetChannelListWithMemberFilter(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C001", Name: "joined", Type: "public", IsMember: true}))
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C002", Name: "not-joined", Type: "public", IsMember: false}))
+
+	// Members only
+	tr := true
+	items, err := db.GetChannelList(ChannelFilter{IsMember: &tr}, ChannelSortName)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "joined", items[0].Name)
+
+	// Non-members only
+	f := false
+	items, err = db.GetChannelList(ChannelFilter{IsMember: &f}, ChannelSortName)
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "not-joined", items[0].Name)
+}
+
+func TestUpdateChannelLastRead(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C001", Name: "general", Type: "public"}))
+
+	// Set last_read
+	require.NoError(t, db.UpdateChannelLastRead("C001", "1700000100.000001"))
+	got, err := db.GetChannelByID("C001")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000100.000001", got.LastRead)
+
+	// Only advances forward
+	require.NoError(t, db.UpdateChannelLastRead("C001", "1700000050.000001"))
+	got, err = db.GetChannelByID("C001")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000100.000001", got.LastRead)
+
+	// Advances to newer
+	require.NoError(t, db.UpdateChannelLastRead("C001", "1700000200.000001"))
+	got, err = db.GetChannelByID("C001")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000200.000001", got.LastRead)
+}
+
+func TestUpsertChannelLastReadPreserved(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Upsert with last_read
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C001", Name: "general", Type: "public", LastRead: "1700000100.000001"}))
+	got, err := db.GetChannelByID("C001")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000100.000001", got.LastRead)
+
+	// Upsert without last_read should preserve existing
+	require.NoError(t, db.UpsertChannel(Channel{ID: "C001", Name: "general", Type: "public"}))
+	got, err = db.GetChannelByID("C001")
+	require.NoError(t, err)
+	assert.Equal(t, "1700000100.000001", got.LastRead)
+}
+
+func TestAutoMarkReadFromSlack(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Setup: channel with last_read at ts 1700000300
+	require.NoError(t, db.UpsertChannel(Channel{
+		ID: "C001", Name: "general", Type: "public",
+		LastRead: "1700000300.000000",
+	}))
+	require.NoError(t, db.UpsertChannel(Channel{
+		ID: "C002", Name: "random", Type: "public",
+		LastRead: "1700000100.000000",
+	}))
+
+	// Channel digest for C001 with period_to = 1700000200 — should be marked read
+	// (last_read 1700000300 >= period_to 1700000200)
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000000, PeriodTo: 1700000200,
+		Summary: "digest 1",
+	})
+	require.NoError(t, err)
+
+	// Channel digest for C001 with period_to = 1700000400 — should NOT be marked read
+	// (last_read 1700000300 < period_to 1700000400)
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000200, PeriodTo: 1700000400,
+		Summary: "digest 2",
+	})
+	require.NoError(t, err)
+
+	// Channel digest for C002 with period_to = 1700000050 — should be marked read
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "C002", Type: "channel",
+		PeriodFrom: 1700000000, PeriodTo: 1700000050,
+		Summary: "digest 3",
+	})
+	require.NoError(t, err)
+
+	// Daily rollup covering both channel digests' period
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "", Type: "daily",
+		PeriodFrom: 1700000000, PeriodTo: 1700000400,
+		Summary: "daily rollup",
+	})
+	require.NoError(t, err)
+
+	// Run auto-mark
+	digestsMarked, _, err := db.AutoMarkReadFromSlack()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), digestsMarked) // 2 channel digests marked
+
+	// Verify: digest 1 (C001, period_to=200) should be read
+	digests, err := db.GetDigests(DigestFilter{ChannelID: "C001", Type: "channel"})
+	require.NoError(t, err)
+	require.Len(t, digests, 2)
+	// Newest first
+	assert.False(t, digests[0].ReadAt.Valid, "digest with period_to=400 should be unread")
+	assert.True(t, digests[1].ReadAt.Valid, "digest with period_to=200 should be read")
+
+	// Verify: digest 3 (C002, period_to=50) should be read
+	digests, err = db.GetDigests(DigestFilter{ChannelID: "C002", Type: "channel"})
+	require.NoError(t, err)
+	require.Len(t, digests, 1)
+	assert.True(t, digests[0].ReadAt.Valid, "digest for C002 should be read")
+
+	// Verify: daily rollup should NOT be read (C001 digest 2 is still unread)
+	digests, err = db.GetDigests(DigestFilter{Type: "daily"})
+	require.NoError(t, err)
+	require.Len(t, digests, 1)
+	assert.False(t, digests[0].ReadAt.Valid, "daily rollup should be unread since not all channel digests are read")
+}
+
+func TestAutoMarkReadFromSlack_DailyMarkedWhenAllChannelDigestsRead(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// One channel, all read in Slack
+	require.NoError(t, db.UpsertChannel(Channel{
+		ID: "C001", Name: "general", Type: "public",
+		LastRead: "1700000500.000000",
+	}))
+
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000000, PeriodTo: 1700000200,
+		Summary: "ch digest",
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertDigest(Digest{
+		ChannelID: "", Type: "daily",
+		PeriodFrom: 1700000000, PeriodTo: 1700000200,
+		Summary: "daily",
+	})
+	require.NoError(t, err)
+
+	digestsMarked, _, err := db.AutoMarkReadFromSlack()
+	require.NoError(t, err)
+	// 1 channel digest + 1 daily = 2
+	assert.Equal(t, int64(2), digestsMarked)
+
+	digests, err := db.GetDigests(DigestFilter{Type: "daily"})
+	require.NoError(t, err)
+	require.Len(t, digests, 1)
+	assert.True(t, digests[0].ReadAt.Valid, "daily should be marked read when all channel digests are read")
+}
+
 func TestGetChannelListWatchedStatus(t *testing.T) {
 	db, err := Open(":memory:")
 	require.NoError(t, err)

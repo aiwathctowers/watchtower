@@ -11,7 +11,14 @@ struct MessageRow: View {
     @State private var userName: String?
     @State private var isHovered = false
 
-    init(message: Message, dbManager: DatabaseManager?, isGrouped: Bool = false, onThreadTap: (() -> Void)? = nil, customEmojiMap: [String: String] = [:], emojiImageCache: EmojiImageCache? = nil) {
+    init(
+        message: Message,
+        dbManager: DatabaseManager?,
+        isGrouped: Bool = false,
+        onThreadTap: (() -> Void)? = nil,
+        customEmojiMap: [String: String] = [:],
+        emojiImageCache: EmojiImageCache? = nil
+    ) {
         self.message = message
         self.dbManager = dbManager
         self.isGrouped = isGrouped

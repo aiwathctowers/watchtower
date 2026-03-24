@@ -44,7 +44,7 @@ workspaces:
   test-ws:
     slack_token: "xoxp-test-token"
 `
-	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
+	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o600))
 
 	// Manually open the DB and populate it with some data
 	database, err := db.Open(dbPath)
@@ -106,9 +106,7 @@ workspaces:
 	database2.Close()
 
 	// Override HOME so DBPath() resolves to our temp dir
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("HOME", homeDir)
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
@@ -138,7 +136,7 @@ workspaces:
   fresh-ws:
     slack_token: "xoxp-test"
 `
-	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o644))
+	require.NoError(t, os.WriteFile(configPath, []byte(configYAML), 0o600))
 
 	// Create empty DB
 	homeDir := tmpDir
@@ -150,9 +148,7 @@ workspaces:
 	require.NoError(t, err)
 	database.Close()
 
-	oldHome := os.Getenv("HOME")
-	os.Setenv("HOME", homeDir)
-	defer os.Setenv("HOME", oldHome)
+	t.Setenv("HOME", homeDir)
 
 	oldFlagConfig := flagConfig
 	flagConfig = configPath
@@ -176,6 +172,6 @@ func TestDbFileSize(t *testing.T) {
 	assert.Equal(t, int64(0), dbFileSize("/nonexistent/file"))
 
 	tmpFile := filepath.Join(t.TempDir(), "test.db")
-	require.NoError(t, os.WriteFile(tmpFile, []byte("test data"), 0o644))
+	require.NoError(t, os.WriteFile(tmpFile, []byte("test data"), 0o600))
 	assert.Greater(t, dbFileSize(tmpFile), int64(0))
 }

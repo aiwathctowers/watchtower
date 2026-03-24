@@ -30,18 +30,18 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         Task { @MainActor in
-            let appState = NotificationDelegate.sharedAppState
+            let appState = Self.sharedAppState
             switch type {
             case "decision":
                 if let digestID = userInfo["digestId"] as? Int {
                     appState?.navigateToDigest(digestID)
                 } else {
-                    appState?.selectedDestination = .digests
+                    appState?.selectedDestination = .chains
                 }
-            case "action_item", "action_item_update":
-                appState?.selectedDestination = .actions
+            case "track", "track_update":
+                appState?.selectedDestination = .tracks
             case "daily_summary":
-                appState?.selectedDestination = .digests
+                appState?.selectedDestination = .chains
             default:
                 break
             }
@@ -73,8 +73,20 @@ struct WatchtowerApp: App {
                     NotificationDelegate.sharedAppState = appState
                     appState.initialize()
                 }
+                .onOpenURL { url in
+                    // Handle watchtower-auth:// callback — just bring app to front
+                    if url.scheme == "watchtower-auth" {
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                    }
+                }
         }
         .defaultSize(width: 1200, height: 800)
+
+        Window("Pipeline Progress", id: "progress-detail") {
+            ProgressDetailView()
+                .environment(appState)
+        }
+        .defaultSize(width: 600, height: 500)
 
         Settings {
             SettingsView()

@@ -9,20 +9,21 @@ struct SettingsView: View {
                 .environment(appState)
                 .tabItem { Label("General", systemImage: "gear") }
 
+            ProfileSettings()
+                .environment(appState)
+                .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+
             NotificationSettings()
                 .tabItem { Label("Notifications", systemImage: "bell") }
 
             DaemonSettings()
                 .tabItem { Label("Daemon", systemImage: "arrow.triangle.2.circlepath") }
 
-            UsageSettings()
-                .environment(appState)
-                .tabItem { Label("Usage", systemImage: "chart.bar") }
-
             LogsSettings()
                 .tabItem { Label("Logs", systemImage: "doc.text") }
 
             DataSettings()
+                .environment(appState)
                 .tabItem { Label("Data", systemImage: "externaldrive") }
         }
         .frame(width: 700, height: 550)
@@ -41,101 +42,11 @@ struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Section("Workspace") {
-                LabeledContent("Active Workspace") {
-                    Text(config.activeWorkspace ?? "None")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Sync") {
-                TextField("Poll Interval", text: Binding(
-                    get: { config.syncInterval ?? "" },
-                    set: { config.syncInterval = $0 }
-                ), prompt: Text("15m"))
-                .help("e.g. 15m, 1h, 30s")
-
-                TextField("Workers", value: Binding(
-                    get: { config.syncWorkers },
-                    set: { config.syncWorkers = $0 }
-                ), format: .number, prompt: Text("1"))
-
-                TextField("Initial History Days", value: Binding(
-                    get: { config.initialHistoryDays },
-                    set: { config.initialHistoryDays = $0 }
-                ), format: .number, prompt: Text("30"))
-
-                Toggle("Sync Threads", isOn: $config.syncThreads)
-            }
-
-            Section("Digest") {
-                Toggle("Enabled", isOn: $config.digestEnabled)
-
-                TextField("Model", text: Binding(
-                    get: { config.digestModel ?? "" },
-                    set: { config.digestModel = $0.isEmpty ? nil : $0 }
-                ), prompt: Text("claude-haiku-4-5-20251001"))
-
-                TextField("Min Messages", value: Binding(
-                    get: { config.digestMinMessages },
-                    set: { config.digestMinMessages = $0 }
-                ), format: .number, prompt: Text("5"))
-
-                TextField("Language", text: Binding(
-                    get: { config.digestLanguage ?? "" },
-                    set: { config.digestLanguage = $0.isEmpty ? nil : $0 }
-                ), prompt: Text("English"))
-            }
-
-            Section("AI") {
-                TextField("Model", text: Binding(
-                    get: { config.aiModel ?? "" },
-                    set: { config.aiModel = $0.isEmpty ? nil : $0 }
-                ), prompt: Text("claude-sonnet-4-6"))
-
-                HStack {
-                    TextField("Claude CLI Path", text: Binding(
-                        get: { config.claudePath ?? "" },
-                        set: { config.claudePath = $0.isEmpty ? nil : $0 }
-                    ), prompt: Text("auto-detect"))
-
-                    if let path = Constants.findClaudePath() {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .help("Found: \(path)")
-                    } else {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                            .help("Claude CLI not found")
-                    }
-                }
-                .help("Override auto-detection. Run 'which claude' in terminal to find the path.")
-
-                HStack {
-                    Button {
-                        testClaudeConnection()
-                    } label: {
-                        HStack(spacing: 4) {
-                            if connectionTestRunning {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                            Text(connectionTestRunning ? "Testing..." : "Test Connection")
-                        }
-                    }
-                    .disabled(connectionTestRunning)
-
-                    if let result = connectionTestResult {
-                        Image(systemName: connectionTestSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundStyle(connectionTestSuccess ? .green : .red)
-                        Text(result)
-                            .font(.caption)
-                            .foregroundStyle(connectionTestSuccess ? .green : .red)
-                            .lineLimit(3)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
+            workspaceSection
+            syncSection
+            digestSection
+            briefingSection
+            aiSection
 
             if let error = config.parseError {
                 Section("Parse Error") {
@@ -149,55 +60,226 @@ struct GeneralSettings: View {
                 }
             }
 
+            usageLinkSection
             updateSection
         }
         .formStyle(.grouped)
         .padding(.horizontal)
         .padding(.top, 4)
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                Divider()
-                HStack {
-                    Button("Open in Editor") {
-                        config.openInEditor()
-                    }
+            bottomBar
+        }
+    }
 
-                    Button("Reveal in Finder") {
-                        config.revealInFinder()
-                    }
-
-                    Spacer()
-
-                    if showSaved {
-                        Text("Saved")
-                            .foregroundStyle(.green)
-                            .transition(.opacity)
-                    }
-
-                    Button("Reload") {
-                        config.reload()
-                        saveError = nil
-                    }
-
-                    Button("Save") {
-                        do {
-                            try config.save()
-                            saveError = nil
-                            withAnimation { showSaved = true }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                withAnimation { showSaved = false }
-                            }
-                        } catch {
-                            saveError = error.localizedDescription
-                        }
-                    }
-                    .keyboardShortcut("s", modifiers: .command)
-                    .buttonStyle(.borderedProminent)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
+    private var workspaceSection: some View {
+        Section("Workspace") {
+            LabeledContent("Active Workspace") {
+                Text(config.activeWorkspace ?? "None")
+                    .foregroundStyle(.secondary)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private var syncSection: some View {
+        Section("Sync") {
+            TextField(
+                "Poll Interval",
+                text: Binding(
+                    get: { config.syncInterval ?? "" },
+                    set: { config.syncInterval = $0 }
+                ),
+                prompt: Text("15m")
+            )
+            .help("e.g. 15m, 1h, 30s")
+
+            TextField(
+                "Workers",
+                value: Binding(
+                    get: { config.syncWorkers },
+                    set: { config.syncWorkers = $0 }
+                ),
+                format: .number,
+                prompt: Text("1")
+            )
+
+            TextField(
+                "Initial History Days",
+                value: Binding(
+                    get: { config.initialHistoryDays },
+                    set: { config.initialHistoryDays = $0 }
+                ),
+                format: .number,
+                prompt: Text("30")
+            )
+
+            Toggle("Sync Threads", isOn: $config.syncThreads)
+        }
+    }
+
+    private var digestSection: some View {
+        Section("Digest") {
+            Toggle("Enabled", isOn: $config.digestEnabled)
+
+            TextField(
+                "Model",
+                text: Binding(
+                    get: { config.digestModel ?? "" },
+                    set: { config.digestModel = $0.isEmpty ? nil : $0 }
+                ),
+                prompt: Text("claude-haiku-4-5-20251001")
+            )
+
+            TextField(
+                "Min Messages",
+                value: Binding(
+                    get: { config.digestMinMessages },
+                    set: { config.digestMinMessages = $0 }
+                ),
+                format: .number,
+                prompt: Text("5")
+            )
+
+            TextField(
+                "Language",
+                text: Binding(
+                    get: { config.digestLanguage ?? "" },
+                    set: { config.digestLanguage = $0.isEmpty ? nil : $0 }
+                ),
+                prompt: Text("English")
+            )
+        }
+    }
+
+    private var briefingSection: some View {
+        Section("Briefing") {
+            Picker(
+                "Briefing Hour",
+                selection: $config.briefingHour
+            ) {
+                ForEach(0..<24, id: \.self) { hour in
+                    Text(String(format: "%02d:00", hour)).tag(hour)
+                }
+            }
+            .help("Hour of day when daily briefing should be generated (0-23)")
+        }
+    }
+
+    private var aiSection: some View {
+        Section("AI") {
+            TextField(
+                "Model",
+                text: Binding(
+                    get: { config.aiModel ?? "" },
+                    set: { config.aiModel = $0.isEmpty ? nil : $0 }
+                ),
+                prompt: Text("claude-sonnet-4-6")
+            )
+
+            HStack {
+                TextField(
+                    "Claude CLI Path",
+                    text: Binding(
+                        get: { config.claudePath ?? "" },
+                        set: { config.claudePath = $0.isEmpty ? nil : $0 }
+                    ),
+                    prompt: Text("auto-detect")
+                )
+
+                if let path = Constants.findClaudePath() {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .help("Found: \(path)")
+                } else {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .help("Claude CLI not found")
+                }
+            }
+            .help("Override auto-detection. Run 'which claude' in terminal to find the path.")
+
+            HStack {
+                Button {
+                    testClaudeConnection()
+                } label: {
+                    HStack(spacing: 4) {
+                        if connectionTestRunning {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(connectionTestRunning ? "Testing..." : "Test Connection")
+                    }
+                }
+                .disabled(connectionTestRunning)
+
+                if let result = connectionTestResult {
+                    Image(systemName: connectionTestSuccess ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(connectionTestSuccess ? .green : .red)
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(connectionTestSuccess ? .green : .red)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private var bottomBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack {
+                Button("Open in Editor") {
+                    config.openInEditor()
+                }
+
+                Button("Reveal in Finder") {
+                    config.revealInFinder()
+                }
+
+                Spacer()
+
+                if showSaved {
+                    Text("Saved")
+                        .foregroundStyle(.green)
+                        .transition(.opacity)
+                }
+
+                Button("Reload") {
+                    config.reload()
+                    saveError = nil
+                }
+
+                Button("Save") {
+                    do {
+                        try config.save()
+                        saveError = nil
+                        withAnimation { showSaved = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            withAnimation { showSaved = false }
+                        }
+                    } catch {
+                        saveError = error.localizedDescription
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Usage Link
+
+    private var usageLinkSection: some View {
+        Section {
+            Button {
+                NSApp.keyWindow?.close()
+                appState.selectedDestination = .usage
+            } label: {
+                Label("View Usage & Pipeline Progress", systemImage: "chart.bar")
+            }
         }
     }
 
@@ -232,7 +314,7 @@ struct GeneralSettings: View {
                         .foregroundStyle(.secondary)
                 }
 
-            case .available(let version, let notes, _):
+            case let .available(version, notes, _):
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Label("Version \(version) available", systemImage: "arrow.down.circle.fill")
@@ -303,7 +385,7 @@ struct GeneralSettings: View {
         connectionTestRunning = true
         connectionTestResult = nil
 
-        let model = (config.aiModel ?? "").isEmpty ? "claude-sonnet-4-6" : config.aiModel!
+        let model = (config.aiModel ?? "").isEmpty ? "claude-sonnet-4-6" : (config.aiModel ?? "claude-sonnet-4-6")
 
         Task.detached {
             let process = Process()

@@ -10,7 +10,11 @@ final class DashboardViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -78,7 +82,11 @@ final class DigestViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -122,8 +130,11 @@ final class DigestViewModelTests: XCTestCase {
     func testDecisionEntries() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertChannel(db, id: "C001", name: "general")
-            try TestDatabase.insertDigest(db, channelID: "C001",
-                                          decisions: #"[{"text":"Use Go","by":"Alice","importance":"high"},{"text":"Deploy Friday"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C001",
+                decisions: #"[{"text":"Use Go","by":"Alice","importance":"high"},{"text":"Deploy Friday"}]"#
+            )
         }
 
         let vm = DigestViewModel(dbManager: dbManager)
@@ -184,14 +195,13 @@ final class DigestViewModelTests: XCTestCase {
         let vm = DigestViewModel(dbManager: dbManager)
         vm.load()
 
-        XCTAssertEqual(vm.slackChannelURL(channelID: "C001")?.absoluteString,
-                       "https://acme.slack.com/archives/C001")
+        XCTAssertEqual(vm.slackChannelURL(channelID: "C001")?.absoluteString, "slack://channel?team=T001&id=C001")
     }
 
     @MainActor
-    func testSlackChannelURLNilWithoutDomain() throws {
+    func testSlackChannelURLNilWithoutTeamID() throws {
         try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db, domain: "")
+            try TestDatabase.insertWorkspace(db, id: "", domain: "")
             try TestDatabase.insertDigest(db)
         }
 
@@ -212,7 +222,7 @@ final class DigestViewModelTests: XCTestCase {
         vm.load()
 
         let url = vm.slackMessageURL(channelID: "C001", messageTS: "1740577800.000100")
-        XCTAssertEqual(url?.absoluteString, "https://acme.slack.com/archives/C001/p1740577800000100")
+        XCTAssertEqual(url?.absoluteString, "slack://channel?team=T001&id=C001&message=1740577800.000100")
     }
 
     @MainActor
@@ -228,7 +238,7 @@ final class DigestViewModelTests: XCTestCase {
         let vm = DigestViewModel(dbManager: dbManager)
         vm.load()
 
-        let dailyDigest = vm.digests.first { $0.type == "daily" }!
+        let dailyDigest = try XCTUnwrap(vm.digests.first { $0.type == "daily" })
         let contributing = vm.contributingChannels(for: dailyDigest)
         XCTAssertEqual(contributing.count, 2)
         XCTAssertTrue(contributing.contains { $0.name == "general" })
@@ -276,7 +286,11 @@ final class PeopleViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -289,8 +303,8 @@ final class PeopleViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertUser(db, id: "U001", name: "alice", displayName: "Alice")
             try TestDatabase.insertUser(db, id: "U002", name: "bob", displayName: "Bob")
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
-            try TestDatabase.insertUserAnalysis(db, userID: "U002", periodFrom: 100, periodTo: 200, messageCount: 30)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
+            try TestDatabase.insertPeopleCard(db, userID: "U002", periodFrom: 100, periodTo: 200, messageCount: 30)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
@@ -298,8 +312,8 @@ final class PeopleViewModelTests: XCTestCase {
 
         XCTAssertNil(vm.errorMessage, "load() error: \(vm.errorMessage ?? "")")
         XCTAssertFalse(vm.availableWindows.isEmpty, "no windows found")
-        XCTAssertEqual(vm.analyses.count, 2)
-        XCTAssertEqual(vm.analyses[0].userID, "U001")
+        XCTAssertEqual(vm.cards.count, 2)
+        XCTAssertEqual(vm.cards[0].userID, "U001")
         XCTAssertEqual(vm.availableWindows.count, 1)
         XCTAssertEqual(vm.userNameCache["U001"], "Alice")
         XCTAssertEqual(vm.userNameCache["U002"], "Bob")
@@ -311,7 +325,7 @@ final class PeopleViewModelTests: XCTestCase {
         let vm = PeopleViewModel(dbManager: dbManager)
         vm.load()
 
-        XCTAssertTrue(vm.analyses.isEmpty)
+        XCTAssertTrue(vm.cards.isEmpty)
         XCTAssertTrue(vm.availableWindows.isEmpty)
         XCTAssertNil(vm.errorMessage)
     }
@@ -319,20 +333,20 @@ final class PeopleViewModelTests: XCTestCase {
     @MainActor
     func testLoadWindow() throws {
         try dbManager.dbPool.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 200, periodTo: 300, messageCount: 30)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 200, periodTo: 300, messageCount: 30)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
         vm.load()
 
-        XCTAssertEqual(vm.analyses.count, 1)
-        XCTAssertEqual(vm.analyses[0].periodFrom, 200)
+        XCTAssertEqual(vm.cards.count, 1)
+        XCTAssertEqual(vm.cards[0].periodFrom, 200)
 
         vm.loadWindow(at: 1)
         XCTAssertEqual(vm.selectedWindow, 1)
-        XCTAssertEqual(vm.analyses.count, 1)
-        XCTAssertEqual(vm.analyses[0].periodFrom, 100)
+        XCTAssertEqual(vm.cards.count, 1)
+        XCTAssertEqual(vm.cards[0].periodFrom, 100)
     }
 
     @MainActor
@@ -348,7 +362,7 @@ final class PeopleViewModelTests: XCTestCase {
     func testUserName() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertUser(db, id: "U001", displayName: "Alice")
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
@@ -361,7 +375,7 @@ final class PeopleViewModelTests: XCTestCase {
     @MainActor
     func testCurrentWindowLabel() throws {
         try dbManager.dbPool.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 1700000000, periodTo: 1700604800)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 1700000000, periodTo: 1700604800)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
@@ -383,12 +397,9 @@ final class PeopleViewModelTests: XCTestCase {
     @MainActor
     func testRedFlagCount() throws {
         try dbManager.dbPool.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["Issue"]"#)
-            try TestDatabase.insertUserAnalysis(db, userID: "U002", periodFrom: 100, periodTo: 200,
-                                                 redFlags: "[]")
-            try TestDatabase.insertUserAnalysis(db, userID: "U003", periodFrom: 100, periodTo: 200,
-                                                 redFlags: #"["A","B"]"#)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200, redFlags: #"["Issue"]"#)
+            try TestDatabase.insertPeopleCard(db, userID: "U002", periodFrom: 100, periodTo: 200, redFlags: "[]")
+            try TestDatabase.insertPeopleCard(db, userID: "U003", periodFrom: 100, periodTo: 200, redFlags: #"["A","B"]"#)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
@@ -398,15 +409,15 @@ final class PeopleViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUserHistory() throws {
+    func testCardHistory() throws {
         try dbManager.dbPool.write { db in
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 200, periodTo: 300, messageCount: 30)
-            try TestDatabase.insertUserAnalysis(db, userID: "U002", periodFrom: 100, periodTo: 200, messageCount: 10)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200, messageCount: 50)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 200, periodTo: 300, messageCount: 30)
+            try TestDatabase.insertPeopleCard(db, userID: "U002", periodFrom: 100, periodTo: 200, messageCount: 10)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
-        let history = vm.userHistory(userID: "U001")
+        let history = vm.cardHistory(userID: "U001")
 
         XCTAssertEqual(history.count, 2)
         XCTAssertTrue(history.allSatisfy { $0.userID == "U001" })
@@ -417,7 +428,7 @@ final class PeopleViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertUser(db, id: "U001", name: "alice", displayName: "Alice Wonder")
             try TestDatabase.insertUser(db, id: "U002", name: "bob", displayName: "")
-            try TestDatabase.insertUserAnalysis(db, userID: "U001", periodFrom: 100, periodTo: 200)
+            try TestDatabase.insertPeopleCard(db, userID: "U001", periodFrom: 100, periodTo: 200)
         }
 
         let vm = PeopleViewModel(dbManager: dbManager)
@@ -436,7 +447,11 @@ final class ChatViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -449,7 +464,7 @@ final class ChatViewModelTests: XCTestCase {
         let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
         vm.messages = [
             ChatMessage(id: UUID(), role: .user, text: "Hi", timestamp: Date(), isStreaming: false),
-            ChatMessage(id: UUID(), role: .assistant, text: "Hello!", timestamp: Date(), isStreaming: false),
+            ChatMessage(id: UUID(), role: .assistant, text: "Hello!", timestamp: Date(), isStreaming: false)
         ]
         vm.newChat()
 
@@ -459,17 +474,17 @@ final class ChatViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testCancelStream() {
+    func testCancelStream() throws {
         let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
         vm.isStreaming = true
         vm.messages = [
-            ChatMessage(id: UUID(), role: .assistant, text: "Partial...", timestamp: Date(), isStreaming: true),
+            ChatMessage(id: UUID(), role: .assistant, text: "Partial...", timestamp: Date(), isStreaming: true)
         ]
 
         vm.cancelStream()
 
         XCTAssertFalse(vm.isStreaming)
-        XCTAssertFalse(vm.messages.last!.isStreaming)
+        XCTAssertFalse(try XCTUnwrap(vm.messages.last).isStreaming)
     }
 
     @MainActor
@@ -569,7 +584,11 @@ final class SearchViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -639,15 +658,19 @@ final class SearchViewModelTests: XCTestCase {
     }
 }
 
-// MARK: - ActionItemsViewModel
+// MARK: - TracksViewModel
 
-final class ActionItemsViewModelTests: XCTestCase {
+final class TracksViewModelTests: XCTestCase {
     private var dbManager: DatabaseManager!
     private var dbPath: String!
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -656,15 +679,15 @@ final class ActionItemsViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadActionItems() throws {
+    func testLoadTracks() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db, domain: "acme")
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Fix the bug", status: "inbox", priority: "high")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Write docs", status: "inbox", priority: "low")
+            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Fix the bug", status: "inbox", priority: "high")
+            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Write docs", status: "inbox", priority: "low")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
         XCTAssertNil(vm.errorMessage, "load() error: \(vm.errorMessage ?? "")")
@@ -679,7 +702,7 @@ final class ActionItemsViewModelTests: XCTestCase {
 
     @MainActor
     func testLoadEmptyDB() {
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
         XCTAssertTrue(vm.items.isEmpty)
@@ -692,12 +715,20 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "Open task", status: "inbox")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Done task", status: "done",
-                                               priority: "medium", periodFrom: 1700100000, periodTo: 1700200000)
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Open task", status: "inbox")
+            try TestDatabase.insertTrack(
+                db,
+                channelID: "C001",
+                assigneeUserID: "U001",
+                text: "Done task",
+                status: "done",
+                priority: "medium",
+                periodFrom: 1700100000,
+                periodTo: 1700200000
+            )
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = "done"
         vm.load()
 
@@ -710,12 +741,19 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "High", priority: "high")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Low", priority: "low",
-                                               periodFrom: 1700100000, periodTo: 1700200000)
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "High", priority: "high")
+            try TestDatabase.insertTrack(
+                db,
+                channelID: "C001",
+                assigneeUserID: "U001",
+                text: "Low",
+                priority: "low",
+                periodFrom: 1700100000,
+                periodTo: 1700200000
+            )
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.priorityFilter = "high"
         vm.load()
@@ -729,10 +767,10 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "Fix it", status: "inbox")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Fix it", status: "inbox")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.load()
         XCTAssertEqual(vm.items.count, 1)
@@ -752,10 +790,10 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "Task", status: "inbox")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "inbox")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.load()
 
@@ -773,10 +811,10 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "Task", status: "done")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "done")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = "done"
         vm.load()
         XCTAssertEqual(vm.items.count, 1)
@@ -797,10 +835,10 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001", text: "Task", status: "inbox")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "inbox")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.load()
 
@@ -816,23 +854,66 @@ final class ActionItemsViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testStatusChangeLogsHistory() throws {
+        try dbManager.dbPool.write { db in
+            try TestDatabase.insertWorkspace(db)
+            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Fix it", status: "inbox")
+        }
+
+        let vm = TracksViewModel(dbManager: dbManager)
+        vm.statusFilter = nil
+        vm.load()
+        let item = vm.items[0]
+
+        // Mark done — should log history.
+        vm.markDone(item)
+
+        let history = vm.fetchHistory(for: item.id)
+        XCTAssertFalse(history.isEmpty, "Status change should create a history entry")
+        XCTAssertEqual(history.last?.event, "status_changed")
+        XCTAssertEqual(history.last?.oldValue, "inbox")
+        XCTAssertEqual(history.last?.newValue, "done")
+    }
+
+    @MainActor
+    func testAcceptNonInboxDoesNotLogHistory() throws {
+        try dbManager.dbPool.write { db in
+            try TestDatabase.insertWorkspace(db)
+            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "active")
+        }
+
+        let vm = TracksViewModel(dbManager: dbManager)
+        vm.statusFilter = "active"
+        vm.load()
+        let item = vm.items[0]
+
+        // Accept an already-active item — should NOT log phantom history.
+        vm.accept(item)
+
+        let history = vm.fetchHistory(for: item.id)
+        XCTAssertTrue(history.isEmpty, "Accepting a non-inbox item should not create phantom history")
+    }
+
+    @MainActor
     func testSlackMessageURL() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db, domain: "acme")
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, assigneeUserID: "U001")
+            try TestDatabase.insertTrack(db, assigneeUserID: "U001")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
         let url = vm.slackMessageURL(channelID: "C001", messageTS: "1740577800.000100")
-        XCTAssertEqual(url?.absoluteString, "https://acme.slack.com/archives/C001/p1740577800000100")
+        XCTAssertEqual(url?.absoluteString, "slack://channel?team=T001&id=C001&message=1740577800.000100")
     }
 
     @MainActor
-    func testSlackMessageURLNilWithoutDomain() {
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+    func testSlackMessageURLNilWithoutTeamID() {
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
         XCTAssertNil(vm.slackMessageURL(channelID: "C001", messageTS: "123.456"))
@@ -843,17 +924,28 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1",
-                                               sourceChannelName: "general")
-            try TestDatabase.insertActionItem(db, channelID: "C002", assigneeUserID: "U001", text: "Task 2",
-                                               sourceChannelName: "engineering",
-                                               periodFrom: 1700100000, periodTo: 1700200000)
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Task 3",
-                                               sourceChannelName: "general",
-                                               periodFrom: 1700200000, periodTo: 1700300000)
+            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1", sourceChannelName: "general")
+            try TestDatabase.insertTrack(
+                db,
+                channelID: "C002",
+                assigneeUserID: "U001",
+                text: "Task 2",
+                sourceChannelName: "engineering",
+                periodFrom: 1700100000,
+                periodTo: 1700200000
+            )
+            try TestDatabase.insertTrack(
+                db,
+                channelID: "C001",
+                assigneeUserID: "U001",
+                text: "Task 3",
+                sourceChannelName: "general",
+                periodFrom: 1700200000,
+                periodTo: 1700300000
+            )
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.load()
 
@@ -869,12 +961,11 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1")
-            try TestDatabase.insertActionItem(db, channelID: "C002", assigneeUserID: "U001", text: "Task 2",
-                                               periodFrom: 1700100000, periodTo: 1700200000)
+            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1")
+            try TestDatabase.insertTrack(db, channelID: "C002", assigneeUserID: "U001", text: "Task 2", periodFrom: 1700100000, periodTo: 1700200000)
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.channelFilter = "C002"
         vm.load()
@@ -888,11 +979,10 @@ final class ActionItemsViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertActionItem(db, channelID: "C001", assigneeUserID: "U001",
-                                               text: "Task", sourceChannelName: "")
+            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task", sourceChannelName: "")
         }
 
-        let vm = ActionItemsViewModel(dbManager: dbManager)
+        let vm = TracksViewModel(dbManager: dbManager)
         vm.statusFilter = nil
         vm.load()
 
@@ -910,10 +1000,18 @@ final class ChatHistoryViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
         // Ensure chat_conversations table exists
-        try! dbManager.dbPool.write { db in
-            try ChatConversationQueries.ensureTable(db)
+        do {
+            try dbManager.dbPool.write { db in
+                try ChatConversationQueries.ensureTable(db)
+            }
+        } catch {
+            XCTFail("setUp ensureTable failed: \(error)")
         }
     }
 
@@ -933,9 +1031,9 @@ final class ChatHistoryViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteConversation() {
+    func testDeleteConversation() throws {
         let vm = ChatHistoryViewModel(dbManager: dbManager)
-        let conv = vm.createConversation()!
+        let conv = try XCTUnwrap(vm.createConversation())
         XCTAssertEqual(vm.conversations.count, 1)
 
         vm.deleteConversation(conv.id)
@@ -944,10 +1042,10 @@ final class ChatHistoryViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testDeleteSelectedSwitchesToFirst() {
+    func testDeleteSelectedSwitchesToFirst() throws {
         let vm = ChatHistoryViewModel(dbManager: dbManager)
-        let conv1 = vm.createConversation()!
-        let conv2 = vm.createConversation()!
+        let conv1 = try XCTUnwrap(vm.createConversation())
+        let conv2 = try XCTUnwrap(vm.createConversation())
         vm.selectedConversationID = conv2.id
 
         vm.deleteConversation(conv2.id)
@@ -980,9 +1078,9 @@ final class ChatHistoryViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testUpdateSessionID() {
+    func testUpdateSessionID() throws {
         let vm = ChatHistoryViewModel(dbManager: dbManager)
-        let conv = vm.createConversation()!
+        let conv = try XCTUnwrap(vm.createConversation())
 
         vm.updateSessionID(conv.id, sessionID: "sess-abc")
 
@@ -991,9 +1089,9 @@ final class ChatHistoryViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testLoad() {
+    func testLoad() throws {
         // Create conversations directly in DB
-        try! dbManager.dbPool.write { db in
+        try dbManager.dbPool.write { db in
             try ChatConversationQueries.create(db, title: "Chat A")
             try ChatConversationQueries.create(db, title: "Chat B")
         }
@@ -1021,7 +1119,11 @@ final class DigestViewModelAdditionalTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        (dbManager, dbPath) = try! TestDatabase.createDatabaseManager()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
     }
 
     override func tearDown() {
@@ -1051,8 +1153,7 @@ final class DigestViewModelAdditionalTests: XCTestCase {
     func testMarkDecisionRead() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertChannel(db, id: "C001", name: "general")
-            try TestDatabase.insertDigest(db, channelID: "C001",
-                                          decisions: #"[{"text":"Decision A"},{"text":"Decision B"}]"#)
+            try TestDatabase.insertDigest(db, channelID: "C001", decisions: #"[{"text":"Decision A"},{"text":"Decision B"}]"#)
         }
 
         let vm = DigestViewModel(dbManager: dbManager)
@@ -1074,10 +1175,22 @@ final class DigestViewModelAdditionalTests: XCTestCase {
         // Two digests with similar decisions — channel and daily rollup
         try dbManager.dbPool.write { db in
             try TestDatabase.insertChannel(db, id: "C001", name: "general")
-            try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400, type: "channel",
-                                          decisions: #"[{"text":"We decided to migrate the database to PostgreSQL immediately"}]"#)
-            try TestDatabase.insertDigest(db, channelID: "", periodFrom: 1700000000, periodTo: 1700086400, type: "daily",
-                                          decisions: #"[{"text":"Team decided to migrate the database to PostgreSQL soon"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C001",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                type: "channel",
+                decisions: #"[{"text":"We decided to migrate the database to PostgreSQL immediately"}]"#
+            )
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                type: "daily",
+                decisions: #"[{"text":"Team decided to migrate the database to PostgreSQL soon"}]"#
+            )
         }
 
         let vm = DigestViewModel(dbManager: dbManager)
@@ -1093,10 +1206,22 @@ final class DigestViewModelAdditionalTests: XCTestCase {
         // Unique decisions from both channel and daily
         try dbManager.dbPool.write { db in
             try TestDatabase.insertChannel(db, id: "C001", name: "general")
-            try TestDatabase.insertDigest(db, channelID: "C001", periodFrom: 1700000000, periodTo: 1700086400, type: "channel",
-                                          decisions: #"[{"text":"Use Redis for caching"}]"#)
-            try TestDatabase.insertDigest(db, channelID: "", periodFrom: 1700000000, periodTo: 1700086400, type: "daily",
-                                          decisions: #"[{"text":"Adopt TypeScript for frontend"}]"#)
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "C001",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                type: "channel",
+                decisions: #"[{"text":"Use Redis for caching"}]"#
+            )
+            try TestDatabase.insertDigest(
+                db,
+                channelID: "",
+                periodFrom: 1700000000,
+                periodTo: 1700086400,
+                type: "daily",
+                decisions: #"[{"text":"Adopt TypeScript for frontend"}]"#
+            )
         }
 
         let vm = DigestViewModel(dbManager: dbManager)
@@ -1165,5 +1290,697 @@ final class UpdateServiceTests: XCTestCase {
     func testDifferentLengths() {
         XCTAssertTrue(UpdateService.isNewer("0.2.1", than: "0.2"))
         XCTAssertFalse(UpdateService.isNewer("0.2", than: "0.2.0"))
+    }
+}
+
+// MARK: - OnboardingChatViewModel
+
+final class OnboardingChatViewModelTests: XCTestCase {
+    private var dbManager: DatabaseManager!
+    private var dbPath: String!
+
+    override func setUp() {
+        super.setUp()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
+    }
+
+    override func tearDown() {
+        TestDatabase.cleanup(path: dbPath)
+        super.tearDown()
+    }
+
+    @MainActor
+    func testInitialState() {
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        XCTAssertTrue(vm.messages.isEmpty)
+        XCTAssertFalse(vm.isStreaming)
+        XCTAssertEqual(vm.inputText, "")
+        XCTAssertNil(vm.errorMessage)
+        XCTAssertEqual(vm.role, "")
+        XCTAssertEqual(vm.team, "")
+        XCTAssertTrue(vm.painPoints.isEmpty)
+        XCTAssertTrue(vm.trackFocus.isEmpty)
+        XCTAssertTrue(vm.reportIDs.isEmpty)
+        XCTAssertEqual(vm.managerID, "")
+        XCTAssertTrue(vm.peerIDs.isEmpty)
+    }
+
+    @MainActor
+    func testSendCreatesMessages() async throws {
+        let mock = MockClaudeService(events: [.text("Great! "), .text("Tell me more."), .done])
+        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+
+        vm.inputText = "I'm an Engineering Manager"
+        vm.send()
+
+        try await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertEqual(vm.messages.count, 2)
+        XCTAssertEqual(vm.messages[0].role, .user)
+        XCTAssertEqual(vm.messages[0].text, "I'm an Engineering Manager")
+        XCTAssertEqual(vm.messages[1].role, .assistant)
+        XCTAssertEqual(vm.messages[1].text, "Great! Tell me more.")
+        XCTAssertFalse(vm.isStreaming)
+    }
+
+    @MainActor
+    func testSendEmptyDoesNothing() {
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        vm.inputText = "   "
+        vm.send()
+        XCTAssertTrue(vm.messages.isEmpty)
+    }
+
+    @MainActor
+    func testSendWhileStreamingDoesNothing() {
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        vm.isStreaming = true
+        vm.inputText = "Hello"
+        vm.send()
+        XCTAssertTrue(vm.messages.isEmpty)
+    }
+
+    @MainActor
+    func testFinishChatParsesRole() async throws {
+        let extractionJSON = """
+        {"role": "Engineering Manager", "team": "Platform", "pain_points": []}
+        """
+        let mock = MockClaudeService(eventSequence: [
+            [.text("Got it!"), .done],                    // send() response
+            [.text(extractionJSON), .done]               // parseProfileFromChat() response
+        ])
+        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+
+        // Simulate user saying their role
+        vm.inputText = "I'm an engineering manager at Platform team"
+        vm.send()
+        try await Task.sleep(for: .milliseconds(300))
+
+        await vm.finishChat()
+
+        XCTAssertEqual(vm.role, "Engineering Manager")
+        XCTAssertEqual(vm.team, "Platform")
+        XCTAssertFalse(vm.isStreaming)
+    }
+
+    @MainActor
+    func testFinishChatParsesPainPoints() async throws {
+        let extractionJSON = """
+        {"role": "", "team": "", "pain_points": ["Decisions getting lost in threads", "Deadlines discussed in chat get forgotten"]}
+        """
+        let mock = MockClaudeService(eventSequence: [
+            [.text("I understand."), .done],              // send() response
+            [.text(extractionJSON), .done]               // parseProfileFromChat() response
+        ])
+        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+
+        vm.inputText = "I often miss important decisions in threads and lose track of deadlines"
+        vm.send()
+        try await Task.sleep(for: .milliseconds(300))
+
+        await vm.finishChat()
+
+        XCTAssertTrue(vm.painPoints.contains { $0.lowercased().contains("decision") })
+        XCTAssertTrue(vm.painPoints.contains { $0.lowercased().contains("deadline") })
+    }
+
+    @MainActor
+    func testMarkOnboardingDone() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertWorkspace(db, id: "T001")
+            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
+            try TestDatabase.insertProfile(db, slackUserID: "U001", onboardingDone: false)
+        }
+
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        await vm.markOnboardingDone()
+
+        let profile = try await dbManager.dbPool.read { db in
+            try ProfileQueries.fetchProfile(db, slackUserID: "U001")
+        }
+        XCTAssertEqual(profile?.onboardingDone, true)
+    }
+
+    @MainActor
+    func testSendWithError() async throws {
+        let mock = MockClaudeService(error: ClaudeError.notFound)
+        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+
+        vm.inputText = "Hello"
+        vm.send()
+        try await Task.sleep(for: .milliseconds(300))
+
+        XCTAssertNotNil(vm.errorMessage)
+        XCTAssertFalse(vm.isStreaming)
+    }
+
+    @MainActor
+    func testLoadUsersFromDB() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertUser(db, id: "U001", displayName: "Alice")
+            try TestDatabase.insertUser(db, id: "U002", displayName: "Bob")
+        }
+
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        XCTAssertEqual(vm.allUsers.count, 2)
+    }
+
+    @MainActor
+    func testOnboardingSystemPromptContent() {
+        let prompt = OnboardingChatViewModel.onboardingSystemPrompt(language: "English")
+        XCTAssertTrue(prompt.contains("onboarding"))
+        XCTAssertTrue(prompt.contains("Watchtower"))
+        XCTAssertTrue(prompt.contains("[READY]"))
+        XCTAssertTrue(prompt.contains("Respond in English"))
+    }
+
+    @MainActor
+    func testOnboardingSystemPromptRussian() {
+        let prompt = OnboardingChatViewModel.onboardingSystemPrompt(language: "Russian")
+        XCTAssertTrue(prompt.contains("Respond in Russian"))
+    }
+
+    @MainActor
+    func testOnboardingSystemPromptUkrainian() {
+        let prompt = OnboardingChatViewModel.onboardingSystemPrompt(language: "Ukrainian")
+        XCTAssertTrue(prompt.contains("Respond in Ukrainian"))
+    }
+
+    @MainActor
+    func testQuestionnaireLocalizationRussian() {
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), language: "Russian", dbManager: dbManager)
+        vm.startQuestionnaire()
+        XCTAssertEqual(vm.messages.count, 1)
+        XCTAssertTrue(vm.messages[0].text.contains("роль"))
+        XCTAssertEqual(vm.quickReplies.count, 2)
+        XCTAssertEqual(vm.quickReplies[0].label, "Да")
+        XCTAssertEqual(vm.quickReplies[1].label, "Нет")
+    }
+
+    @MainActor
+    func testQuestionnaireLocalizationEnglish() {
+        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), language: "English", dbManager: dbManager)
+        vm.startQuestionnaire()
+        XCTAssertEqual(vm.messages[0].text, "Let's understand your role. Do people report to you?")
+        XCTAssertEqual(vm.quickReplies[0].label, "Yes")
+    }
+}
+
+// MARK: - OnboardingStateMachine
+
+final class OnboardingStateMachineTests: XCTestCase {
+    private let stepKey = "onboarding_current_step"
+    private let syncKey = "onboarding_sync_completed"
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        UserDefaults.standard.removeObject(forKey: syncKey)
+        super.tearDown()
+    }
+
+    @MainActor
+    func testInitialStateDefaultsToConnect() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        XCTAssertEqual(sm.currentStep, .connect)
+        XCTAssertFalse(sm.syncCompleted)
+    }
+
+    @MainActor
+    func testAdvanceMovesToNextStep() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .settings)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .claude)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .chat)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .teamForm)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .generating)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .complete)
+    }
+
+    @MainActor
+    func testAdvancePastCompleteDoesNothing() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.goTo(.complete)
+        sm.advance()
+        XCTAssertEqual(sm.currentStep, .complete)
+    }
+
+    @MainActor
+    func testGoToJumpsToStep() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.goTo(.chat)
+        XCTAssertEqual(sm.currentStep, .chat)
+    }
+
+    @MainActor
+    func testPersistenceInUserDefaults() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.goTo(.claude)
+        XCTAssertEqual(UserDefaults.standard.integer(forKey: stepKey), OnboardingStep.claude.rawValue)
+
+        // Create new instance — should read persisted step
+        let sm2 = OnboardingStateMachine()
+        XCTAssertEqual(sm2.currentStep, .claude)
+    }
+
+    @MainActor
+    func testSyncCompletedPersistence() {
+        UserDefaults.standard.removeObject(forKey: syncKey)
+        let sm = OnboardingStateMachine()
+        XCTAssertFalse(sm.syncCompleted)
+        sm.syncCompleted = true
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: syncKey))
+
+        let sm2 = OnboardingStateMachine()
+        XCTAssertTrue(sm2.syncCompleted)
+    }
+
+    @MainActor
+    func testResetGoesToStepAndClearsSyncIfBeforeChat() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.goTo(.generating)
+        sm.syncCompleted = true
+        sm.reset(to: .chat)
+        XCTAssertEqual(sm.currentStep, .chat)
+        XCTAssertFalse(sm.syncCompleted)
+    }
+
+    @MainActor
+    func testResetToTeamFormKeepsSyncCompleted() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.syncCompleted = true
+        sm.reset(to: .teamForm)
+        XCTAssertEqual(sm.currentStep, .teamForm)
+        XCTAssertTrue(sm.syncCompleted)
+    }
+
+    @MainActor
+    func testMarkCompleteRemovesUserDefaults() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        sm.goTo(.generating)
+        sm.syncCompleted = true
+        sm.markComplete()
+        XCTAssertEqual(sm.currentStep, .complete)
+        XCTAssertNil(UserDefaults.standard.object(forKey: stepKey))
+        XCTAssertNil(UserDefaults.standard.object(forKey: syncKey))
+    }
+
+    @MainActor
+    func testSkipCompletedSkipsConnectWhenConfigExists() {
+        UserDefaults.standard.removeObject(forKey: stepKey)
+        let sm = OnboardingStateMachine()
+        // shouldSkip(.connect) checks if config file exists — depends on test env
+        // We test the skip logic by verifying it doesn't skip settings
+        sm.goTo(.settings)
+        let result = sm.skipCompleted()
+        XCTAssertEqual(result, .settings)
+    }
+
+    @MainActor
+    func testStepComparable() {
+        XCTAssertTrue(OnboardingStep.connect < .settings)
+        XCTAssertTrue(OnboardingStep.settings < .claude)
+        XCTAssertTrue(OnboardingStep.claude < .chat)
+        XCTAssertTrue(OnboardingStep.chat < .teamForm)
+        XCTAssertTrue(OnboardingStep.teamForm < .generating)
+        XCTAssertTrue(OnboardingStep.generating < .complete)
+    }
+
+    @MainActor
+    func testIndicatorSteps() {
+        XCTAssertEqual(OnboardingStep.indicatorSteps.count, 4)
+        XCTAssertEqual(OnboardingStep.indicatorSteps, [.connect, .settings, .claude, .chat])
+    }
+
+    @MainActor
+    func testIndicatorTitles() {
+        XCTAssertEqual(OnboardingStep.connect.indicatorTitle, "Connect")
+        XCTAssertEqual(OnboardingStep.settings.indicatorTitle, "Settings")
+        XCTAssertEqual(OnboardingStep.claude.indicatorTitle, "AI Setup")
+        XCTAssertEqual(OnboardingStep.chat.indicatorTitle, "Setup")
+        XCTAssertEqual(OnboardingStep.teamForm.indicatorTitle, "Setup")
+        XCTAssertEqual(OnboardingStep.generating.indicatorTitle, "Setup")
+        XCTAssertNil(OnboardingStep.complete.indicatorTitle)
+    }
+}
+
+// ChainsViewModel Tests
+
+final class ChainsViewModelTests: XCTestCase {
+    private var dbManager: DatabaseManager!
+    private var dbPath: String!
+
+    override func setUp() {
+        super.setUp()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
+    }
+
+    override func tearDown() {
+        TestDatabase.cleanup(path: dbPath)
+        super.tearDown()
+    }
+
+    @MainActor
+    func testLoadEmptyChains() async {
+        let vm = ChainsViewModel(dbManager: dbManager)
+        vm.load()
+
+        XCTAssertTrue(vm.chains.isEmpty)
+        XCTAssertEqual(vm.activeChainCount, 0)
+        XCTAssertFalse(vm.isLoading)
+    }
+
+    @MainActor
+    func testLoadChainsWithData() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertChannel(db, id: "C001")
+            try TestDatabase.insertChain(db, title: "Migration", slug: "migration", status: "active", itemCount: 3)
+            try TestDatabase.insertChain(db, title: "Hiring", slug: "hiring", status: "resolved", itemCount: 1)
+        }
+
+        let vm = ChainsViewModel(dbManager: dbManager)
+        vm.load()
+
+        XCTAssertEqual(vm.chains.count, 2)
+        XCTAssertEqual(vm.activeChainCount, 1)
+    }
+
+    @MainActor
+    func testLoadRefs() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertChannel(db, id: "C001")
+            try TestDatabase.insertDigest(db, decisions: "[{\"text\":\"Use RDS\",\"by\":\"@alice\",\"importance\":\"high\"}]")
+            try TestDatabase.insertChain(db)
+            try TestDatabase.insertChainRef(
+                db,
+                chainID: 1,
+                refType: "decision",
+                digestID: 1,
+                decisionIdx: 0,
+                channelID: "C001",
+                timestamp: 1700000000
+            )
+        }
+
+        let vm = ChainsViewModel(dbManager: dbManager)
+        vm.load()
+        vm.loadRefs(for: 1)
+
+        XCTAssertEqual(vm.selectedChainRefs.count, 1)
+        XCTAssertEqual(vm.selectedChainRefs.first?.refType, "decision")
+
+        // Test decision text lookup.
+        if let ref = vm.selectedChainRefs.first, let dec = vm.decisionText(for: ref) {
+            XCTAssertEqual(dec.text, "Use RDS")
+            XCTAssertEqual(dec.by, "@alice")
+        } else {
+            XCTFail("Expected decision text")
+        }
+    }
+
+    @MainActor
+    func testArchiveChain() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertChain(db, status: "active")
+        }
+
+        let vm = ChainsViewModel(dbManager: dbManager)
+        vm.load()
+        XCTAssertEqual(vm.chains.first?.status, "active")
+
+        vm.archiveChain(1)
+        XCTAssertEqual(vm.chains.first?.status, "resolved")
+    }
+
+    @MainActor
+    func testChannelNameCache() async throws {
+        try await dbManager.dbPool.write { db in
+            try TestDatabase.insertChannel(db, id: "C001")
+        }
+
+        let vm = ChainsViewModel(dbManager: dbManager)
+        vm.load()
+
+        XCTAssertEqual(vm.channelName(for: "C001"), "general")
+        XCTAssertEqual(vm.channelName(for: "UNKNOWN"), "UNKNOWN")
+    }
+}
+
+// Chain Model Tests
+
+final class ChainModelTests: XCTestCase {
+    func testDecodedChannelIDs() {
+        let chain = Chain(
+            id: 1,
+            parentID: nil,
+            title: "Test",
+            slug: "test",
+            status: "active",
+            summary: "",
+            channelIDs: "[\"C1\",\"C2\"]",
+            firstSeen: 100,
+            lastSeen: 200,
+            itemCount: 0,
+            readAt: nil,
+            createdAt: "",
+            updatedAt: ""
+        )
+        XCTAssertEqual(chain.decodedChannelIDs, ["C1", "C2"])
+    }
+
+    func testDecodedChannelIDsEmpty() {
+        let chain = Chain(
+            id: 1,
+            parentID: nil,
+            title: "Test",
+            slug: "test",
+            status: "active",
+            summary: "",
+            channelIDs: "[]",
+            firstSeen: 100,
+            lastSeen: 200,
+            itemCount: 0,
+            readAt: nil,
+            createdAt: "",
+            updatedAt: ""
+        )
+        XCTAssertTrue(chain.decodedChannelIDs.isEmpty)
+    }
+
+    func testStatusProperties() {
+        let active = Chain(
+            id: 1,
+            parentID: nil,
+            title: "",
+            slug: "",
+            status: "active",
+            summary: "",
+            channelIDs: "[]",
+            firstSeen: 0,
+            lastSeen: 0,
+            itemCount: 0,
+            readAt: nil,
+            createdAt: "",
+            updatedAt: ""
+        )
+        XCTAssertTrue(active.isActive)
+        XCTAssertFalse(active.isResolved)
+        XCTAssertFalse(active.isStale)
+        XCTAssertFalse(active.isRead)
+        XCTAssertTrue(active.isParent)
+
+        let resolved = Chain(
+            id: 2,
+            parentID: 1,
+            title: "",
+            slug: "",
+            status: "resolved",
+            summary: "",
+            channelIDs: "[]",
+            firstSeen: 0,
+            lastSeen: 0,
+            itemCount: 0,
+            readAt: "2026-01-01",
+            createdAt: "",
+            updatedAt: ""
+        )
+        XCTAssertTrue(resolved.isResolved)
+        XCTAssertTrue(resolved.isRead)
+        XCTAssertFalse(resolved.isParent)
+    }
+
+    func testChainRefProperties() {
+        let decRef = ChainRef(
+            id: 1,
+            chainID: 1,
+            refType: "decision",
+            digestID: 5,
+            decisionIdx: 2,
+            trackID: 0,
+            channelID: "C1",
+            timestamp: 100,
+            createdAt: ""
+        )
+        XCTAssertTrue(decRef.isDecision)
+        XCTAssertFalse(decRef.isTrack)
+        XCTAssertFalse(decRef.isDigest)
+
+        let trackRef = ChainRef(
+            id: 2,
+            chainID: 1,
+            refType: "track",
+            digestID: 0,
+            decisionIdx: 0,
+            trackID: 3,
+            channelID: "C1",
+            timestamp: 200,
+            createdAt: ""
+        )
+        XCTAssertTrue(trackRef.isTrack)
+        XCTAssertFalse(trackRef.isDecision)
+
+        let digestRef = ChainRef(
+            id: 3,
+            chainID: 1,
+            refType: "digest",
+            digestID: 10,
+            decisionIdx: 0,
+            trackID: 0,
+            channelID: "C1",
+            timestamp: 300,
+            createdAt: ""
+        )
+        XCTAssertTrue(digestRef.isDigest)
+        XCTAssertFalse(digestRef.isDecision)
+        XCTAssertFalse(digestRef.isTrack)
+    }
+}
+
+// MARK: - BackgroundTaskManager
+
+final class BackgroundTaskManagerTests: XCTestCase {
+
+    @MainActor
+    func testStepRecordEquality() {
+        let r1 = BackgroundTaskManager.StepRecord(
+            timestamp: Date(timeIntervalSince1970: 1000),
+            pipeline: "digests",
+            step: 1,
+            total: 10,
+            status: "Processing #general",
+            inputTokens: 100,
+            outputTokens: 50,
+            costUsd: 0.001,
+            durationSeconds: 5.0
+        )
+        let r2 = BackgroundTaskManager.StepRecord(
+            timestamp: Date(timeIntervalSince1970: 1000),
+            pipeline: "digests",
+            step: 1,
+            total: 10,
+            status: "Processing #general",
+            inputTokens: 100,
+            outputTokens: 50,
+            costUsd: 0.001,
+            durationSeconds: 5.0
+        )
+        // Different UUIDs, so not equal
+        XCTAssertNotEqual(r1, r2)
+        // But same id is equal
+        XCTAssertEqual(r1, r1)
+    }
+
+    @MainActor
+    func testTotalTokensAndCost() {
+        let manager = BackgroundTaskManager()
+
+        // Totals now come from accumulated progress (not step history sum).
+        var digestState = BackgroundTaskManager.TaskState()
+        digestState.progress = decodeProgress("""
+            {"pipeline":"digests","done":2,"total":5,"status":"","input_tokens":300,"output_tokens":150,"cost_usd":0.003,"finished":false}
+            """)
+        var tracksState = BackgroundTaskManager.TaskState()
+        tracksState.progress = decodeProgress("""
+            {"pipeline":"tracks","done":1,"total":3,"status":"","input_tokens":300,"output_tokens":150,"cost_usd":0.003,"finished":false}
+            """)
+        manager.tasks[.digests] = digestState
+        manager.tasks[.tracks] = tracksState
+
+        XCTAssertEqual(manager.totalInputTokens, 600)
+        XCTAssertEqual(manager.totalOutputTokens, 300)
+        XCTAssertEqual(manager.totalCostUsd, 0.006, accuracy: 0.0001)
+    }
+
+    private func decodeProgress(_ json: String) -> InsightProgressData {
+        try! JSONDecoder().decode(InsightProgressData.self, from: Data(json.utf8))
+    }
+
+    @MainActor
+    func testTotalTokensEmptyTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertEqual(manager.totalInputTokens, 0)
+        XCTAssertEqual(manager.totalOutputTokens, 0)
+        XCTAssertEqual(manager.totalCostUsd, 0.0)
+    }
+
+    @MainActor
+    func testHasActiveTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertFalse(manager.hasActiveTasks)
+
+        manager.tasks[.digests] = .init(status: .running)
+        XCTAssertTrue(manager.hasActiveTasks)
+
+        manager.tasks[.digests] = .init(status: .done)
+        XCTAssertFalse(manager.hasActiveTasks)
+    }
+
+    @MainActor
+    func testAllFinished() {
+        let manager = BackgroundTaskManager()
+        XCTAssertTrue(manager.allFinished) // empty is finished
+
+        manager.tasks[.digests] = .init(status: .done)
+        manager.tasks[.tracks] = .init(status: .error("fail"))
+        XCTAssertTrue(manager.allFinished)
+
+        manager.tasks[.people] = .init(status: .running)
+        XCTAssertFalse(manager.allFinished)
+    }
+
+    @MainActor
+    func testHasVisibleTasks() {
+        let manager = BackgroundTaskManager()
+        XCTAssertFalse(manager.hasVisibleTasks)
+
+        manager.tasks[.digests] = .init(status: .done)
+        XCTAssertFalse(manager.hasVisibleTasks)
+
+        manager.tasks[.tracks] = .init(status: .error("oops"))
+        XCTAssertTrue(manager.hasVisibleTasks)
+
+        manager.tasks[.people] = .init(status: .pending)
+        XCTAssertTrue(manager.hasVisibleTasks)
     }
 }

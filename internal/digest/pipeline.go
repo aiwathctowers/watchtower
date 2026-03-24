@@ -1,3 +1,4 @@
+// Package digest provides digest generation and pipeline for summarizing workspace conversations.
 package digest
 
 import (
@@ -5,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"watchtower/internal/config"
@@ -18,24 +22,46 @@ import (
 
 // Usage holds token and cost metrics from an AI generation call.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
+	InputTokens    int     // Our prompt tokens (estimated from prompt size)
+	OutputTokens   int     // AI response tokens
+	CostUSD        float64 // Actual cost from CLI (includes all caching)
+	TotalAPITokens int     // Total tokens API processed (input + cache_read + cache_creation)
 }
 
 // Generator generates text responses from a system prompt and user message.
 // The default implementation calls Claude CLI; tests can substitute a mock.
+// sessionID may be empty for the first call; the returned sessionID should be
+// passed to subsequent calls to reuse the same Claude session.
 type Generator interface {
-	Generate(ctx context.Context, systemPrompt, userMessage string) (string, *Usage, error)
+	Generate(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, *Usage, string, error)
 }
 
 // DigestResult is the structured output from Claude for a digest.
 type DigestResult struct {
-	Summary     string       `json:"summary"`
-	Topics      []string     `json:"topics"`
-	Decisions   []Decision   `json:"decisions"`
-	ActionItems []ActionItem `json:"action_items"`
-	KeyMessages []string     `json:"key_messages"`
+	Summary        string          `json:"summary"`
+	Topics         []string        `json:"topics"`
+	Decisions      []Decision      `json:"decisions"`
+	ActionItems    []ActionItem    `json:"action_items"`
+	KeyMessages    []string        `json:"key_messages"`
+	Situations     []db.Situation  `json:"situations"`
+	RunningSummary json.RawMessage `json:"running_summary,omitempty"`
+}
+
+// DigestSituationParticipant mirrors db.SituationParticipant for JSON parsing.
+// Re-exported here for convenience in tests that build DigestResults.
+type DigestSituationParticipant = db.SituationParticipant
+
+// PersonSignals holds signals for one person in a channel digest.
+type PersonSignals struct {
+	UserID  string   `json:"user_id"`
+	Signals []Signal `json:"signals"`
+}
+
+// Signal is a typed observation about a person in channel context.
+type Signal struct {
+	Type       string `json:"type"`
+	Detail     string `json:"detail"`
+	EvidenceTS string `json:"evidence_ts,omitempty"`
 }
 
 // Decision represents a decision extracted from messages.
@@ -53,10 +79,18 @@ type ActionItem struct {
 	Status   string `json:"status"`
 }
 
-// Pipeline generates and stores AI digests for Slack channels.
+// ChainLinker runs the chains pipeline between channel digests and rollups.
+// Defined as an interface to avoid import cycles (chains imports digest).
+type ChainLinker interface {
+	Run(ctx context.Context) (int, error)
+	FormatActiveChainsForPrompt(ctx context.Context) (string, error)
+	SetOnProgress(fn ProgressFunc)
+}
+
 // ProgressFunc is called during digest generation to report progress.
 type ProgressFunc func(done, total int, status string)
 
+// Pipeline generates and stores AI digests for Slack channels.
 type Pipeline struct {
 	db          *db.DB
 	cfg         *config.Config
@@ -71,9 +105,64 @@ type Pipeline struct {
 	// OnProgress is called to report progress during digest generation.
 	OnProgress ProgressFunc
 
+	// ChainContext is injected by the daemon after chains pipeline runs.
+	// If non-empty, it's prepended to the daily/weekly rollup prompt to make
+	// rollups chain-aware (collapsing chained decisions instead of repeating them).
+	ChainContext string
+
+	// ChainLinker, if set, runs chains pipeline between channel digests and rollups.
+	// Used by `digest generate` to replicate the daemon's phased pipeline.
+	ChainLinker ChainLinker
+
+	// accumulated usage across all Generate calls (atomic for concurrent workers)
+	totalInputTokens  atomic.Int64
+	totalOutputTokens atomic.Int64
+	totalCostMicro    atomic.Int64 // cost * 1e6 for atomic ops
+	totalAPITokens    atomic.Int64 // total API tokens (our content + CLI overhead)
+
+	// accumulated stats across all channel digests (atomic for concurrent workers)
+	totalMessageCount  atomic.Int64
+	earliestPeriodFrom atomic.Int64 // unix timestamp
+	latestPeriodTo     atomic.Int64 // unix timestamp
+
+	// LastStep* fields are set before each OnProgress callback with the
+	// current step's message count and time window. Read them in OnProgress.
+	// Protected by lastStepMu for concurrent worker access.
+	lastStepMu              sync.Mutex
+	LastStepMessageCount    int
+	LastStepPeriodFrom      time.Time
+	LastStepPeriodTo        time.Time
+	LastStepDurationSeconds float64
+	LastStepInputTokens     int
+	LastStepOutputTokens    int
+	LastStepCostUSD         float64
+
 	// caches populated during a run
 	channelNames map[string]string
 	userNames    map[string]string
+	profile      *db.UserProfile // loaded once per Run, nil if not available
+}
+
+// AccumulatedUsage returns the total token usage accumulated across all Generate calls.
+// Returns (inputTokens, outputTokens, costUSD, overheadTokens).
+func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
+	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
+}
+
+// AccumulatedStats returns (totalMessageCount, earliestPeriodFrom, latestPeriodTo)
+// accumulated across all channel digest runs.
+func (p *Pipeline) AccumulatedStats() (int, float64, float64) {
+	return int(p.totalMessageCount.Load()), float64(p.earliestPeriodFrom.Load()), float64(p.latestPeriodTo.Load())
+}
+
+func (p *Pipeline) accumulateUsage(usage *Usage) {
+	if usage == nil {
+		return
+	}
+	p.totalInputTokens.Add(int64(usage.InputTokens))
+	p.totalOutputTokens.Add(int64(usage.OutputTokens))
+	p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+	p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 }
 
 // New creates a new digest pipeline.
@@ -94,14 +183,54 @@ func (p *Pipeline) SetPromptStore(store *prompts.Store) {
 
 // getPrompt loads a prompt template from the store (if set), falling back to the
 // built-in const. Returns the template string and its version (0 = built-in).
+// Includes role-specific instructions if available.
 func (p *Pipeline) getPrompt(id, fallback string) (string, int) {
+	role := ""
+	if p.profile != nil {
+		role = p.profile.Role
+	}
+
 	if p.promptStore != nil {
-		tmpl, version, err := p.promptStore.Get(id)
+		tmpl, version, err := p.promptStore.GetForRole(id, role)
 		if err == nil {
+			// Prepend role instruction if available
+			roleInstr := prompts.GetRoleInstruction(role)
+			if roleInstr != "" {
+				tmpl = roleInstr + "\n\n" + tmpl
+			}
 			return tmpl, version
 		}
 	}
-	return fallback, 0
+
+	// Fallback to default
+	tmpl := fallback
+	roleInstr := prompts.GetRoleInstruction(role)
+	if roleInstr != "" {
+		tmpl = roleInstr + "\n\n" + tmpl
+	}
+	return tmpl, 0
+}
+
+// acquireDigestLock acquires an exclusive file lock to prevent concurrent digest runs.
+// Returns the lock file (caller must defer Close) and unlock func, or error if already locked.
+func (p *Pipeline) acquireDigestLock() (*os.File, func(), error) {
+	lockPath := filepath.Join(p.cfg.WorkspaceDir(), "digest.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return nil, nil, fmt.Errorf("creating lock dir: %w", err)
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening digest lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("another digest pipeline is already running")
+	}
+	unlock := func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}
+	return f, unlock, nil
 }
 
 // Run executes the full digest pipeline: channel digests, then daily rollup.
@@ -111,11 +240,33 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 		return 0, nil, nil
 	}
 
-	// Clean up duplicate daily/weekly rollups from before period_to normalization
+	_, unlock, err := p.acquireDigestLock()
+	if err != nil {
+		p.logger.Printf("digest: skipping — %v", err)
+		return 0, nil, nil
+	}
+	defer unlock()
+
+	// Clean up duplicate digests from near-simultaneous pipeline runs
+	var totalDeduped int64
+	if removed, err := p.db.DeduplicateChannelDigests(); err != nil {
+		p.logger.Printf("digest: warning: channel dedup cleanup failed: %v", err)
+	} else {
+		totalDeduped += removed
+	}
 	if removed, err := p.db.DeduplicateDailyDigests(); err != nil {
 		p.logger.Printf("digest: warning: dedup cleanup failed: %v", err)
-	} else if removed > 0 {
-		p.logger.Printf("digest: cleaned up %d duplicate rollup digests", removed)
+	} else {
+		totalDeduped += removed
+	}
+	if totalDeduped > 0 {
+		p.logger.Printf("digest: cleaned up %d duplicate digests", totalDeduped)
+		// Remove chain_refs pointing to deleted digests
+		if orphaned, err := p.db.CleanOrphanedChainRefs(); err != nil {
+			p.logger.Printf("digest: warning: orphaned chain ref cleanup failed: %v", err)
+		} else if orphaned > 0 {
+			p.logger.Printf("digest: cleaned up %d orphaned chain refs", orphaned)
+		}
 	}
 
 	p.loadCaches()
@@ -129,6 +280,14 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 		return n, totalUsage, ctx.Err()
 	}
 
+	if p.OnProgress != nil {
+		p.OnProgress(0, 0, "Linking decision chains...")
+	}
+	p.runChainLinker(ctx)
+
+	if p.OnProgress != nil {
+		p.OnProgress(0, 0, "Generating daily rollup...")
+	}
 	if err := p.RunDailyRollup(ctx); err != nil {
 		p.logger.Printf("digest: daily rollup error: %v", err)
 	}
@@ -136,24 +295,126 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	return n, totalUsage, nil
 }
 
-// RunChannelDigests generates digests for all channels with new messages
-// since the last digest run. Returns the count and accumulated token usage.
-// Channels are processed in parallel using digest.workers (default 5).
-func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
-	if p.OnProgress != nil {
-		p.OnProgress(0, 0, "Finding channels with new messages...")
+// RunChannelDigestsOnly runs only channel-level digests (no rollups).
+// Used by daemon to split channel digests from rollups with chains in between.
+func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, error) {
+	if !p.cfg.Digest.Enabled {
+		return 0, nil, nil
 	}
 
+	_, unlock, err := p.acquireDigestLock()
+	if err != nil {
+		p.logger.Printf("digest: skipping — %v", err)
+		return 0, nil, nil
+	}
+	defer unlock()
+
+	var totalDeduped int64
+	if removed, err := p.db.DeduplicateChannelDigests(); err != nil {
+		p.logger.Printf("digest: warning: channel dedup cleanup failed: %v", err)
+	} else {
+		totalDeduped += removed
+	}
+	if removed, err := p.db.DeduplicateDailyDigests(); err != nil {
+		p.logger.Printf("digest: warning: dedup cleanup failed: %v", err)
+	} else {
+		totalDeduped += removed
+	}
+	if totalDeduped > 0 {
+		p.logger.Printf("digest: cleaned up %d duplicate digests", totalDeduped)
+		if orphaned, err := p.db.CleanOrphanedChainRefs(); err != nil {
+			p.logger.Printf("digest: warning: orphaned chain ref cleanup failed: %v", err)
+		} else if orphaned > 0 {
+			p.logger.Printf("digest: cleaned up %d orphaned chain refs", orphaned)
+		}
+	}
+
+	p.loadCaches()
+
+	return p.RunChannelDigests(ctx)
+}
+
+// RunRollups runs daily and weekly rollups only (no channel digests).
+// runChainLinker runs the chains pipeline (if configured) and injects chain context for rollups.
+func (p *Pipeline) runChainLinker(ctx context.Context) {
+	if p.ChainLinker == nil || ctx.Err() != nil {
+		return
+	}
+	// Reset LastStep* so chains progress doesn't show stale digest metrics.
+	p.lastStepMu.Lock()
+	p.LastStepMessageCount = 0
+	p.LastStepInputTokens = 0
+	p.LastStepOutputTokens = 0
+	p.LastStepCostUSD = 0
+	p.LastStepDurationSeconds = 0
+	p.lastStepMu.Unlock()
+	if p.OnProgress != nil {
+		p.ChainLinker.SetOnProgress(p.OnProgress)
+	}
+	n, err := p.ChainLinker.Run(ctx)
+	if err != nil {
+		p.logger.Printf("digest: chains error: %v", err)
+	} else if n > 0 {
+		p.logger.Printf("digest: linked %d decision(s) to chains", n)
+	}
+	if chainCtx, err := p.ChainLinker.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
+		p.ChainContext = chainCtx
+	}
+}
+
+// RunRollups generates daily/weekly rollups. Used by daemon after chains pipeline has linked decisions.
+func (p *Pipeline) RunRollups(ctx context.Context) error {
+	if !p.cfg.Digest.Enabled {
+		return nil
+	}
+
+	_, unlock, err := p.acquireDigestLock()
+	if err != nil {
+		p.logger.Printf("digest: skipping rollups — %v", err)
+		return nil
+	}
+	defer unlock()
+
+	p.loadCaches()
+
+	if err := p.RunDailyRollup(ctx); err != nil {
+		return fmt.Errorf("daily rollup: %w", err)
+	}
+
+	return nil
+}
+
+// RunChannelDigests generates digests for all channels with new messages
+// since the last digest run. Returns the count and accumulated token usage.
+// Channels are processed in parallel using digest.workers (default: config.DefaultDigestWorkers).
+func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 	sinceUnix := p.SinceOverride
 	if sinceUnix == 0 {
 		sinceUnix = p.lastDigestTime()
 	}
+	// Truncate to nearest minute to prevent near-duplicate digests when
+	// the pipeline runs twice within seconds (same period_from key).
+	sinceUnix = float64(int64(sinceUnix) / 60 * 60)
 	nowUnix := float64(time.Now().Unix())
+	return p.runChannelDigestsForWindow(ctx, sinceUnix, nowUnix)
+}
+
+// runChannelDigestsForWindow generates channel digests for a specific time window.
+func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, nowUnix float64) (int, *Usage, error) {
+	if p.OnProgress != nil {
+		p.OnProgress(0, 0, "Finding channels with new messages...")
+	}
+
+	p.logger.Printf("digest: window: since=%s now=%s",
+		time.Unix(int64(sinceUnix), 0).Format("2006-01-02 15:04"),
+		time.Unix(int64(nowUnix), 0).Format("2006-01-02 15:04"))
 
 	channels, err := p.db.ChannelsWithNewMessages(sinceUnix)
 	if err != nil {
 		return 0, nil, fmt.Errorf("finding channels with new messages: %w", err)
 	}
+
+	p.logger.Printf("digest: found %d channels with new messages", len(channels))
 
 	if len(channels) == 0 {
 		p.logger.Println("digest: no channels with new messages")
@@ -167,6 +428,8 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 		msgs        []db.Message
 	}
 	var tasks []channelTask
+	skippedBelowMin := 0
+	skippedNoVisible := 0
 	for _, channelID := range channels {
 		msgs, err := p.db.GetMessagesByTimeRange(channelID, sinceUnix, nowUnix)
 		if err != nil {
@@ -177,7 +440,19 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 			p.logger.Printf("digest: warning: #%s hit message limit (%d), digest may be based on partial data",
 				p.channelName(channelID), db.DefaultTimeRangeLimit)
 		}
-		if len(msgs) < p.cfg.Digest.MinMessages {
+		// Count only messages with visible text (skip empty/deleted).
+		visible := 0
+		for _, m := range msgs {
+			if m.Text != "" && !m.IsDeleted {
+				visible++
+			}
+		}
+		if visible < p.cfg.Digest.MinMessages {
+			if visible == 0 && len(msgs) >= p.cfg.Digest.MinMessages {
+				skippedNoVisible++
+			} else {
+				skippedBelowMin++
+			}
 			continue
 		}
 		tasks = append(tasks, channelTask{
@@ -186,6 +461,9 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 			msgs:        msgs,
 		})
 	}
+
+	p.logger.Printf("digest: %d channels pass min_messages=%d, %d skipped (below threshold), %d skipped (no visible text)",
+		len(tasks), p.cfg.Digest.MinMessages, skippedBelowMin, skippedNoVisible)
 
 	if len(tasks) == 0 {
 		p.logger.Println("digest: no channels above min_messages threshold")
@@ -235,18 +513,31 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 				}
 
 				c := int(completed.Load())
+				p.lastStepMu.Lock()
+				p.LastStepMessageCount = len(t.msgs)
+				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+				p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
+				p.LastStepDurationSeconds = 0
+				p.LastStepInputTokens = 0
+				p.LastStepOutputTokens = 0
+				p.LastStepCostUSD = 0
+				p.lastStepMu.Unlock()
 				if p.OnProgress != nil {
 					p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", t.channelName, len(t.msgs)))
 				}
 
-				result, usage, pv, err := p.generateChannelDigest(ctx, t.channelName, t.msgs, sinceUnix, nowUnix)
+				stepStart := time.Now()
+				result, usage, pv, err := p.generateChannelDigest(ctx, t.channelID, t.channelName, t.msgs, sinceUnix, nowUnix)
 				if err != nil {
 					p.logger.Printf("digest: error generating digest for #%s: %v", t.channelName, err)
 					errCount.Add(1)
 					lastErrMu.Lock()
 					lastErr = err
 					lastErrMu.Unlock()
-					completed.Add(1)
+					done := int(completed.Add(1))
+					if p.OnProgress != nil {
+						p.OnProgress(done, total, fmt.Sprintf("#%s error: %v", t.channelName, err))
+					}
 					continue
 				}
 
@@ -266,19 +557,63 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 					lastErrMu.Lock()
 					lastErr = err
 					lastErrMu.Unlock()
-					completed.Add(1)
+					done := int(completed.Add(1))
+					if p.OnProgress != nil {
+						p.OnProgress(done, total, fmt.Sprintf("#%s store error: %v", t.channelName, err))
+					}
 					continue
 				}
 
 				generated.Add(1)
+				p.totalMessageCount.Add(int64(len(t.msgs)))
+				// Update earliest period_from (use CompareAndSwap for atomicity)
+				sinceTS := int64(sinceUnix)
+				for {
+					old := p.earliestPeriodFrom.Load()
+					if old != 0 && old <= sinceTS {
+						break
+					}
+					if p.earliestPeriodFrom.CompareAndSwap(old, sinceTS) {
+						break
+					}
+				}
+				// Update latest period_to
+				lastTS := int64(lastMsgTS)
+				for {
+					old := p.latestPeriodTo.Load()
+					if old >= lastTS {
+						break
+					}
+					if p.latestPeriodTo.CompareAndSwap(old, lastTS) {
+						break
+					}
+				}
+				p.lastStepMu.Lock()
+				p.LastStepMessageCount = len(t.msgs)
+				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+				p.LastStepPeriodTo = time.Unix(int64(lastMsgTS), 0)
+				p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+				if usage != nil {
+					p.LastStepInputTokens = usage.InputTokens
+					p.LastStepOutputTokens = usage.OutputTokens
+					p.LastStepCostUSD = usage.CostUSD
+				} else {
+					p.LastStepInputTokens = 0
+					p.LastStepOutputTokens = 0
+					p.LastStepCostUSD = 0
+				}
+				p.lastStepMu.Unlock()
+				if usage != nil {
+					totalInput.Add(int64(usage.InputTokens))
+					totalOutput.Add(int64(usage.OutputTokens))
+					totalCostU.Add(int64(usage.CostUSD * 1e6))
+					p.accumulateUsage(usage)
+				}
 				done := int(completed.Add(1))
 				if p.OnProgress != nil {
 					p.OnProgress(done, total, fmt.Sprintf("#%s done", t.channelName))
 				}
 				if usage != nil {
-					totalInput.Add(int64(usage.InputTokens))
-					totalOutput.Add(int64(usage.OutputTokens))
-					totalCostU.Add(int64(usage.CostUSD * 1e6))
 					p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens, $%.4f)",
 						t.channelName, len(t.msgs), usage.InputTokens, usage.OutputTokens, usage.CostUSD)
 				} else {
@@ -313,13 +648,22 @@ func (p *Pipeline) RunChannelDigests(ctx context.Context) (int, *Usage, error) {
 func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 	now := time.Now().UTC()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return p.runDailyRollupForDate(ctx, dayStart)
+}
+
+// runDailyRollupForDate generates a daily rollup for the given date.
+func (p *Pipeline) runDailyRollupForDate(ctx context.Context, dayStart time.Time) error {
+	dayEnd := dayStart.Add(24*time.Hour - time.Second)
+	fromUnix := float64(dayStart.Unix())
+	toUnix := float64(dayEnd.Unix())
 
 	channelDigests, err := p.db.GetDigests(db.DigestFilter{
 		Type:     "channel",
-		FromUnix: float64(dayStart.Unix()),
+		FromUnix: fromUnix,
+		ToUnix:   toUnix,
 	})
 	if err != nil {
-		return fmt.Errorf("getting today's channel digests: %w", err)
+		return fmt.Errorf("getting channel digests for %s: %w", dayStart.Format("2006-01-02"), err)
 	}
 
 	if len(channelDigests) < 2 {
@@ -339,25 +683,31 @@ func (p *Pipeline) RunDailyRollup(ctx context.Context) error {
 		sb.WriteString("\n")
 	}
 
+	// Prepend chain context if available (decisions grouped into chains are shown
+	// as chain updates rather than repeated individually).
+	channelInput := sb.String()
+	if p.ChainContext != "" {
+		channelInput = p.ChainContext + "\n" + channelInput
+	}
+
+	previousContext := p.loadPreviousContext("", "daily")
+
 	dateStr := dayStart.Format("2006-01-02")
 	tmpl, pv := p.getPrompt(prompts.DigestDaily, dailyRollupPrompt)
-	prompt := fmt.Sprintf(tmpl, dateStr, p.languageInstruction(), sb.String())
+	fullPrompt := fmt.Sprintf(tmpl, dateStr, p.formatProfileContext(), p.languageInstruction(), previousContext, channelInput)
+	systemPrompt, userMessage := SplitPromptAtData(fullPrompt)
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.daily"), systemPrompt, userMessage, "")
 	if err != nil {
 		return fmt.Errorf("generating daily rollup: %w", err)
 	}
+	p.accumulateUsage(usage)
 
 	result, err := parseDigestResult(raw)
 	if err != nil {
 		return fmt.Errorf("parsing daily rollup: %w", err)
 	}
 
-	fromUnix := float64(dayStart.Unix())
-	// Use end-of-day as period_to so multiple runs on the same day
-	// upsert into the same row instead of creating duplicates.
-	dayEnd := dayStart.Add(24*time.Hour - time.Second)
-	toUnix := float64(dayEnd.Unix())
 	totalMsgs := 0
 	for _, d := range channelDigests {
 		totalMsgs += d.MessageCount
@@ -394,15 +744,19 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 		sb.WriteString("\n")
 	}
 
+	previousContext := p.loadPreviousContext("", "weekly")
+
 	fromStr := weekStart.Format("2006-01-02")
 	toStr := now.Format("2006-01-02")
 	tmpl, pv := p.getPrompt(prompts.DigestWeekly, weeklyTrendsPrompt)
-	prompt := fmt.Sprintf(tmpl, now.Format("2006-01-02"), fromStr, toStr, p.languageInstruction(), sb.String())
+	fullPrompt := fmt.Sprintf(tmpl, now.Format("2006-01-02"), fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), previousContext, sb.String())
+	systemPrompt, userMessage := SplitPromptAtData(fullPrompt)
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.weekly"), systemPrompt, userMessage, "")
 	if err != nil {
 		return fmt.Errorf("generating weekly trends: %w", err)
 	}
+	p.accumulateUsage(usage)
 
 	result, err := parseDigestResult(raw)
 	if err != nil {
@@ -461,9 +815,10 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 	fromStr := from.Format("2006-01-02")
 	toStr := to.Format("2006-01-02")
 	tmpl, _ := p.getPrompt(prompts.DigestPeriod, periodSummaryPrompt)
-	prompt := fmt.Sprintf(tmpl, fromStr, toStr, p.languageInstruction(), sb.String())
+	fullPrompt := fmt.Sprintf(tmpl, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), sb.String())
+	systemPrompt, userMessage := SplitPromptAtData(fullPrompt)
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.period"), systemPrompt, userMessage, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating period summary: %w", err)
 	}
@@ -476,8 +831,45 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 	return result, usage, nil
 }
 
+// loadPreviousContext loads the running summary from the latest digest for the
+// given channel/type and formats it as a prompt section. Returns empty string
+// if no previous context exists, if the context is too old (>30 days), or on error.
+// Context older than 7 days is included with an "(outdated)" warning.
+func (p *Pipeline) loadPreviousContext(channelID, digestType string) string {
+	result, err := p.db.GetLatestRunningSummaryWithAge(channelID, digestType)
+	if err != nil {
+		p.logger.Printf("digest: warning: failed to load running summary for %s/%s: %v", channelID, digestType, err)
+		return ""
+	}
+	if result == nil || result.Summary == "" {
+		return ""
+	}
+
+	// TTL: >30 days — don't use at all
+	if result.AgeDays > 30 {
+		return ""
+	}
+
+	var section strings.Builder
+	section.WriteString("\n=== PREVIOUS CONTEXT ===\n")
+
+	// TTL: >7 days — mark as outdated
+	if result.AgeDays > 7 {
+		fmt.Fprintf(&section, "(outdated, from %.0f days ago)\n", result.AgeDays)
+	}
+
+	section.WriteString(result.Summary)
+	section.WriteString("\n\nRules for PREVIOUS CONTEXT:\n")
+	section.WriteString("- Use PREVIOUS CONTEXT to detect continuity: evolving topics, resolved questions, changed decisions.\n")
+	section.WriteString("- Say \"continues from [date]\" for ongoing topics, \"resolved since [date]\" for closed ones.\n")
+	section.WriteString("- Do NOT repeat decisions/topics from PREVIOUS CONTEXT unless their status changed.\n")
+	section.WriteString("- Generate an updated running_summary reflecting the current state after this analysis.\n")
+
+	return section.String()
+}
+
 // generateChannelDigest returns the parsed result, usage, prompt version, and error.
-func (p *Pipeline) generateChannelDigest(ctx context.Context, channelName string, msgs []db.Message, from, to float64) (*DigestResult, *Usage, int, error) {
+func (p *Pipeline) generateChannelDigest(ctx context.Context, channelID, channelName string, msgs []db.Message, from, to float64) (*DigestResult, *Usage, int, error) {
 	// Sort messages chronologically (oldest first) for natural reading
 	sort.Slice(msgs, func(i, j int) bool { return msgs[i].TSUnix < msgs[j].TSUnix })
 
@@ -489,10 +881,16 @@ func (p *Pipeline) generateChannelDigest(ctx context.Context, channelName string
 	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02 15:04")
 	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02 15:04")
 
-	tmpl, pv := p.getPrompt(prompts.DigestChannel, channelDigestPrompt)
-	prompt := fmt.Sprintf(tmpl, channelName, fromStr, toStr, p.languageInstruction(), formatted)
+	previousContext := p.loadPreviousContext(channelID, "channel")
 
-	raw, usage, err := p.generator.Generate(ctx, "", prompt)
+	tmpl, pv := p.getPrompt(prompts.DigestChannel, channelDigestPrompt)
+	fullPrompt := fmt.Sprintf(tmpl, channelName, fromStr, toStr, p.formatProfileContext(), p.languageInstruction(), previousContext, formatted)
+
+	// Split into system prompt (instructions) and user message (data).
+	// This enables Claude API prompt caching for the instruction part.
+	systemPrompt, userMessage := SplitPromptAtData(fullPrompt)
+
+	raw, usage, _, err := p.generator.Generate(WithSource(ctx, "digest.channel"), systemPrompt, userMessage, "")
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("claude call failed: %w", err)
 	}
@@ -505,19 +903,29 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 	topics, _ := json.Marshal(result.Topics)
 	decisions, _ := json.Marshal(result.Decisions)
 	actionItems, _ := json.Marshal(result.ActionItems)
+	situations, _ := json.Marshal(result.Situations)
+
+	// Store running_summary as-is (json.RawMessage → string)
+	runningSummary := ""
+	if len(result.RunningSummary) > 0 {
+		runningSummary = string(result.RunningSummary)
+	}
 
 	d := db.Digest{
-		ChannelID:     channelID,
-		Type:          digestType,
-		PeriodFrom:    from,
-		PeriodTo:      to,
-		Summary:       result.Summary,
-		Topics:        string(topics),
-		Decisions:     string(decisions),
-		ActionItems:   string(actionItems),
-		MessageCount:  msgCount,
-		Model:         p.cfg.Digest.Model,
-		PromptVersion: promptVersion,
+		ChannelID:      channelID,
+		Type:           digestType,
+		PeriodFrom:     from,
+		PeriodTo:       to,
+		Summary:        result.Summary,
+		Topics:         string(topics),
+		Decisions:      string(decisions),
+		ActionItems:    string(actionItems),
+		PeopleSignals:  "[]",
+		Situations:     string(situations),
+		RunningSummary: runningSummary,
+		MessageCount:   msgCount,
+		Model:          p.cfg.Digest.Model,
+		PromptVersion:  promptVersion,
 	}
 	if usage != nil {
 		d.InputTokens = usage.InputTokens
@@ -533,10 +941,18 @@ func (p *Pipeline) lastDigestTime() float64 {
 	// Find the latest channel digest period_to
 	digests, err := p.db.GetDigests(db.DigestFilter{Type: "channel", Limit: 1})
 	if err == nil && len(digests) > 0 {
+		t := time.Unix(int64(digests[0].PeriodTo), 0)
+		p.logger.Printf("digest: last digest time: %s", t.Format("2006-01-02 15:04"))
 		return digests[0].PeriodTo
 	}
-	// Default: 24 hours ago
-	return float64(time.Now().Add(-24 * time.Hour).Unix())
+	// First run: use initial_history_days from config (set during onboarding)
+	days := p.cfg.Sync.InitialHistoryDays
+	if days <= 0 {
+		days = config.DefaultInitialHistDays
+	}
+	since := float64(time.Now().AddDate(0, 0, -days).Unix())
+	p.logger.Printf("digest: first run — looking back %d days, since=%s (%.0f)", days, time.Unix(int64(since), 0).Format("2006-01-02 15:04"), since)
+	return since
 }
 
 func (p *Pipeline) formatMessages(msgs []db.Message) string {
@@ -553,14 +969,36 @@ func (p *Pipeline) formatMessages(msgs []db.Message) string {
 			text = strings.ReplaceAll(text, "===", "= = =")
 			text = strings.ReplaceAll(text, "---", "- - -")
 		}
-		fmt.Fprintf(&sb, "[%s] @%s: %s\n", ts, userName, text)
+		fmt.Fprintf(&sb, "[%s @%s (%s)] %s\n", ts, userName, m.UserID, text)
 	}
 	return sb.String()
+}
+
+// SplitPromptAtData splits a formatted prompt into system prompt (instructions)
+// and user message (data) at the "=== " delimiter. This enables API-level prompt
+// caching for the instruction part. If no delimiter is found, everything goes as
+// user message with an empty system prompt.
+func SplitPromptAtData(prompt string) (systemPrompt, userMessage string) {
+	// Look for the data section delimiter (=== MESSAGES ===, === CHANNEL DIGESTS ===, etc.)
+	markers := []string{"=== MESSAGES ===", "=== CHANNEL DIGESTS ===", "=== DAILY DIGESTS ===", "=== DIGESTS ==="}
+	for _, marker := range markers {
+		if idx := strings.LastIndex(prompt, marker); idx > 0 {
+			return strings.TrimSpace(prompt[:idx]), prompt[idx:]
+		}
+	}
+	return "", prompt
 }
 
 func (p *Pipeline) loadCaches() {
 	p.channelNames = make(map[string]string)
 	p.userNames = make(map[string]string)
+
+	// Load user profile for personalized digests.
+	if userID, err := p.db.GetCurrentUserID(); err == nil && userID != "" {
+		if profile, err := p.db.GetUserProfile(userID); err == nil {
+			p.profile = profile
+		}
+	}
 
 	users, err := p.db.GetUsers(db.UserFilter{})
 	if err != nil {
@@ -596,6 +1034,33 @@ func (p *Pipeline) loadCaches() {
 			p.channelNames[ch.ID] = name
 		}
 	}
+}
+
+// formatProfileContext builds the profile context section for digest prompts.
+// Returns personalization hints so the AI focuses on what matters to the user.
+func (p *Pipeline) formatProfileContext() string {
+	if p.profile == nil || p.profile.CustomPromptContext == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== USER PROFILE CONTEXT ===\n")
+	sb.WriteString(sanitizePromptValue(p.profile.CustomPromptContext))
+	sb.WriteString("\n\nPERSONALIZATION RULES:\n")
+	sb.WriteString("- Prioritize decisions and action items relevant to this user's role and responsibilities\n")
+	sb.WriteString("- Highlight topics that fall within the user's area of focus\n")
+
+	if p.profile.StarredChannels != "" && p.profile.StarredChannels != "[]" {
+		sb.WriteString(fmt.Sprintf("\nSTARRED CHANNELS: %s — provide more detail for these channels, lower threshold for including topics\n", sanitizePromptValue(p.profile.StarredChannels)))
+	}
+	if p.profile.StarredPeople != "" && p.profile.StarredPeople != "[]" {
+		sb.WriteString(fmt.Sprintf("\nSTARRED PEOPLE: %s — highlight decisions and actions by these people\n", sanitizePromptValue(p.profile.StarredPeople)))
+	}
+	if p.profile.Reports != "" && p.profile.Reports != "[]" {
+		sb.WriteString(fmt.Sprintf("\nMY REPORTS: %s — flag action items assigned to these people\n", sanitizePromptValue(p.profile.Reports)))
+	}
+
+	return sb.String()
 }
 
 func (p *Pipeline) languageInstruction() string {

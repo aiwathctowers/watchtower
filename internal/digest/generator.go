@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,14 +103,20 @@ func parseCLIOutput(output []byte) (*cliResponse, error) {
 	return nil, fmt.Errorf("unexpected claude CLI output format: %.200s", string(trimmed))
 }
 
-// Generate calls Claude CLI with the given prompt and returns the response text
-// along with token usage statistics.
-func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessage string) (string, *Usage, error) {
+// Generate calls Claude CLI with the given prompt and returns the response text,
+// token usage statistics, and the session ID for reuse.
+// Each call creates a fresh session with --no-session-persistence to avoid
+// disk clutter. The sessionID parameter is accepted for interface compatibility
+// but ignored — session reuse via --resume is not supported by the current CLI.
+func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, *Usage, string, error) {
 	args := []string{
 		"-p", userMessage,
 		"--output-format", "json",
 		"--model", g.model,
+		"--no-session-persistence",
+		"--tools", "",
 	}
+
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
 	}
@@ -121,8 +128,17 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 		return cmd.Process.Signal(os.Interrupt)
 	}
 	cmd.WaitDelay = 5 * time.Second
-	// Run from a temp dir so the CLI doesn't load project-specific settings.
-	cmd.Dir = os.TempDir()
+	// Run from ~/.config/watchtower as a stable working directory.
+	configDir, _ := os.UserHomeDir()
+	if configDir != "" {
+		configDir = filepath.Join(configDir, ".config", "watchtower")
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			configDir = os.TempDir()
+		}
+		cmd.Dir = configDir
+	} else {
+		cmd.Dir = os.TempDir()
+	}
 	// Build a clean environment:
 	// - Enrich PATH so `#!/usr/bin/env node` resolves from macOS .app bundles.
 	// - Remove CLAUDECODE to avoid "nested session" detection when launched
@@ -147,7 +163,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 	if err != nil {
 		if execErr, ok := err.(*exec.Error); ok {
 			if execErr.Err == exec.ErrNotFound {
-				return "", nil, fmt.Errorf("claude CLI not found at %q (PATH=%s) — install Claude Code first", claudeBin, os.Getenv("PATH"))
+				return "", nil, "", fmt.Errorf("claude CLI not found at %q (PATH=%s) — install Claude Code first", claudeBin, os.Getenv("PATH"))
 			}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -161,31 +177,36 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 				stderrMsg = stdoutMsg
 			}
 			if stderrMsg != "" {
-				return "", nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderrMsg)
+				return "", nil, "", fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderrMsg)
 			}
-			return "", nil, fmt.Errorf("claude CLI failed with exit code %d", exitErr.ExitCode())
+			return "", nil, "", fmt.Errorf("claude CLI failed with exit code %d", exitErr.ExitCode())
 		}
-		return "", nil, fmt.Errorf("claude CLI error: %w", err)
+		return "", nil, "", fmt.Errorf("claude CLI error: %w", err)
 	}
 
 	resp, err := parseCLIOutput(output)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 
 	if resp.IsError {
-		return "", nil, fmt.Errorf("claude returned error: %s", resp.Result)
+		return "", nil, "", fmt.Errorf("claude returned error: %s", resp.Result)
 	}
 
 	if strings.TrimSpace(resp.Result) == "" {
-		return "", nil, fmt.Errorf("claude returned empty result (turns=%d, tokens=%d+%d)", resp.NumTurns, resp.Usage.InputTokens, resp.Usage.OutputTokens)
+		return "", nil, "", fmt.Errorf("claude returned empty result (turns=%d, tokens=%d+%d)", resp.NumTurns, resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	}
 
+	// Estimate our prompt size in tokens (~4 chars per token).
+	promptTokens := (len(systemPrompt) + len(userMessage)) / 4
+	// Total API tokens = everything the API processed (our content + CLI overhead).
+	totalAPI := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens
 	usage := &Usage{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
-		CostUSD:      resp.CostUSD,
+		InputTokens:    promptTokens,
+		OutputTokens:   resp.Usage.OutputTokens,
+		CostUSD:        resp.CostUSD,
+		TotalAPITokens: totalAPI,
 	}
 
-	return resp.Result, usage, nil
+	return resp.Result, usage, resp.SessionID, nil
 }

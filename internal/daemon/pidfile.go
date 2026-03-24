@@ -141,7 +141,7 @@ func RemovePID(path string) {
 // Returns true if the PID is definitely reused by an unrelated process.
 // Returns false (conservative) if we can't determine or if it is watchtower.
 func isReusedPID(pid int) bool {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output() //nolint:gosec // args are validated internally
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	if err != nil {
 		return false // can't determine — assume it's ours
 	}

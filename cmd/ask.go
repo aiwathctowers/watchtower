@@ -81,7 +81,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 
 	// Assemble prompt with DB access
 	dbPath := cfg.DBPath()
-	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, dbPath, db.Schema)
+	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, ws.ID, dbPath, db.Schema, cfg.Digest.Language)
 
 	// Inject digest context if available
 	if digestCtx := buildDigestContext(database); digestCtx != "" {
@@ -106,7 +106,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	out := cmd.OutOrStdout()
-	renderer := ai.NewResponseRenderer(database, ws.Domain)
+	renderer := ai.NewResponseRenderer(database, ws.Domain, ws.ID)
 
 	resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
 	if err != nil {

@@ -1,18 +1,22 @@
+// Package prompts provides prompt management, storage, and tuning for AI-powered features.
 package prompts
 
 // Defaults maps prompt IDs to their built-in template strings.
 // These are the same prompts that were previously hardcoded as consts
-// in digest, actionitems, and analysis packages. They serve as the
+// in digest, tracks, and analysis packages. They serve as the
 // initial seed and fallback when no DB version exists.
 var Defaults = map[string]string{
-	DigestChannel:      defaultDigestChannel,
-	DigestDaily:        defaultDigestDaily,
-	DigestWeekly:       defaultDigestWeekly,
-	DigestPeriod:       defaultDigestPeriod,
-	ActionItemsExtract: defaultActionItemsExtract,
-	ActionItemsUpdate:  defaultActionItemsUpdate,
-	AnalysisUser:       defaultAnalysisUser,
-	AnalysisPeriod:     defaultAnalysisPeriod,
+	DigestChannel: defaultDigestChannel,
+	DigestDaily:   defaultDigestDaily,
+	DigestWeekly:  defaultDigestWeekly,
+	DigestPeriod:  defaultDigestPeriod,
+	TracksExtract: defaultTracksExtract,
+	TracksUpdate:  defaultTracksUpdate,
+	GuideUser:     defaultGuideUser,
+	GuidePeriod:   defaultGuidePeriod,
+	PeopleReduce:  defaultPeopleReduce,
+	PeopleTeam:    defaultPeopleTeam,
+	BriefingDaily: defaultBriefingDaily,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -21,25 +25,33 @@ var AllIDs = []string{
 	DigestDaily,
 	DigestWeekly,
 	DigestPeriod,
-	ActionItemsExtract,
-	ActionItemsUpdate,
-	AnalysisUser,
-	AnalysisPeriod,
+	TracksExtract,
+	TracksUpdate,
+	GuideUser,
+	GuidePeriod,
+	PeopleReduce,
+	PeopleTeam,
+	BriefingDaily,
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
 var Descriptions = map[string]string{
-	DigestChannel:      "Channel digest — per-channel message analysis",
-	DigestDaily:        "Daily rollup — cross-channel daily summary",
-	DigestWeekly:       "Weekly trends — week-over-week analysis",
-	DigestPeriod:       "Period summary — comprehensive period overview",
-	ActionItemsExtract: "Action items — extract tasks from messages",
-	ActionItemsUpdate:  "Action item update check — detect progress in threads",
-	AnalysisUser:       "User analysis — communication pattern analysis",
-	AnalysisPeriod:     "Team summary — cross-user team dynamics",
+	DigestChannel: "Channel digest — per-channel message analysis",
+	DigestDaily:   "Daily rollup — cross-channel daily summary",
+	DigestWeekly:  "Weekly trends — week-over-week analysis",
+	DigestPeriod:  "Period summary — comprehensive period overview",
+	TracksExtract: "Tracks — extract tasks from messages",
+	TracksUpdate:  "Track update check — detect progress in threads",
+	GuideUser:     "Communication guide — personal coaching per user",
+	GuidePeriod:   "Team guide — cross-user communication tips",
+	PeopleReduce:  "People card — unified profile from signals",
+	PeopleTeam:    "Team summary — cross-user attention & tips",
+	BriefingDaily: "Daily briefing — personalized morning summary",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
+
+%s
 
 Analyze the messages below and return ONLY a JSON object (no markdown fences, no explanation) with this exact structure:
 
@@ -48,7 +60,9 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
   "topics": ["topic1", "topic2"],
   "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
   "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
-  "key_messages": ["1234567890.123456", "1234567891.123456"]
+  "key_messages": ["1234567890.123456", "1234567891.123456"],
+  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief description of channel culture and key players", "open_questions": ["..."]}
 }
 
 %s
@@ -69,13 +83,30 @@ Rules:
   If only 0-1 true decisions exist, return an empty or single-item array. Do NOT inflate the list.
 - action_items: Tasks mentioned or assigned. status is always "open" for new items
 - key_messages: Timestamps of the most important messages (max 5)
+- situations: Notable INTERACTIONS between people (max 3-5). Capture dynamics BETWEEN people, not individual behavior. Each situation has:
+  * topic: Short label for the topic/project (e.g. "Auth refactor ownership", "Sprint planning conflict")
+  * type: "bottleneck", "conflict", "collaboration", "knowledge_transfer", "decision_deadlock", "mentoring", "escalation", "handoff", "misalignment"
+  * participants: Each person involved with their role ("blocker", "affected", "initiator", "resolver", "mediator", "mentor", "mentee", "decision_maker", "contributor")
+  * dynamic: What happened between the participants (1-2 sentences)
+  * outcome: Result or current state (1 sentence)
+  * red_flags: Specific concerns from this situation (empty [] if none)
+  * observations: Notable patterns or behaviors observed (empty [] if none)
+  * message_refs: Slack timestamps of key messages (e.g. ["1234567890.123456"])
+  Use Slack user IDs (e.g. U123456) for participant user_id. Only include situations where the interaction pattern is noteworthy — skip routine exchanges. If no notable situations, return empty array [].
+- running_summary: Updated running context for this channel. Compress aggressively — max 2000 characters. Include:
+  * active_topics: Topics currently in progress or recently discussed (remove resolved topics older than 3 days)
+  * recent_decisions: Key decisions from the last few days (max 5, remove outdated ones)
+  * channel_dynamics: Brief description of channel culture, key players, communication patterns
+  * open_questions: Unresolved questions that may come up again
 - If a field has no items, use an empty array []
 - Return valid JSON only, no other text
-
+%s
 === MESSAGES ===
 %s`
 
 const defaultDigestDaily = `You are creating a daily summary of Slack activity for %s.
+
+%s
 
 Below are per-channel digests from today, including their extracted decisions. Create a cross-channel rollup.
 
@@ -86,7 +117,8 @@ Return ONLY a JSON object (no markdown fences, no explanation):
   "topics": ["cross-channel topic1", "topic2"],
   "decisions": [{"text": "decision text", "by": "@username", "message_ts": "ts", "importance": "high"}],
   "action_items": [{"text": "action text", "assignee": "@username", "status": "open"}],
-  "key_messages": []
+  "key_messages": [],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief cross-channel dynamics overview", "open_questions": ["..."]}
 }
 
 %s
@@ -99,12 +131,15 @@ Rules:
   * "medium" — changes a process, workflow, or technical approach within a team/project
   * "low" — minor tactical choices (naming, formatting, scheduling, tooling tweaks)
   Only include GENUINE decisions. If no real decisions were made today, return an empty array.
+- running_summary: Updated daily running context. Compress aggressively — max 2000 characters. Track cross-channel themes, decisions, and open questions.
 - Return valid JSON only
-
+%s
 === CHANNEL DIGESTS ===
 %s`
 
 const defaultDigestWeekly = `You are analyzing a week of Slack workspace activity for %s (%s to %s).
+
+%s
 
 Below are daily summaries for the week. Create a weekly trends analysis.
 
@@ -115,7 +150,8 @@ Return ONLY a JSON object (no markdown fences, no explanation):
   "topics": ["trending topic1", "trending topic2"],
   "decisions": [{"text": "key decision", "by": "@username", "message_ts": "ts", "importance": "high"}],
   "action_items": [{"text": "outstanding action", "assignee": "@username", "status": "open"}],
-  "key_messages": []
+  "key_messages": [],
+  "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief weekly dynamics overview", "open_questions": ["..."]}
 }
 
 %s
@@ -125,12 +161,15 @@ Rules:
 - Highlight the most impactful decisions of the week. DEDUPLICATE: if the same decision appears across multiple days, include it only ONCE. Only include genuine choices/decisions, not status updates.
   importance: "high" (architectural, strategic, budget, org-wide), "medium" (process, workflow, team-level), "low" (tactical, minor)
 - Consolidate action items (remove completed, flag overdue)
+- running_summary: Updated weekly running context. Compress aggressively — max 2000 characters. Track major themes, decisions, trends, and open questions across the week.
 - Return valid JSON only
-
+%s
 === DAILY DIGESTS ===
 %s`
 
 const defaultDigestPeriod = `You are creating a summary of Slack workspace activity for the period %s to %s.
+
+%s
 
 Below are individual digests (channel-level and daily rollups) from that period. Create a comprehensive summary.
 
@@ -157,17 +196,25 @@ Rules:
 === DIGESTS ===
 %s`
 
-const defaultActionItemsExtract = `You are analyzing Slack messages from channel #%[3]s (%[4]s) to find action items directed at user @%[1]s (user_id: %[2]s) for the period %[5]s to %[6]s.
+const defaultTracksExtract = `You are analyzing Slack messages from channel #%[3]s (%[4]s) to find tracks directed at user @%[1]s (user_id: %[2]s) for the period %[5]s to %[6]s.
 
 Your task: identify actions, requests, tasks, and expectations directed at this specific user in this channel.
 
-CRITICAL: Group related requests into a SINGLE action item. If multiple messages discuss the same topic/task (e.g., "reserve equipment", "assess datacenter", "list critical components" all about the same infrastructure project), combine them into ONE comprehensive action item — do NOT create separate items for each message about the same topic.
+CRITICAL: Group related requests into a SINGLE track. If multiple messages discuss the same topic/task (e.g., "reserve equipment", "assess datacenter", "list critical components" all about the same infrastructure project), combine them into ONE comprehensive track — do NOT create separate items for each message about the same topic.
+
+DEDUPLICATION: Review the EXISTING TRACKS section below. If a message relates to an existing track, UPDATE it (set "existing_id" to the track's ID) instead of creating a new one. Only create new tracks for genuinely new topics not covered by existing tracks.
+
+COMPLETION DETECTION: If you see messages confirming that an existing track has been COMPLETED (e.g., "done", "deployed", "opened access", "fixed", "released", status updates showing the task is finished), return the track with "existing_id" set to that track's ID and "status_hint": "done". This is critical — do NOT ignore completion signals just because they are not new tracks.
+
+%[12]s
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
   "items": [
     {
+      "existing_id": null,
+      "status_hint": "",
       "text": "clear, actionable description of what needs to be done",
       "context": "detailed context (3-5 sentences): what was discussed, what decisions were made, what is the background, why this matters. Include enough detail so the reader does NOT need to read the original thread.",
       "source_message_ts": "1234567890.123456",
@@ -189,7 +236,10 @@ Return ONLY a JSON object (no markdown fences, no explanation):
       ],
       "sub_items": [
         {"text": "specific sub-task or checklist item", "status": "open"}
-      ]
+      ],
+      "ownership": "mine",
+      "ball_on": "U123",
+      "owner_user_id": "U456"
     }
   ]
 }
@@ -197,9 +247,9 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 %[7]s
 
 Rules:
-- GROUPING: This is the most important rule. Multiple messages about the same topic/project/task MUST be merged into ONE item. Look at the broader topic, not individual messages.
-- Only extract items with a CLEAR actionable request. Skip vague mentions.
-- Look for BOTH explicit and implicit action items:
+- GROUPING: This is the most important rule. Multiple messages about the same topic/project/task MUST be merged into ONE track. Look at the broader topic, not individual messages.
+- Only extract tracks with a CLEAR actionable request. Skip vague mentions.
+- Look for BOTH explicit and implicit tracks:
   * Direct requests: "@user, can you...", "@user please do X"
   * Assignments: "user will handle X", "assigned to @user"
   * Questions expecting action: "@user, what about X?", "can you check X?"
@@ -219,7 +269,7 @@ Rules:
 - source_message_ts: the Slack timestamp of the MOST important message (the original request or assignment)
 - context: detailed explanation (3-5 sentences) of the situation, decisions made, and why this action is needed. The reader should understand the full picture without reading the original thread.
 - requester: the SPECIFIC person who made the request or assigned the task. Must include name and user_id. If the user committed to doing something themselves, the requester is themselves.
-- category: classify the action item type. MUST be one of:
+- category: classify the track type. MUST be one of:
   * "code_review" — PR review, code feedback
   * "decision_needed" — a decision must be made
   * "info_request" — someone asked for information/answer
@@ -228,149 +278,297 @@ Rules:
   * "follow_up" — check back, provide update, follow up on something
   * "bug_fix" — fix a bug or issue
   * "discussion" — participate in a discussion or give opinion
-- blocking: describe who or what is blocked if this action item is NOT done. E.g., "Release v2.1 is blocked", "Backend team is waiting", "@designer can't proceed". Leave empty string "" if nothing is explicitly blocked.
+- blocking: describe who or what is blocked if this track is NOT done. E.g., "Release v2.1 is blocked", "Backend team is waiting", "@designer can't proceed". Leave empty string "" if nothing is explicitly blocked.
 - tags: 1-3 short lowercase tags for the project, topic, or area (e.g., ["infrastructure", "security", "q1-planning"]). Extract from context — channel name, project mentions, etc.
 - decision_summary: if a decision was discussed or made, describe HOW the group arrived at it — what arguments were raised, who advocated for what, and what the outcome was. This tells the story of the decision process. Leave empty string "" if no decision context.
 - decision_options: if a decision is PENDING (not yet made), list the options being considered. Each option should have: description, who supports it, pros and cons. Leave empty array [] if the decision is already made or there are no options.
 - participants: list ALL people involved in the discussion about this topic. For each person, summarize their stance/opinion/role. Include people who made decisions, raised concerns, proposed alternatives, or were assigned tasks. Omit participants only if they added nothing meaningful (e.g., just emoji reactions).
-- source_refs: list the 2-5 most important messages related to this action item. For each, include the Slack timestamp, author, and a 1-sentence summary of what was said. These serve as "footnotes" so the reader can jump to key messages.
-- sub_items: break down the action item into concrete sub-tasks or checklist items. Each sub-item has "text" (what to do) and "status" ("open" or "done"). If a sub-task was clearly completed in the conversation, set status to "done". Aim for 2-5 sub-items per action item. Leave empty array [] if the action item is atomic and doesn't need breakdown.
-- If no action items are found, return {"items": []}
+- source_refs: list the 2-5 most important messages related to this track. For each, include the Slack timestamp, author, and a 1-sentence summary of what was said. These serve as "footnotes" so the reader can jump to key messages.
+- sub_items: break down the track into concrete sub-tasks or checklist items. Each sub-item has "text" (what to do) and "status" ("open" or "done"). If a sub-task was clearly completed in the conversation, set status to "done". Aim for 2-5 sub-items per track. Leave empty array [] if the track is atomic and doesn't need breakdown.
+- existing_id: if the track matches an existing track from the EXISTING TRACKS section below, set this to the track's numeric ID. The AI should UPDATE the existing track (merge new info into context, update priority/due_date if changed). Set to null for genuinely new tracks not covered by any existing track. Prefer updating over creating duplicates.
+- status_hint: set to "done" if messages clearly confirm the existing track has been completed (someone did the work, deployed, confirmed, etc.). Set to "active" or leave empty ("") for tracks still in progress. This field is ONLY used with existing_id — for new tracks, leave it empty.
+- ownership: MUST be one of "mine", "delegated", "watching":
+  * "mine" — the task/request is directed at the user, the ball is on them, they need to act
+  * "delegated" — the task involves the user's direct report as the responsible person; the user oversees it
+  * "watching" — the task/decision affects the user's area but they are not the primary actor; important to stay informed
+  * Default to "mine" if unsure — better to surface than miss
+- ball_on: the user_id of the person who needs to act NEXT on this track. If the user asked a question and is waiting for a reply, ball_on is the other person's user_id. If someone asked the user something, ball_on is the user's own user_id. Leave empty string "" if unclear.
+- owner_user_id: the user_id of the person who "owns" the track. For "mine" tracks, this is the current user. For "delegated" tracks, this is the direct report's user_id. For "watching" tracks, this can be whoever is responsible. Leave empty string "" if same as the current user.
+- If no tracks are found, return {"items": []}
+%[13]s
 - Return valid JSON only, no other text
+%[8]s
+
+%[9]s
+
+%[10]s
 
 === MESSAGES ===
-%[8]s`
+%[11]s`
 
-const defaultActionItemsUpdate = `You are checking whether new Slack thread messages contain a meaningful update for an existing action item.
+const defaultTracksUpdate = `You are checking whether new Slack thread messages contain a meaningful update for an existing track.
 
-Action item: %[1]s
+Track: %[1]s
 Previous context: %[2]s
 Channel: #%[3]s
 
+%[6]s
+
 %[4]s
 
-New thread messages since last check:
+New messages since last check (thread replies and channel messages):
 %[5]s
 
 Analyze the new messages and determine:
-1. Is there a meaningful update related to this action item? (progress, completion, blocker, change in scope, deadline change, etc.)
+1. Is there a meaningful update related to this track? (progress, completion, blocker, change in scope, deadline change, etc.)
 2. If yes, provide a brief updated context summarizing what changed.
-3. Does the update suggest the action item is now done?
+3. Does the update suggest the track is now done?
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
   "has_update": true,
   "updated_context": "brief summary of what changed or progressed",
-  "status_hint": "done"
+  "status_hint": "done",
+  "ball_on": "U123"
 }
 
 Rules:
-- has_update: true only if the messages contain genuine progress, completion, or a meaningful change related to the action item
+- has_update: true only if the messages contain genuine progress, completion, or a meaningful change related to the track
 - has_update: false for unrelated chatter, bot messages, emoji-only reactions, or off-topic replies in the same thread
 - updated_context: 1-2 sentences summarizing the update. Only provided when has_update is true. Omit or leave empty when has_update is false.
 - status_hint: one of "done", "active", or "unchanged"
-  * "done" — the action item appears to be completed based on the messages
-  * "active" — there is progress but the item is not yet done
+  * "done" — the track appears to be completed based on the messages
+  * "active" — there is progress but the track is not yet done
   * "unchanged" — use when has_update is false
+- ball_on: the user_id of the person who needs to act next based on the new messages. If someone replied and the ball moved to another person, update this. Leave empty string "" if the ball hasn't moved or if unclear.
 - Return valid JSON only, no other text`
 
-const defaultAnalysisUser = `You are analyzing Slack communication patterns for @%s over a 7-day window (%s to %s).
+const defaultGuideUser = `You are a personal communication coach helping the user work more effectively with @%s over a 7-day window (%s to %s).
 
-Below are the user's computed statistics and ALL their messages from this period. Perform a deep analysis of their communication patterns, effectiveness, and areas of concern.
+%s
+
+Below are computed statistics and messages for this person. Your goal is NOT to evaluate or judge them — instead, generate actionable advice for the user on how to communicate, collaborate, and get things done with this person most effectively.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
-  "summary": "2-3 sentence overview of this person's communication patterns, role, and impact on the team",
-  "communication_style": "one of: driver, collaborator, executor, observer, facilitator",
-  "decision_role": "one of: decision-maker, approver, contributor, observer, blocker",
-  "style_details": "Detailed paragraph evaluating communication quality. What this person does well and what they do poorly. Are they constructive? Do they provide clear context? Do they follow up? Are they responsive? Do they create friction? Be specific with examples from messages.",
-  "red_flags": ["list of concerns — be specific: quote messages, name channels, describe situations"],
-  "highlights": ["positive contributions — be specific with examples"],
-  "recommendations": ["actionable suggestions for improving communication effectiveness"],
-  "concerns": ["specific issues: unconstructive behavior, missed commitments, dropped balls, conflicts — cite evidence from messages"],
-  "accomplishments": ["what this person delivered/completed/moved forward this week — specific tasks, decisions made, problems solved, features shipped, reviews done. Be concrete: 'launched X', 'resolved issue with Y', 'reviewed and approved Z'"]
+  "summary": "2-3 sentence overview of how to work effectively with this person — what makes them tick, what they respond to, what to keep in mind",
+  "communication_preferences": "Detailed paragraph: preferred communication format (long vs short messages, structured vs informal), response patterns (quick/slow, thorough/brief), preferred channels, threading habits. Frame as actionable: 'Send structured messages with clear asks — they respond best to bullet points'",
+  "availability_patterns": "When this person is most active and responsive. Peak hours, timezone patterns, response lag. Frame as: 'Best time to reach them is...'",
+  "decision_process": "How they participate in decisions: do they decide quickly or need time? Do they want data or prefer discussion? Do they defer or take charge? Frame as: 'When you need a decision from them...'",
+  "situational_tactics": ["If X situation arises, here's the best approach..."],
+  "effective_approaches": ["What works well when communicating with this person — based on observed patterns"],
+  "recommendations": ["Specific actionable tips for improving collaboration with this person"]
 }
 
-Communication styles:
-- driver: Initiates discussions, sets direction, proposes ideas
-- collaborator: Engages actively, builds on others' ideas, provides feedback
-- executor: Focused on tasks, updates progress, asks clarifying questions
-- observer: Reads but rarely contributes, occasional reactions/short replies
-- facilitator: Coordinates between people, summarizes, mediates
+Communication preferences to analyze:
+- Message format: long-form vs concise, structured vs stream-of-consciousness
+- Response speed: how quickly they typically reply, any patterns
+- Channel preference: which channels they are most active in
+- Threading: do they use threads or reply in channel?
+- Tone: formal vs casual, direct vs diplomatic
 
-Decision roles:
-- decision-maker: Makes final calls, sets direction
-- approver: Reviews and approves/rejects proposals
-- contributor: Provides input and analysis for decisions
-- observer: Present but doesn't influence decisions
-- blocker: Delays or blocks decision progress (use only with clear evidence)
+Availability patterns to identify:
+- Peak activity hours (from active_hours data)
+- Response latency patterns
+- Days/times when they are most engaged
 
-ANALYSIS FOCUS — be thorough on these:
+Decision process to assess:
+- Do they make decisions independently or seek consensus?
+- Do they need data/evidence or go with intuition?
+- Are they decisive or deliberative?
+- How do they handle disagreements?
 
-1. CONSTRUCTIVENESS: Is this person constructive in discussions? Do they offer solutions or just complain? Do they provide helpful feedback or just criticize? Look for passive-aggressive patterns, dismissive responses, or lack of engagement.
+Situational tactics — identify communication patterns that may lead to friction, delays, or misalignment, and suggest specific tactics the user can apply to prevent or navigate these situations:
+- If they tend to not respond to messages → suggest escalation path or better timing
+- If they get overloaded → suggest batching requests
+- If they prefer written over verbal → adapt approach
+- Frame as "If [situation], then [tactic]" — specific and actionable
 
-2. ACCOUNTABILITY: Did they commit to something and not follow through? Did they miss deadlines mentioned in messages? Did they drop a task or ignore a request? Cite specific messages.
-
-3. CONFLICT & FRICTION: Are there signs of tension with other team members? Unresolved disagreements? Blocking behavior? Dismissing others' input?
-
-4. COMMUNICATION QUALITY: Are messages clear and actionable? Or vague and confusing? Do they provide context? Do they over-communicate or under-communicate? Are they responsive in threads?
-
-5. DECISION PARTICIPATION: Do they engage in decision-making or avoid it? Do they rubber-stamp or provide genuine input? Do they delay decisions?
-
-6. TEAM IMPACT: How does this person affect team dynamics? Are they a multiplier (making others more effective) or a bottleneck?
-
-Red flags to watch for:
-- Volume drop >40%% vs previous period → potential disengagement
-- Only short messages without substance → low engagement
-- Never participates in threads → not collaborating
-- Blocked decisions or unresolved conflicts
-- Sudden tone shift
-- Ignoring questions or requests from teammates
-- Making commitments without follow-through
-- Unconstructive criticism without offering alternatives
+%s
 
 Rules:
-- Base analysis ONLY on the data provided — do not invent facts
-- Be direct and honest — this is for a manager who needs real insights
-- If there are problems, say so clearly with evidence
+- This is a PERSONAL COACHING tool — frame everything as advice FOR THE USER, not judgments ABOUT the person
+- Be specific: cite patterns from actual messages, reference channels, mention timing
+- Do NOT use evaluative language ("good communicator", "poor performance", "red flag")
+- Instead use actionable language ("responds best to...", "when you need X, try...")
+- If the relationship is manager→report: advice should be more directive ("set clear deadlines", "check in at standup")
+- If peer: advice should be collaborative ("mention in shared channel", "align on approach first")
+- If report→manager: advice should be tactical ("batch questions for 1:1", "send follow-up summary")
 - If too few messages for meaningful analysis, say so in summary
-- red_flags, highlights, recommendations, concerns: use empty arrays [] if nothing notable
-- style_details must be a substantive paragraph, not a single sentence
+- situational_tactics, effective_approaches, recommendations: use empty arrays [] if nothing notable
 - %s
 - Return valid JSON only
 
 === USER ===
 %s`
 
-const defaultAnalysisPeriod = `You are creating a team communication summary for the period %s to %s.
+const defaultGuidePeriod = `You are a communication coach creating a team-level guide for the period %s to %s.
 
-Below are individual analyses for all team members. Create a high-level summary that a manager can quickly scan to understand what needs attention.
+%s
+
+Below are individual communication guides for team members. Create a high-level summary of team communication health and practical tips.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
-  "summary": "3-5 sentence overview of team communication health. Overall dynamics, collaboration quality, decision-making effectiveness.",
-  "attention": [
-    "Specific actionable items that need manager attention. Reference specific people and situations. Examples: '@john has gone silent — 0 messages this week, was active last week', '@alice and @bob have unresolved tension in #engineering about deployment process', '@charlie is blocking decisions in #product — 3 threads without resolution'"
+  "summary": "3-5 sentence overview of team communication dynamics. Focus on collaboration quality, response patterns, decision-making flow, and areas where communication could be smoother.",
+  "tips": [
+    "Specific, actionable team-level communication tips. Examples: 'Consider async updates for cross-timezone discussions — @alice and @bob have 6h timezone gap', 'Decisions in #product are taking 3+ days — try setting explicit deadlines', 'Thread usage is low — encouraging threads could reduce noise in busy channels'"
   ]
 }
 
 Focus on:
-1. WHO needs attention and WHY — name names, be specific
-2. TEAM DYNAMICS — any friction, silos, or collaboration gaps?
-3. RISKS — disengagement, burnout indicators, communication breakdowns
-4. DECISIONS — any stuck or delayed decisions? Who is blocking?
-5. POSITIVE — who is doing great work that should be recognized?
+1. COLLABORATION PATTERNS — who works well together, where are communication gaps?
+2. RESPONSE DYNAMICS — are there bottlenecks? Who is hard to reach?
+3. DECISION FLOW — are decisions happening efficiently or getting stuck?
+4. PRACTICAL TIPS — actionable advice for improving team communication
 
 Rules:
-- Be direct and actionable — this is for a busy manager
-- Reference specific people by @username
-- Each attention item should be one clear, actionable insight
-- Don't be vague — "some team members are less active" is useless; "@john dropped from 50 msgs to 3" is useful
+- Frame as coaching advice, not performance evaluation
+- Reference specific people by @username when relevant
+- Each tip should be concrete and actionable
+- Avoid evaluative/judgmental language — use "consider", "try", "you might find"
 - %s
 - Return valid JSON only
 
-=== TEAM ANALYSES ===
+=== TEAM GUIDES ===
+%s`
+
+const defaultPeopleReduce = `You are creating a unified profile card for @%s based on behavioral signals observed across Slack channels over %s to %s.
+
+%s
+
+Below are SITUATIONS observed in channel context (by the digest pipeline), plus computed statistics and team norms. Your job is to synthesize these into a single card that combines:
+1. ANALYSIS — classify their communication style, role in decisions, flag concerns
+2. COACHING — actionable advice for the viewer on how to work with this person
+
+IMPORTANT: Focus on what makes this person DIFFERENT from team norms. Do NOT describe typical behavior that matches the team average.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "summary": "1-2 sentences: what makes this person distinctive. Reference specific signals.",
+  "communication_style": "driver|collaborator|executor|observer|facilitator",
+  "decision_role": "decision-maker|approver|contributor|observer|blocker",
+  "red_flags": ["Specific concerns backed by signals. Empty [] if none."],
+  "highlights": ["Positive contributions backed by signals. Empty [] if none."],
+  "accomplishments": ["Concrete things delivered/resolved this period from signals."],
+  "communication_guide": "Paragraph: communication preferences, timing, format. ONLY what is specific to this person vs team norms. If they match the norm, say so briefly and focus on exceptions.",
+  "decision_style": "How they participate in decisions — based on bottleneck/rubber_stamping/initiative/blocker signals. If no decision signals, say 'No notable decision patterns this period.'",
+  "tactics": ["If X, then Y — specific actionable tactics based on observed signals. Max 3-4."]
+}
+
+%s
+
+Rules:
+- Base ALL analysis on the situations provided. Do NOT invent patterns not supported by evidence.
+- If a situation type appears in multiple channels, it is a PATTERN — emphasize it.
+- If conflicting situations exist (e.g., collaboration in one channel, conflict in another), note the CONTRAST.
+- Compare stats to team norms: only mention stats that deviate significantly (>30%% from avg).
+- Coaching framing: frame guide sections as advice FOR THE VIEWER, not judgments ABOUT the person.
+- If relationship is manager->report: be more direct about concerns and accountability.
+- If relationship is report->manager: frame tactically (managing up).
+- If too few situations for meaningful analysis, say so in summary.
+- If a PREVIOUS CARD is provided, note trends and changes vs the prior period. Don't just repeat it.
+- %s
+- Return valid JSON only
+
+=== SITUATIONS ===
+%s
+
+=== COMPUTED STATS ===
+%s
+
+=== TEAM NORMS ===
+%s
+
+=== PREVIOUS CARD ===
+%s
+
+=== RAW MESSAGES (last 24h sample) ===
+%s`
+
+const defaultPeopleTeam = `You are creating a team communication summary for %s to %s.
+
+%s
+
+Below are unified people cards for all team members. Create a summary that a manager can quickly scan to understand what needs attention.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "summary": "3-5 sentences: team communication health, dynamics, decision flow.",
+  "attention": ["Who needs attention and WHY — name names, cite specific signals and patterns. Be direct."],
+  "tips": ["Actionable team-level communication tips based on patterns across people."]
+}
+
+Rules:
+- Be direct — this is for a busy manager
+- Reference specific people by @username
+- Cross-reference: if multiple people have bottleneck signals, that is a systemic issue
+- Look for signal clusters: multiple conflict signals = team friction
+- %s
+- Return valid JSON only
+
+=== PEOPLE CARDS ===
+%s`
+
+const defaultBriefingDaily = `You are creating a personalized daily briefing for %s on %s.
+User role: %s
+
+Your job is to synthesize all available data into five focused sections. This is the single page the user reads to start their day.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "attention": [
+    {"text": "What needs attention and why", "source_type": "track|chain|digest|people", "source_id": "123", "priority": "high|medium", "reason": "Why this matters now"}
+  ],
+  "your_day": [
+    {"text": "Task or action for today", "track_id": 123, "due_date": "2026-03-22", "priority": "high|medium|low", "status": "inbox|active", "ownership": "mine|delegated|watching"}
+  ],
+  "what_happened": [
+    {"text": "Notable event or decision", "digest_id": 456, "channel_name": "#channel", "item_type": "decision|summary|topic", "importance": "high|medium|low"}
+  ],
+  "team_pulse": [
+    {"text": "Signal about a team member", "user_id": "U123", "signal_type": "volume_drop|volume_spike|new_red_flag|highlight|conflict", "detail": "Specifics"}
+  ],
+  "coaching": [
+    {"text": "Actionable communication tip", "related_user_id": "U123", "category": "communication|delegation|conflict|process"}
+  ]
+}
+
+Rules:
+- attention: max 5 items. Only things that genuinely need action. Include source_type and source_id for traceability.
+- your_day: built from active tracks. Include track_id. Order by priority, deadline proximity.
+- what_happened: max 7 items from channel digests. Include digest_id, channel_name. Focus on decisions and blockers.
+- team_pulse: signals from people cards. Include user_id. Flag volume changes, red flags, conflicts.
+- coaching: max 3 items. Grounded in observed patterns — not generic advice. Include related_user_id when applicable.
+- Be specific: name people, channels, decisions — not vague generalities.
+- Cross-reference tracks with digest decisions: if a track relates to a decision, mention both.
+- If user has reports, prioritize their signals in team_pulse.
+- %s
+- Return valid JSON only
+
+=== ACTIVE TRACKS ===
+%s
+
+=== ACTIVE CHAINS ===
+%s
+
+=== CHANNEL DIGESTS ===
+%s
+
+=== DAILY ROLLUP ===
+%s
+
+=== PEOPLE CARDS ===
+%s
+
+=== TEAM SUMMARY ===
+%s
+
+=== USER PROFILE ===
 %s`

@@ -2,14 +2,24 @@ import SwiftUI
 
 struct SearchResultRow: View {
     let result: SearchResult
+    var slackChannelURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("#\(result.channelName ?? "unknown")")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(Color.accentColor)
+                if let url = slackChannelURL {
+                    Link(destination: url) {
+                        Text("#\(result.channelName ?? "unknown")")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .buttonStyle(.borderless)
+                } else {
+                    Text("#\(result.channelName ?? "unknown")")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(Color.accentColor)
+                }
 
                 Text(result.userName ?? result.userID)
                     .font(.caption)

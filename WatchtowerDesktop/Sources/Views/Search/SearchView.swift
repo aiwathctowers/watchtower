@@ -62,7 +62,10 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(vm.results) { result in
-                    SearchResultRow(result: result)
+                    SearchResultRow(
+                        result: result,
+                        slackChannelURL: vm.slackChannelURL(channelID: result.channelID)
+                    )
                 }
 
                 if vm.results.count >= 100 {

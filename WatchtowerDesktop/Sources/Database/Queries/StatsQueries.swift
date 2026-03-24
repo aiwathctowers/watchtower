@@ -9,27 +9,35 @@ enum StatsQueries {
 
     /// Message count per channel (for top channels display)
     static func fetchTopChannels(_ db: Database, limit: Int = 10) throws -> [(channelID: String, name: String, count: Int)] {
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT c.id, c.name, COUNT(m.ts) as msg_count
-            FROM channels c
-            LEFT JOIN messages m ON m.channel_id = c.id
-            GROUP BY c.id
-            ORDER BY msg_count DESC
-            LIMIT ?
-            """, arguments: [limit])
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT c.id, c.name, COUNT(m.ts) as msg_count
+                FROM channels c
+                LEFT JOIN messages m ON m.channel_id = c.id
+                GROUP BY c.id
+                ORDER BY msg_count DESC
+                LIMIT ?
+                """,
+            arguments: [limit]
+        )
         return rows.map { (channelID: $0["id"], name: $0["name"], count: $0["msg_count"]) }
     }
 
     /// Messages per day over the last N days
     static func fetchMessageVolume(_ db: Database, days: Int = 14) throws -> [(date: String, count: Int)] {
         let cutoff = Date().timeIntervalSince1970 - Double(days * 86400)
-        let rows = try Row.fetchAll(db, sql: """
-            SELECT date(ts_unix, 'unixepoch') as day, COUNT(*) as cnt
-            FROM messages
-            WHERE ts_unix > ?
-            GROUP BY day
-            ORDER BY day ASC
-            """, arguments: [cutoff])
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT date(ts_unix, 'unixepoch') as day, COUNT(*) as cnt
+                FROM messages
+                WHERE ts_unix > ?
+                GROUP BY day
+                ORDER BY day ASC
+                """,
+            arguments: [cutoff]
+        )
         return rows.map { (date: $0["day"], count: $0["cnt"]) }
     }
 

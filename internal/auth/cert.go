@@ -144,6 +144,11 @@ func loginKeychainPath() string {
 // TrustCert imports the localhost cert into the login keychain and marks it as trusted.
 // Importing into the keychain is required for Chrome/Firefox to recognise the trust.
 func TrustCert() error {
+	// Skip if already trusted
+	if IsCertTrusted() {
+		return nil
+	}
+
 	certPath, _, err := CertPaths()
 	if err != nil {
 		return err

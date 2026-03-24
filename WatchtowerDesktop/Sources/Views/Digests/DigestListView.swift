@@ -3,19 +3,26 @@ import SwiftUI
 struct DigestListView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: DigestViewModel?
+    @State private var chainsViewModel: ChainsViewModel?
     @State private var selectedDigestID: Int?
     @State private var selectedDecisionEntryID: String?
+    @State private var selectedChainID: Int?
     @State private var searchText = ""
     @State private var showAllDigests = false
     @State private var showAllDecisions = false
-    @State private var activeTab: DigestTab = .digests
+    @State private var showAllChains = false
+    @State private var activeTab: ChainTab = .chains
     @State private var expandedDigestIDs: Set<Int> = []
     @State private var expandedDecisionIDs: Set<String> = []
+    @State private var expandedChainIDs: Set<Int> = []
     @State private var isSelectMode = false
     @State private var checkedDigestIDs: Set<Int> = []
     @State private var checkedDecisionIDs: Set<String> = []
+    @State private var checkedChainIDs: Set<Int> = []
+    @State private var chainStatusFilter: String?
 
-    enum DigestTab: String, CaseIterable {
+    enum ChainTab: String, CaseIterable {
+        case chains = "Chains"
         case digests = "Digests"
         case decisions = "Decisions"
     }
@@ -35,11 +42,14 @@ struct DigestListView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: selectedDigestID)
         .animation(.easeInOut(duration: 0.25), value: selectedDecisionEntryID)
-        .navigationTitle("Digests")
+        .animation(.easeInOut(duration: 0.25), value: selectedChainID)
+        .navigationTitle("Chains")
         .onAppear {
             if let db = appState.databaseManager, viewModel == nil {
                 viewModel = DigestViewModel(dbManager: db)
-                viewModel?.load()
+                viewModel?.startObserving()
+                chainsViewModel = ChainsViewModel(dbManager: db)
+                chainsViewModel?.startObserving()
             }
             if let id = appState.pendingDigestID {
                 activeTab = .digests
@@ -68,20 +78,33 @@ struct DigestListView: View {
                 viewModel?.markDecisionRead(digestID: entry.digestID, decisionIdx: entry.decisionIdx)
             }
         }
+        .onChange(of: selectedChainID) { _, newID in
+            if let id = newID {
+                chainsViewModel?.markChainRead(id)
+            }
+        }
     }
 
     @ViewBuilder
     private func detailPanel(_ vm: DigestViewModel) -> some View {
         switch activeTab {
+        case .chains:
+            if let chainsVM = chainsViewModel, let id = selectedChainID,
+               let chain = chainsVM.chains.first(where: { $0.id == id }) {
+                Divider()
+                ChainDetailView(chain: chain, viewModel: chainsVM) { selectedChainID = nil }
+                    .id(id)
+                    .frame(minWidth: 400, idealWidth: 500)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         case .digests:
             if let id = selectedDigestID, let digest = vm.digestByID(id) {
                 Divider()
                 DigestDetailView(
                     digest: digest,
                     channelName: vm.channelName(for: digest),
-                    viewModel: vm,
-                    onClose: { selectedDigestID = nil }
-                )
+                    viewModel: vm
+                ) { selectedDigestID = nil }
                 .id(id)
                 .frame(minWidth: 400, idealWidth: 500)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -90,7 +113,7 @@ struct DigestListView: View {
             if let entryID = selectedDecisionEntryID,
                let entry = vm.decisionEntries.first(where: { $0.id == entryID }) {
                 Divider()
-                DecisionDetailView(entry: entry, viewModel: vm, onClose: { selectedDecisionEntryID = nil })
+                DecisionDetailView(entry: entry, viewModel: vm) { selectedDecisionEntryID = nil }
                     .id(entryID)
                     .frame(minWidth: 400, idealWidth: 500)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -105,12 +128,29 @@ struct DigestListView: View {
             items = items.filter { !$0.isRead }
         }
         if !searchText.isEmpty {
-            let q = searchText.lowercased()
+            let query = searchText.lowercased()
             items = items.filter { digest in
-                if digest.summary.lowercased().contains(q) { return true }
-                if let name = vm.channelName(for: digest), name.lowercased().contains(q) { return true }
-                if digest.parsedTopics.contains(where: { $0.lowercased().contains(q) }) { return true }
+                if digest.summary.lowercased().contains(query) { return true }
+                if let name = vm.channelName(for: digest), name.lowercased().contains(query) { return true }
+                if digest.parsedTopics.contains(where: { $0.lowercased().contains(query) }) { return true }
                 return false
+            }
+        }
+        return items
+    }
+
+    private var filteredChains: [Chain] {
+        guard let vm = chainsViewModel else { return [] }
+        var items = vm.chains
+        if !showAllChains {
+            items = items.filter { !$0.isRead }
+        }
+        if !searchText.isEmpty {
+            let query = searchText.lowercased()
+            items = items.filter {
+                $0.title.lowercased().contains(query) ||
+                $0.summary.lowercased().contains(query) ||
+                $0.slug.lowercased().contains(query)
             }
         }
         return items
@@ -120,7 +160,7 @@ struct DigestListView: View {
         VStack(spacing: 0) {
             // Tab picker
             Picker("", selection: $activeTab) {
-                ForEach(DigestTab.allCases, id: \.self) { tab in
+                ForEach(ChainTab.allCases, id: \.self) { tab in
                     Text(tabLabel(tab, vm: vm)).tag(tab)
                 }
             }
@@ -131,10 +171,12 @@ struct DigestListView: View {
             .onChange(of: activeTab) {
                 selectedDigestID = nil
                 selectedDecisionEntryID = nil
+                selectedChainID = nil
                 searchText = ""
                 isSelectMode = false
                 checkedDigestIDs.removeAll()
                 checkedDecisionIDs.removeAll()
+                checkedChainIDs.removeAll()
             }
 
             // Search field + read filter
@@ -143,20 +185,42 @@ struct DigestListView: View {
                     .foregroundStyle(.secondary)
                 SearchField(
                     text: $searchText,
-                    placeholder: activeTab == .digests ? "Filter digests..." : "Filter decisions..."
+                    placeholder: searchPlaceholder
                 )
                 .frame(height: 22)
 
-                Picker("", selection: activeTab == .digests ? $showAllDigests : $showAllDecisions) {
+                Picker("", selection: activeReadBinding) {
                     Text("Unread").tag(false)
                     Text("All").tag(true)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 120)
+                .id(activeTab)
             }
             .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.bottom, activeTab == .chains ? 4 : 8)
             .background(Color(nsColor: .windowBackgroundColor))
+
+            // Status filter for chains
+            if activeTab == .chains {
+                HStack(spacing: 8) {
+                    Picker("Status", selection: $chainStatusFilter) {
+                        Text("All").tag(String?.none)
+                        Label("Active", systemImage: "link.circle.fill").tag(String?.some("active"))
+                        Label("Resolved", systemImage: "checkmark.circle.fill").tag(String?.some("resolved"))
+                        Label("Stale", systemImage: "moon.zzz.fill").tag(String?.some("stale"))
+                    }
+                    .frame(maxWidth: 160)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .onChange(of: chainStatusFilter) {
+                    chainsViewModel?.statusFilter = chainStatusFilter
+                    chainsViewModel?.load()
+                }
+            }
 
             Divider()
 
@@ -165,6 +229,8 @@ struct DigestListView: View {
 
             // List content based on active tab
             switch activeTab {
+            case .chains:
+                chainsListContent
             case .digests:
                 digestsList(vm)
             case .decisions:
@@ -182,75 +248,297 @@ struct DigestListView: View {
         .frame(minWidth: 300, idealWidth: 360)
     }
 
+    private var searchPlaceholder: String {
+        switch activeTab {
+        case .chains: "Filter chains..."
+        case .digests: "Filter digests..."
+        case .decisions: "Filter decisions..."
+        }
+    }
+
+    private var activeReadBinding: Binding<Bool> {
+        switch activeTab {
+        case .chains: $showAllChains
+        case .digests: $showAllDigests
+        case .decisions: $showAllDecisions
+        }
+    }
+
+    // MARK: - Chains List
+
     @ViewBuilder
-    private func selectionToolbar(_ vm: DigestViewModel) -> some View {
-        if isSelectMode {
-            let count = activeTab == .digests ? checkedDigestIDs.count : checkedDecisionIDs.count
-            HStack(spacing: 8) {
+    private var chainsListContent: some View {
+        if filteredChains.isEmpty {
+            ContentUnavailableView(
+                "No Chains",
+                systemImage: "link.circle",
+                description: Text("Chains are created automatically when related decisions and digests are detected.")
+            )
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(filteredChains) { chain in
+                        chainListItem(chain)
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+            }
+        }
+    }
+
+    private func chainListItem(_ chain: Chain) -> some View {
+        let isChecked = checkedChainIDs.contains(chain.id)
+        let isSelected = selectedChainID == chain.id && !isSelectMode
+
+        return HStack(spacing: 0) {
+            if isSelectMode {
                 Button {
-                    toggleSelectAll()
+                    toggleChainChecked(chain.id)
                 } label: {
-                    let allSelected = activeTab == .digests
-                        ? checkedDigestIDs.count == filteredDigests.count && !filteredDigests.isEmpty
-                        : checkedDecisionIDs.count == (viewModel?.decisionEntries.count ?? 0)
-                    Label(
-                        allSelected ? "Deselect All" : "Select All",
-                        systemImage: allSelected ? "checkmark.circle.fill" : "circle"
-                    )
-                    .font(.caption)
+                    Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
+                        .font(.body)
                 }
                 .buttonStyle(.borderless)
+                .padding(.leading, 8)
+            }
 
-                if count > 0 {
-                    Text("\(count) selected")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-
-                    Button {
-                        markSelectedRead(vm)
-                    } label: {
-                        Label("Read", systemImage: "eye")
-                            .font(.caption)
+            chainRow(chain)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if isSelectMode {
+                        toggleChainChecked(chain.id)
+                    } else {
+                        selectedChainID = chain.id
                     }
-                    .buttonStyle(.borderless)
-                    .help("Mark selected as read")
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            isSelected
+                ? Color.accentColor.opacity(0.12)
+                : isChecked
+                    ? Color.accentColor.opacity(0.08)
+                    : !chain.isRead
+                        ? Color.blue.opacity(0.06)
+                        : Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    isSelected
+                        ? Color.accentColor.opacity(0.3)
+                        : !chain.isRead
+                            ? Color.blue.opacity(0.25)
+                            : Color.primary.opacity(0.06),
+                    lineWidth: 1
+                )
+        )
+    }
 
-                    Button {
-                        submitSelectedFeedback(vm, rating: 1)
-                    } label: {
-                        Image(systemName: "hand.thumbsup")
-                            .foregroundStyle(.green)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Rate selected as good")
+    private func chainRow(_ chain: Chain) -> some View {
+        let expanded = expandedChainIDs.contains(chain.id)
+        let children = chainsViewModel?.children(for: chain.id) ?? []
 
-                    Button {
-                        submitSelectedFeedback(vm, rating: -1)
-                    } label: {
-                        Image(systemName: "hand.thumbsdown")
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Rate selected as bad")
-                } else {
-                    Spacer()
+        return VStack(alignment: .leading, spacing: 6) {
+            // Top: status icon + title + date
+            HStack(alignment: .center, spacing: 6) {
+                // Unread indicator
+                if !chain.isRead {
+                    Circle()
+                        .fill(.blue)
+                        .frame(width: 8, height: 8)
                 }
 
+                chainStatusIcon(chain.status)
+
+                Text(chain.title)
+                    .font(.subheadline)
+                    .fontWeight(chain.isRead ? .regular : .medium)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(chain.lastSeenDate, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                // Expand/collapse chevron
                 Button {
-                    isSelectMode = false
-                    checkedDigestIDs.removeAll()
-                    checkedDecisionIDs.removeAll()
+                    toggleChainExpanded(chain.id)
                 } label: {
-                    Text("Cancel")
-                        .font(.caption)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
                 }
                 .buttonStyle(.borderless)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.06))
+
+            // Summary preview
+            if !chain.summary.isEmpty {
+                Text(chain.summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(expanded ? nil : 2)
+            }
+
+            // Bottom: stats row
+            HStack(spacing: 10) {
+                Label("\(chain.itemCount)", systemImage: "number")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                // Channel badges
+                let channelIDs = chain.decodedChannelIDs
+                if !channelIDs.isEmpty {
+                    let names = channelIDs.prefix(3).map { "#" + (chainsViewModel?.channelName(for: $0) ?? $0) }
+                    Text(names.joined(separator: ", ") + (channelIDs.count > 3 ? " +\(channelIDs.count - 3)" : ""))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                // Children count
+                if !children.isEmpty {
+                    Label("\(children.count)", systemImage: "arrow.triangle.branch")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                }
+
+                chainStatusBadge(chain.status)
+            }
+
+            // Expanded content: children + summary details
+            if expanded {
+                chainExpandedContent(chain, children: children)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func chainExpandedContent(_ chain: Chain, children: [Chain]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+
+            // Child chains
+            if !children.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Sub-chains", systemImage: "arrow.triangle.branch")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.blue)
+
+                    ForEach(children) { child in
+                        HStack(spacing: 6) {
+                            chainStatusIcon(child.status)
+                                .font(.caption2)
+                            Text(child.title)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(child.itemCount)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedChainID = child.id
+                        }
+                    }
+                }
+            }
+
+            // Channels
+            let channelIDs = chain.decodedChannelIDs
+            if !channelIDs.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(channelIDs, id: \.self) { chID in
+                        Text("#" + (chainsViewModel?.channelName(for: chID) ?? chID))
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.1), in: Capsule())
+                    }
+                }
+            }
+
+            // Open detail button
+            Button {
+                selectedChainID = chain.id
+            } label: {
+                Label("Open details", systemImage: "arrow.right.circle")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.top, 2)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    @ViewBuilder
+    private func chainStatusIcon(_ status: String) -> some View {
+        switch status {
+        case "active":
+            Image(systemName: "link.circle.fill")
+                .foregroundStyle(.blue)
+        case "resolved":
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case "stale":
+            Image(systemName: "moon.zzz.fill")
+                .foregroundStyle(.gray)
+        default:
+            Image(systemName: "link.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func chainStatusBadge(_ status: String) -> some View {
+        let (text, color): (String, Color) = switch status {
+        case "active": ("Active", .blue)
+        case "resolved": ("Resolved", .green)
+        case "stale": ("Stale", .gray)
+        default: (status, .secondary)
+        }
+        Text(text)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private func toggleChainChecked(_ id: Int) {
+        if checkedChainIDs.contains(id) {
+            checkedChainIDs.remove(id)
+        } else {
+            checkedChainIDs.insert(id)
+        }
+    }
+
+    private func toggleChainExpanded(_ id: Int) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if expandedChainIDs.contains(id) {
+                expandedChainIDs.remove(id)
+            } else {
+                expandedChainIDs.insert(id)
+            }
+        }
+    }
+
+    // MARK: - Selection Toolbar
+
+    @ViewBuilder
+    private func selectionToolbar(_ vm: DigestViewModel) -> some View {
+        if isSelectMode {
+            activeSelectionBar(vm)
         } else {
             HStack {
                 Spacer()
@@ -267,8 +555,95 @@ struct DigestListView: View {
         }
     }
 
+    private func activeSelectionBar(_ vm: DigestViewModel) -> some View {
+        let count: Int = switch activeTab {
+        case .chains: checkedChainIDs.count
+        case .digests: checkedDigestIDs.count
+        case .decisions: checkedDecisionIDs.count
+        }
+        return HStack(spacing: 8) {
+            Button {
+                toggleSelectAll()
+            } label: {
+                let allSelected: Bool = switch activeTab {
+                case .chains: checkedChainIDs.count == filteredChains.count && !filteredChains.isEmpty
+                case .digests: checkedDigestIDs.count == filteredDigests.count && !filteredDigests.isEmpty
+                case .decisions: checkedDecisionIDs.count == (viewModel?.decisionEntries.count ?? 0)
+                }
+                Label(
+                    allSelected ? "Deselect All" : "Select All",
+                    systemImage: allSelected ? "checkmark.circle.fill" : "circle"
+                )
+                .font(.caption)
+            }
+            .buttonStyle(.borderless)
+
+            if count > 0 {
+                selectionActions(vm, count: count)
+            } else {
+                Spacer()
+            }
+
+            Button {
+                isSelectMode = false
+                checkedDigestIDs.removeAll()
+                checkedDecisionIDs.removeAll()
+                checkedChainIDs.removeAll()
+            } label: {
+                Text("Cancel")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.06))
+    }
+
+    @ViewBuilder
+    private func selectionActions(_ vm: DigestViewModel, count: Int) -> some View {
+        Text("\(count) selected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+        Spacer()
+
+        Button {
+            markSelectedRead(vm)
+        } label: {
+            Label("Read", systemImage: "eye")
+                .font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .help("Mark selected as read")
+
+        Button {
+            submitSelectedFeedback(vm, rating: 1)
+        } label: {
+            Image(systemName: "hand.thumbsup")
+                .foregroundStyle(.green)
+        }
+        .buttonStyle(.borderless)
+        .help("Rate selected as good")
+
+        Button {
+            submitSelectedFeedback(vm, rating: -1)
+        } label: {
+            Image(systemName: "hand.thumbsdown")
+                .foregroundStyle(.red)
+        }
+        .buttonStyle(.borderless)
+        .help("Rate selected as bad")
+    }
+
     private func toggleSelectAll() {
         switch activeTab {
+        case .chains:
+            if checkedChainIDs.count == filteredChains.count {
+                checkedChainIDs.removeAll()
+            } else {
+                checkedChainIDs = Set(filteredChains.map(\.id))
+            }
         case .digests:
             if checkedDigestIDs.count == filteredDigests.count {
                 checkedDigestIDs.removeAll()
@@ -287,6 +662,9 @@ struct DigestListView: View {
 
     private func markSelectedRead(_ vm: DigestViewModel) {
         switch activeTab {
+        case .chains:
+            chainsViewModel?.markChainsRead(checkedChainIDs)
+            checkedChainIDs.removeAll()
         case .digests:
             vm.markDigestsRead(checkedDigestIDs)
             checkedDigestIDs.removeAll()
@@ -299,6 +677,9 @@ struct DigestListView: View {
 
     private func submitSelectedFeedback(_ vm: DigestViewModel, rating: Int) {
         switch activeTab {
+        case .chains:
+            chainsViewModel?.submitBatchFeedback(chainIDs: checkedChainIDs.map { $0 }, rating: rating)
+            checkedChainIDs.removeAll()
         case .digests:
             let ids = checkedDigestIDs.map { String($0) }
             vm.submitBatchFeedback(entityType: "digest", entityIDs: ids, rating: rating)
@@ -312,11 +693,23 @@ struct DigestListView: View {
         isSelectMode = false
     }
 
+    // MARK: - Digests List
+
     private func digestsList(_ vm: DigestViewModel) -> some View {
         ScrollView {
             LazyVStack(spacing: 1) {
                 ForEach(filteredDigests) { digest in
                     digestListItem(digest, vm: vm)
+                        .onAppear {
+                            if digest.id == filteredDigests.last?.id {
+                                vm.loadMoreDigests()
+                            }
+                        }
+                }
+                if vm.isLoadingMoreDigests {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
                 }
             }
             .padding(.vertical, 4)
@@ -373,6 +766,8 @@ struct DigestListView: View {
                 expandedDigestIDs.remove(id)
             } else {
                 expandedDigestIDs.insert(id)
+                // Mark digest as read when expanded
+                viewModel?.markDigestRead(id)
             }
         }
     }
@@ -382,7 +777,6 @@ struct DigestListView: View {
         return VStack(alignment: .leading, spacing: 6) {
             // Top: type badge + channel + date
             HStack(alignment: .center, spacing: 6) {
-                // Unread indicator
                 if !digest.isRead {
                     Circle()
                         .fill(.blue)
@@ -402,13 +796,18 @@ struct DigestListView: View {
                     .fontWeight(digest.isRead ? .regular : .medium)
                     .lineLimit(1)
 
+                if !digest.channelID.isEmpty {
+                    StarToggleButton(isStarred: vm.isChannelStarred(digest.channelID)) {
+                        vm.toggleStarredChannel(digest.channelID)
+                    }
+                }
+
                 Spacer()
 
-                Text(TimeFormatting.parseISO(digest.createdAt).map { TimeFormatting.shortDateTime(from: $0) } ?? digest.createdAt)
+                Text(TimeFormatting.shortDateTime(fromUnix: digest.periodTo))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
 
-                // Expand/collapse chevron
                 Button {
                     toggleDigestExpanded(digest.id)
                 } label: {
@@ -420,7 +819,6 @@ struct DigestListView: View {
                 .buttonStyle(.borderless)
             }
 
-            // Summary preview
             if !digest.summary.isEmpty {
                 Text(digest.summary)
                     .font(.subheadline)
@@ -428,7 +826,7 @@ struct DigestListView: View {
                     .lineLimit(expanded ? nil : 2)
             }
 
-            // Bottom: stats row
+            // Stats row
             HStack(spacing: 10) {
                 if digest.messageCount > 0 {
                     Label("\(digest.messageCount)", systemImage: "message")
@@ -452,7 +850,7 @@ struct DigestListView: View {
                         .foregroundStyle(.orange)
                 }
 
-                let actionCount = digest.parsedActionItems.count
+                let actionCount = digest.parsedTracks.count
                 if actionCount > 0 {
                     Label("\(actionCount)", systemImage: "checkmark.circle")
                         .font(.caption2)
@@ -460,7 +858,6 @@ struct DigestListView: View {
                 }
             }
 
-            // Expanded inline content
             if expanded {
                 digestExpandedContent(digest, vm: vm)
             }
@@ -473,7 +870,6 @@ struct DigestListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
 
-            // Topics
             let topics = digest.parsedTopics
             if !topics.isEmpty {
                 FlowLayout(spacing: 4) {
@@ -487,7 +883,6 @@ struct DigestListView: View {
                 }
             }
 
-            // Decisions
             let decisions = digest.parsedDecisions
             if !decisions.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -517,11 +912,10 @@ struct DigestListView: View {
                 }
             }
 
-            // Action items
-            let actions = digest.parsedActionItems
+            let actions = digest.parsedTracks
             if !actions.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Action Items", systemImage: "checkmark.circle")
+                    Label("Tracks", systemImage: "checkmark.circle")
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundStyle(.green)
@@ -540,7 +934,6 @@ struct DigestListView: View {
                 }
             }
 
-            // Open in detail button
             Button {
                 selectedDigestID = digest.id
             } label: {
@@ -552,6 +945,8 @@ struct DigestListView: View {
         .padding(.top, 2)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
+
+    // MARK: - Helpers
 
     private func decisionImportanceColor(_ importance: String) -> Color {
         switch importance {
@@ -579,8 +974,11 @@ struct DigestListView: View {
         }
     }
 
-    private func tabLabel(_ tab: DigestTab, vm: DigestViewModel) -> String {
+    private func tabLabel(_ tab: ChainTab, vm: DigestViewModel) -> String {
         switch tab {
+        case .chains:
+            let n = chainsViewModel?.unreadChainCount ?? 0
+            return n > 0 ? "\(tab.rawValue) (\(n))" : tab.rawValue
         case .digests:
             let n = vm.unreadDigestCount
             return n > 0 ? "\(tab.rawValue) (\(n))" : tab.rawValue
