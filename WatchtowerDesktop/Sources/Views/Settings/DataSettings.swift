@@ -43,7 +43,7 @@ struct DataSettings: View {
             }
         } message: {
             Text("All AI-generated data (digests, tracks, people "
-                + "analytics, guides, chains, feedback) will be deleted. "
+                + "analytics, guides, feedback) will be deleted. "
                 + "The daemon will be stopped and all generation pipelines "
                 + "will re-run. Slack data and your profile are preserved.")
         }
@@ -109,7 +109,7 @@ struct DataSettings: View {
                 Text("Reset AI-Generated Data")
                     .font(.headline)
                 Text("Deletes all digests, tracks, people analytics, "
-                    + "communication guides, chains, and feedback. "
+                    + "communication guides, and feedback. "
                     + "Stops the daemon, then re-runs all generation "
                     + "pipelines from scratch. Raw Slack data, config, "
                     + "and your profile are preserved.")

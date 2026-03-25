@@ -42,7 +42,7 @@ struct InsightProgressData: Codable {
         pipeline = try container.decode(String.self, forKey: .pipeline)
         done = try container.decode(Int.self, forKey: .done)
         total = try container.decode(Int.self, forKey: .total)
-        status = try container.decode(String.self, forKey: .status)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
         inputTokens = try container.decode(Int.self, forKey: .inputTokens)
         outputTokens = try container.decode(Int.self, forKey: .outputTokens)
         costUsd = try container.decode(Double.self, forKey: .costUsd)

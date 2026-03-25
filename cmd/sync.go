@@ -17,7 +17,6 @@ import (
 
 	"encoding/json"
 	"watchtower/internal/briefing"
-	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
 	"watchtower/internal/db"
@@ -264,12 +263,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 		if cfg.Digest.Enabled {
 			gen, cleanupPool := cliPooledGenerator(cfg, logger)
 			defer cleanupPool()
+			tracksPipe := tracks.New(database, cfg, gen, logger)
 			pipe := digest.New(database, cfg, gen, logger)
-			chainsPipe := chains.New(database, cfg, gen, logger)
-			pipe.ChainLinker = chainsPipe
+			pipe.TrackLinker = tracksPipe
 			d.SetDigestPipeline(pipe)
-			d.SetChainsPipeline(chainsPipe)
-			d.SetTracksPipeline(tracks.New(database, cfg, gen, logger))
+			d.SetTracksPipeline(tracksPipe)
 			d.SetPeoplePipeline(guide.New(database, cfg, gen, logger))
 			if cfg.Briefing.Enabled {
 				d.SetBriefingPipeline(briefing.New(database, cfg, gen, logger))
@@ -404,16 +402,15 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 	}
 
 	out := os.Stdout
-	var chainCtxForTracks string
 	gen, cleanup := cliPooledGenerator(cfg, logger)
 	defer cleanup()
 
-	// Digests (with chains linked between channel digests and rollups)
+	// Digests (with tracks linked between channel digests and rollups)
 	fmt.Fprintln(out)
 	digestSpinner := ui.NewSpinner(out, "Generating digests...")
 	pipe := digest.New(database, cfg, gen, logger)
-	chainsPipe := chains.New(database, cfg, gen, logger)
-	pipe.ChainLinker = chainsPipe
+	tracksPipe := tracks.New(database, cfg, gen, logger)
+	pipe.TrackLinker = tracksPipe
 	pipe.OnProgress = func(done, total int, status string) {
 		digestSpinner.UpdateProgress(done, total, status)
 	}
@@ -431,11 +428,6 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		digestSpinner.Stop("No new digests needed")
 	}
 
-	// Inject chain context into tracks pipeline for chain-aware extraction.
-	if chainCtx, err := chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
-		chainCtxForTracks = chainCtx
-	}
-
 	// People cards (REDUCE phase: reads signals from channel digests)
 	{
 		peopleSpinner := ui.NewSpinner(out, "Generating people cards...")
@@ -451,22 +443,6 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		} else {
 			peopleSpinner.Stop("No new people cards needed")
 		}
-	}
-
-	// Tracks (depends on digests + chains for context)
-	trackSpinner := ui.NewSpinner(out, "Extracting tracks...")
-	trackPipe := tracks.New(database, cfg, gen, logger)
-	trackPipe.ChainContext = chainCtxForTracks
-	trackPipe.OnProgress = func(done, total int, status string) {
-		trackSpinner.UpdateProgress(done, total, status)
-	}
-	an, err := trackPipe.Run(ctx)
-	if err != nil {
-		trackSpinner.Stop(fmt.Sprintf("Tracks error: %v", err))
-	} else if an > 0 {
-		trackSpinner.Stop(fmt.Sprintf("Extracted %d track(s)", an))
-	} else {
-		trackSpinner.Stop("No new tracks")
 	}
 }
 

@@ -4,8 +4,9 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     case chat
     case briefings
     case tracks
-    case chains
+    case digests
     case people
+    case statistics
     case search
     case usage
     case training
@@ -17,8 +18,9 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .chat: "AI Chat"
         case .briefings: "Briefings"
         case .tracks: "Tracks"
-        case .chains: "Chains"
+        case .digests: "Digests"
         case .people: "People"
+        case .statistics: "Statistics"
         case .search: "Search"
         case .usage: "Usage"
         case .training: "Training"
@@ -29,9 +31,10 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         switch self {
         case .chat: "bubble.left.and.bubble.right"
         case .briefings: "sun.max"
-        case .tracks: "checklist"
-        case .chains: "link.circle"
+        case .tracks: "binoculars"
+        case .digests: "doc.text.magnifyingglass"
         case .people: "person.2"
+        case .statistics: "chart.bar.xaxis"
         case .search: "magnifyingglass"
         case .usage: "chart.bar"
         case .training: "brain.head.profile"
@@ -40,7 +43,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
 
     /// Main navigation items (shown above the separator).
     static var mainItems: [Self] {
-        [.chat, .briefings, .tracks, .chains, .people, .search]
+        [.chat, .briefings, .tracks, .digests, .people, .statistics, .search]
     }
 
     /// Tool items (shown below the separator).
@@ -135,10 +138,12 @@ struct MainNavigationView: View {
             BriefingsListView()
         case .tracks:
             TracksListView()
-        case .chains:
+        case .digests:
             DigestListView()
         case .people:
             PeopleListView()
+        case .statistics:
+            StatisticsView()
         case .search:
             SearchView()
         case .usage:

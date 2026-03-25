@@ -71,48 +71,89 @@ func runTrends(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(&buf, "%s\n\n", d.Summary)
 
-	var topics []string
-	if err := json.Unmarshal([]byte(d.Topics), &topics); err == nil && len(topics) > 0 {
-		fmt.Fprintln(&buf, "**Trending Topics:**")
-		fmt.Fprintln(&buf)
+	// Try topic-structured data first
+	topics, _ := database.GetDigestTopics(d.ID)
+	if len(topics) > 0 {
 		for _, t := range topics {
-			fmt.Fprintf(&buf, "- %s\n", t)
-		}
-		fmt.Fprintln(&buf)
-	}
-
-	var decisions []struct {
-		Text string `json:"text"`
-		By   string `json:"by"`
-	}
-	if err := json.Unmarshal([]byte(d.Decisions), &decisions); err == nil && len(decisions) > 0 {
-		fmt.Fprintln(&buf, "**Key Decisions:**")
-		fmt.Fprintln(&buf)
-		for _, dec := range decisions {
-			if dec.By != "" {
-				fmt.Fprintf(&buf, "- %s (by %s)\n", dec.Text, dec.By)
-			} else {
-				fmt.Fprintf(&buf, "- %s\n", dec.Text)
+			fmt.Fprintf(&buf, "### %s\n\n", t.Title)
+			if t.Summary != "" {
+				fmt.Fprintf(&buf, "%s\n\n", t.Summary)
 			}
-		}
-		fmt.Fprintln(&buf)
-	}
 
-	var actions []struct {
-		Text     string `json:"text"`
-		Assignee string `json:"assignee"`
-	}
-	if err := json.Unmarshal([]byte(d.ActionItems), &actions); err == nil && len(actions) > 0 {
-		fmt.Fprintln(&buf, "**Outstanding Actions:**")
-		fmt.Fprintln(&buf)
-		for _, a := range actions {
-			assignee := ""
-			if a.Assignee != "" {
-				assignee = " -> " + a.Assignee
+			var decisions []struct {
+				Text string `json:"text"`
+				By   string `json:"by"`
 			}
-			fmt.Fprintf(&buf, "- %s%s\n", a.Text, assignee)
+			if err := json.Unmarshal([]byte(t.Decisions), &decisions); err == nil && len(decisions) > 0 {
+				for _, dec := range decisions {
+					if dec.By != "" {
+						fmt.Fprintf(&buf, "- **Decision:** %s (by %s)\n", dec.Text, dec.By)
+					} else {
+						fmt.Fprintf(&buf, "- **Decision:** %s\n", dec.Text)
+					}
+				}
+			}
+
+			var actions []struct {
+				Text     string `json:"text"`
+				Assignee string `json:"assignee"`
+			}
+			if err := json.Unmarshal([]byte(t.ActionItems), &actions); err == nil && len(actions) > 0 {
+				for _, a := range actions {
+					assignee := ""
+					if a.Assignee != "" {
+						assignee = " -> " + a.Assignee
+					}
+					fmt.Fprintf(&buf, "- %s%s\n", a.Text, assignee)
+				}
+			}
+			fmt.Fprintln(&buf)
 		}
-		fmt.Fprintln(&buf)
+	} else {
+		// Fallback to old flat fields for legacy digests
+		var topicNames []string
+		if err := json.Unmarshal([]byte(d.Topics), &topicNames); err == nil && len(topicNames) > 0 {
+			fmt.Fprintln(&buf, "**Trending Topics:**")
+			fmt.Fprintln(&buf)
+			for _, t := range topicNames {
+				fmt.Fprintf(&buf, "- %s\n", t)
+			}
+			fmt.Fprintln(&buf)
+		}
+
+		var decisions []struct {
+			Text string `json:"text"`
+			By   string `json:"by"`
+		}
+		if err := json.Unmarshal([]byte(d.Decisions), &decisions); err == nil && len(decisions) > 0 {
+			fmt.Fprintln(&buf, "**Key Decisions:**")
+			fmt.Fprintln(&buf)
+			for _, dec := range decisions {
+				if dec.By != "" {
+					fmt.Fprintf(&buf, "- %s (by %s)\n", dec.Text, dec.By)
+				} else {
+					fmt.Fprintf(&buf, "- %s\n", dec.Text)
+				}
+			}
+			fmt.Fprintln(&buf)
+		}
+
+		var actions []struct {
+			Text     string `json:"text"`
+			Assignee string `json:"assignee"`
+		}
+		if err := json.Unmarshal([]byte(d.ActionItems), &actions); err == nil && len(actions) > 0 {
+			fmt.Fprintln(&buf, "**Outstanding Actions:**")
+			fmt.Fprintln(&buf)
+			for _, a := range actions {
+				assignee := ""
+				if a.Assignee != "" {
+					assignee = " -> " + a.Assignee
+				}
+				fmt.Fprintf(&buf, "- %s%s\n", a.Text, assignee)
+			}
+			fmt.Fprintln(&buf)
+		}
 	}
 
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
@@ -138,6 +179,15 @@ func showTopicsSummary(out interface{ Write([]byte) (int, error) }, database *db
 	// Aggregate topics from channel digests
 	topicCounts := make(map[string]int)
 	for _, d := range digests {
+		// Try topic-structured data first
+		dbTopics, _ := database.GetDigestTopics(d.ID)
+		if len(dbTopics) > 0 {
+			for _, t := range dbTopics {
+				topicCounts[t.Title]++
+			}
+			continue
+		}
+		// Fallback to old flat topics
 		var topics []string
 		if err := json.Unmarshal([]byte(d.Topics), &topics); err == nil {
 			for _, t := range topics {

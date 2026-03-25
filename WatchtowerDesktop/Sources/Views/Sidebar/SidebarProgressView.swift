@@ -57,18 +57,18 @@ struct SidebarProgressView: View {
                     ProgressView(value: Double(prog.done), total: Double(max(prog.total, 1)))
                         .tint(.accentColor)
                         .scaleEffect(y: 0.7)
-
-                    if let status = prog.status, !status.isEmpty {
-                        Text(status)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
                 } else {
                     ProgressView()
                         .controlSize(.small)
                         .scaleEffect(0.6, anchor: .leading)
+                }
+
+                if let prog = state.progress, let status = prog.status, !status.isEmpty {
+                    Text(status)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
 
             case .error(let msg):

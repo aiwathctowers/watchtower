@@ -19,12 +19,10 @@ func cliGenerator(cfg *config.Config) digest.Generator {
 // The pool only limits how many claude processes run in parallel.
 func cliPooledGenerator(cfg *config.Config, logger *log.Logger) (digest.Generator, func()) {
 	rawGen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
-	poolSize := cfg.Digest.Workers
+	poolSize := cfg.AI.Workers
 	if poolSize <= 0 {
-		poolSize = config.DefaultDigestWorkers
+		poolSize = config.DefaultAIWorkers
 	}
-	const pipelineHeadroom = 5 // extra slots for analysis + tracks + chains workers
-	poolSize += pipelineHeadroom
 	pool := sessions.NewSessionPool(poolSize)
 	gen := digest.NewPooledGenerator(rawGen, pool)
 

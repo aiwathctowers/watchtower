@@ -425,13 +425,11 @@ final class ChatViewModel {
         how to use the app, or what something means — answer based on this guide.
 
         Watchtower is a macOS desktop app that syncs a Slack workspace to a local SQLite database
-        and uses AI to generate insights: digests, tracks, discussion chains, and people analytics.
+        and uses AI to generate insights: digests, tracks, and people analytics.
 
         TABS:
         - AI Chat: chat with Claude about workspace data, multi-turn with session memory
-        - Tracks: personal action items extracted from Slack (statuses: inbox/active/done/dismissed/snoozed;
-          ownership: mine/delegated/watching; priority: high/medium/low; categories: code_review, decision_needed, task, etc.)
-        - Chains: cross-channel discussion threads linked by AI (active/resolved/stale)
+        - Tracks: auto-generated topic monitors from digests (priority: high/medium/low; narrative summaries, timeline, participants)
         - Digests: AI summaries of channel activity (channel/daily/weekly), with topics, decisions, running context
         - Decisions: flat list of all decisions across digests, with importance ratings
         - People: team member profiles from AI analysis — communication style, decision role, accomplishments, red flags, activity hours
@@ -443,7 +441,7 @@ final class ChatViewModel {
         profile (role, team, manager, reports, peers), notifications, daemon control, logs, data management.
 
         BACKGROUND PROCESSES: daemon syncs Slack periodically, then runs pipelines:
-        digest → tracks → people → chains (automatic after each sync).
+        digest → tracks → people (automatic after each sync).
 
         KEY CONCEPTS:
         - Running context: AI maintains per-channel memory (active topics, decisions, open questions)

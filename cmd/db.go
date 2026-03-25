@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 
+	"watchtower/internal/prompts"
+
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +22,11 @@ var dbMigrateCmd = &cobra.Command{
 			return err
 		}
 		defer database.Close()
+
+		// Seed any new prompt templates added since last run
+		store := prompts.New(database, nil)
+		_ = store.Seed()
+
 		fmt.Println("Database migrations applied successfully.")
 		return nil
 	},

@@ -46,7 +46,7 @@ func init() {
 	peopleCmd.Flags().StringVar(&peopleFlagUser, "user", "", "show card for a specific user (@username)")
 	peopleCmd.Flags().BoolVar(&peopleFlagPrevious, "previous", false, "show previous 7-day window")
 	peopleCmd.Flags().IntVar(&peopleFlagWeeks, "weeks", 1, "number of weeks to show")
-	peopleGenerateCmd.Flags().IntVar(&peopleFlagWorkers, "workers", 10, "number of parallel workers")
+	peopleGenerateCmd.Flags().IntVar(&peopleFlagWorkers, "workers", 0, "override ai.workers for this run")
 	peopleGenerateCmd.Flags().BoolVar(&peopleGenFlagProgressJSON, "progress-json", false, "output progress as JSON lines")
 }
 
@@ -342,11 +342,13 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
+	if peopleFlagWorkers > 0 {
+		cfg.AI.Workers = peopleFlagWorkers
+	}
 	gen, savePool := cliPooledGenerator(cfg, logger)
 	defer savePool()
 	pipe := guide.New(database, cfg, gen, logger)
 	pipe.ForceRegenerate = true
-	pipe.Workers = peopleFlagWorkers
 
 	if peopleGenFlagProgressJSON {
 		type pj struct {

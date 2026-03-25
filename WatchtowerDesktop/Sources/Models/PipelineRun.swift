@@ -38,7 +38,6 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
         case "digests": return "Digests"
         case "tracks": return "Tracks"
         case "people": return "People Cards"
-        case "chains": return "Chains"
         default: return pipeline.capitalized
         }
     }
@@ -48,7 +47,6 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
         case "digests": return "doc.text.magnifyingglass"
         case "tracks": return "checklist"
         case "people": return "person.2.circle"
-        case "chains": return "link"
         default: return "gearshape"
         }
     }

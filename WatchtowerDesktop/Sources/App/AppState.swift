@@ -27,14 +27,11 @@ final class AppState {
     private(set) var chatViewModel: ChatViewModel?
     private(set) var chatHistoryViewModel: ChatHistoryViewModel?
 
-    /// Tracks status filter (nil = inbox+active).
-    var trackStatusFilter: String?
-
-    /// Tracks ownership filter (nil = all ownerships).
-    var trackOwnershipFilter: String?
-
     /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
     var analysisLegacyMode: Bool = false
+
+    /// Whether the user has completed onboarding (profile exists and onboarding_done == true).
+    var profileComplete: Bool = true
 
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
@@ -45,7 +42,7 @@ final class AppState {
     /// Manages app updates from GitHub Releases.
     let updateService = UpdateService()
 
-    /// Manages background pipeline tasks (digests, tracks) started after onboarding sync.
+    /// Manages background pipeline tasks (digests, people) started after onboarding sync.
     let backgroundTaskManager = BackgroundTaskManager()
 
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
@@ -53,9 +50,9 @@ final class AppState {
         guard let db = databaseManager, chatViewModel == nil else { return }
         let cvm = ChatViewModel(claudeService: ClaudeService(), dbManager: db)
         let hvm = ChatHistoryViewModel(dbManager: db)
-        hvm.load(completion: { [weak self, weak cvm, weak hvm] in
+        hvm.load { [weak self, weak cvm, weak hvm] in
             self?.maybeCreateWelcomeChat(chatVM: cvm, historyVM: hvm)
-        })
+        }
 
         cvm.onConversationUpdated = { [weak hvm] convID, title, sessionID in
             guard let hvm else { return }
@@ -89,7 +86,7 @@ final class AppState {
 
     func navigateToDigest(_ digestID: Int) {
         pendingDigestID = digestID
-        selectedDestination = .chains
+        selectedDestination = .digests
     }
 
     private var isInitializing = false
@@ -118,6 +115,7 @@ final class AppState {
                     }
                 }
                 needsOnboarding = onboarding.currentStep != .complete
+                profileComplete = !needsOnboarding
                 analysisLegacyMode = ConfigService().analysisLegacyMode
                 isLoading = false
                 loadCustomEmoji(from: manager)
@@ -161,6 +159,7 @@ final class AppState {
     func completeOnboarding() {
         onboarding.markComplete()
         needsOnboarding = false
+        profileComplete = true
     }
 
     /// Re-triggers the onboarding flow (from Settings).
@@ -168,6 +167,7 @@ final class AppState {
     func startOnboarding() {
         onboarding.reset(to: .chat)
         needsOnboarding = true
+        profileComplete = false
         UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
     }
 

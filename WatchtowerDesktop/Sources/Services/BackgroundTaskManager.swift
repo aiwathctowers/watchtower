@@ -1,6 +1,6 @@
 import Foundation
 
-/// Manages background pipeline tasks (digests, tracks, people, guide) after onboarding sync.
+/// Manages background pipeline tasks (digests, people) after onboarding sync.
 @MainActor
 @Observable
 final class BackgroundTaskManager {
@@ -22,14 +22,14 @@ final class BackgroundTaskManager {
         var icon: String {
             switch self {
             case .digests: "doc.text.magnifyingglass"
-            case .tracks: "checklist"
+            case .tracks: "binoculars"
             case .people: "person.2.circle"
             }
         }
 
         var cliArguments: [String] {
             switch self {
-            case .digests: ["digest", "generate", "--progress-json"]
+            case .digests: ["digest", "generate", "--progress-json", "--channels-only"]
             case .tracks: ["tracks", "generate", "--progress-json"]
             case .people: ["people", "generate", "--progress-json"]
             }
@@ -152,21 +152,19 @@ final class BackgroundTaskManager {
         tasks.values.reduce(0) { $0 + ($1.progress?.totalApiTokens ?? 0) }
     }
 
-    private var runningProcess: Process?
+    private var runningProcesses: [TaskKind: Process] = [:]
     private var pipelineTask: Task<Void, Never>?
 
-    /// Stop all running pipelines (terminates current process and cancels orchestration task).
-    /// Waits for the running process to exit so file locks are released before new pipelines start.
+    /// Stop all running pipelines (terminates current processes and cancels orchestration task).
+    /// Waits for running processes to exit so file locks are released before new pipelines start.
     func stopAll() async {
-        if let process = runningProcess {
+        for (_, process) in runningProcesses {
             process.terminate()
-            // Wait for process to actually exit (releases file locks like digest.lock).
-            // Use detached task to avoid blocking MainActor while polling.
             await Task.detached {
                 process.waitUntilExit()
             }.value
         }
-        runningProcess = nil
+        runningProcesses.removeAll()
         pipelineTask?.cancel()
         pipelineTask = nil
         for kind in TaskKind.allCases {
@@ -187,18 +185,21 @@ final class BackgroundTaskManager {
         }
 
         pipelineTask = Task {
-            // Phase 1: digests (tracks depend on digest decisions)
+            // Phase 1: channel digests (tracks + people depend on digest data)
             await runTask(.digests)
             guard !Task.isCancelled else { return }
 
-            // Only proceed to tracks/people if digests succeeded.
-            // If digests errored, there's no useful data for downstream pipelines.
+            // Only proceed if digests succeeded.
             guard tasks[.digests]?.status == .done else { return }
 
-            // Phase 2: tracks + people in parallel
+            // Phase 2: tracks + people in parallel (both depend only on channel digests)
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.runTask(.tracks) }
-                group.addTask { await self.runTask(.people) }
+                group.addTask { @MainActor in
+                    await self.runTask(.tracks)
+                }
+                group.addTask { @MainActor in
+                    await self.runTask(.people)
+                }
             }
             guard !Task.isCancelled else { return }
 
@@ -259,7 +260,7 @@ final class BackgroundTaskManager {
             return
         }
 
-        runningProcess = process
+        runningProcesses[kind] = process
         let decoder = JSONDecoder()
 
         // Stream JSON lines from stdout
@@ -298,7 +299,7 @@ final class BackgroundTaskManager {
             return String(data: data, encoding: .utf8) ?? ""
         }.value
 
-        runningProcess = nil
+        runningProcesses.removeValue(forKey: kind)
 
         if exitCode == 0 {
             tasks[kind]?.status = .done
@@ -315,9 +316,15 @@ final class BackgroundTaskManager {
         tasks[kind]?.progress = json
         updateETA(kind: kind, progress: json)
         // Only record completed steps: must have step_duration_seconds > 0
-        // and status containing "done" (filters out chains/rollup progress noise).
+        // and status containing "done" (filters out rollup progress noise).
+        #if DEBUG
+        print("[BTM] \(kind.rawValue) progress: done=\(json.done)/\(json.total) status=\(json.status ?? "nil") stepDur=\(json.stepDurationSeconds ?? -1)")
+        #endif
         guard let stepDur = json.stepDurationSeconds, stepDur > 0,
               let status = json.status, status.contains("done") else { return }
+        #if DEBUG
+        print("[BTM] \(kind.rawValue) RECORDING step: \(json.status ?? "")")
+        #endif
         let now = Date()
         let duration = stepDur
         let stepInput: Int
@@ -350,7 +357,10 @@ final class BackgroundTaskManager {
             periodFrom: json.periodFrom,
             periodTo: json.periodTo
         )
-        tasks[kind]?.stepHistory.append(record)
+        if var state = tasks[kind] {
+            state.stepHistory.append(record)
+            tasks[kind] = state
+        }
     }
 
     private func updateETA(kind: TaskKind, progress: InsightProgressData) {

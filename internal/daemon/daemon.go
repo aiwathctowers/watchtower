@@ -11,12 +11,13 @@ import (
 	"strings"
 	"time"
 
+	gosync "sync"
 	"watchtower/internal/briefing"
-	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
+
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
 )
@@ -35,12 +36,10 @@ type Daemon struct {
 	pidPath      string
 	db           *db.DB
 	digestPipe   *digest.Pipeline
-	chainsPipe   *chains.Pipeline
 	tracksPipe   *tracks.Pipeline
 	peoplePipe   *guide.Pipeline
 	briefingPipe *briefing.Pipeline
 	lastPeople   time.Time // when people cards last ran (once per day)
-	lastTracks   time.Time // when tracks last ran (throttled)
 	lastBriefing time.Time // when briefing last ran (once per day)
 }
 
@@ -66,11 +65,6 @@ func (d *Daemon) SetDB(database *db.DB) {
 // SetDigestPipeline sets the digest pipeline for post-sync digest generation.
 func (d *Daemon) SetDigestPipeline(p *digest.Pipeline) {
 	d.digestPipe = p
-}
-
-// SetChainsPipeline sets the chains pipeline for post-digest chain linking.
-func (d *Daemon) SetChainsPipeline(p *chains.Pipeline) {
-	d.chainsPipe = p
 }
 
 // SetTracksPipeline sets the tracks pipeline for post-digest extraction.
@@ -115,7 +109,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Restore last pipeline times from disk so throttle guards survive restarts.
 	d.loadLastPeople()
-	d.loadLastTracks()
 	d.loadLastBriefing()
 
 	d.logger.Printf("daemon started, polling every %s", pollInterval)
@@ -152,15 +145,6 @@ func (d *Daemon) wakeChannel() <-chan struct{} {
 }
 
 func (d *Daemon) runSync(ctx context.Context) {
-	// Pre-sync: reactivate snoozed tracks whose snooze_until has passed.
-	if d.tracksPipe != nil {
-		if n, err := d.tracksPipe.ReactivateSnoozed(ctx); err != nil {
-			d.logger.Printf("snooze reactivation error: %v", err)
-		} else if n > 0 {
-			d.logger.Printf("reactivated %d snoozed track(s)", n)
-		}
-	}
-
 	opts := sync.SyncOptions{}
 	syncErr := d.orchestrator.Run(ctx, opts)
 	if syncErr != nil {
@@ -221,124 +205,90 @@ func (d *Daemon) runSync(ctx context.Context) {
 	// can be marked read if the user already read those messages in Slack.
 	d.autoMarkRead()
 
-	// Phase 2: Chains (depends on channel digests being generated).
-	// Links decisions from channel digests into thematic chains.
-	if d.chainsPipe != nil {
-		var chainRunID int64
-		if d.db != nil {
-			chainRunID, _ = d.db.CreatePipelineRun("chains", "daemon")
-		}
-		n, err := d.chainsPipe.Run(ctx)
-		if err != nil {
-			d.logger.Printf("chains error: %v", err)
-		} else if n > 0 {
-			d.logger.Printf("linked %d decision(s) to chains", n)
-		}
-		if chainRunID > 0 {
-			var errMsg string
-			if err != nil {
-				errMsg = err.Error()
-			}
-			_ = d.db.CompletePipelineRun(chainRunID, n, 0, 0, 0, 0, nil, nil, errMsg)
-		}
+	// Phases 2-4 run in parallel where possible:
+	//   Group A: Tracks → inject track context → Rollups
+	//   Group B: People Cards (only depends on Phase 1 channel digests)
+	var phasesWg gosync.WaitGroup
 
-		// Inject chain context into digest and tracks pipelines for chain-aware rollups.
-		if chainCtx, err := d.chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
-			if d.digestPipe != nil {
-				d.digestPipe.ChainContext = chainCtx
-			}
-			if d.tracksPipe != nil {
-				d.tracksPipe.ChainContext = chainCtx
-			}
-		}
-	}
+	// Group A: Tracks → inject track context → Rollups → auto-mark rollups.
+	phasesWg.Add(1)
+	go func() {
+		defer phasesWg.Done()
 
-	// Phase 3: Daily/weekly rollups (chain-aware — chained decisions collapsed).
-	if d.digestPipe != nil {
-		if err := d.digestPipe.RunRollups(ctx); err != nil {
-			d.logger.Printf("rollup error: %v", err)
-		}
-	}
-
-	// Auto-mark rollup digests (daily/weekly) as read.
-	// Rollup digests are read when ALL their child channel digests are read,
-	// so this must run after rollups are generated.
-	d.autoMarkRead()
-
-	// Phase 4: People REDUCE (reads signals from Phase 1, generates people_cards).
-	// Must run AFTER channel digests because it reads people_signals from them.
-	if d.peoplePipe != nil {
-		now := time.Now()
-		if d.lastPeople.IsZero() || now.Sub(d.lastPeople) >= 24*time.Hour {
-			var peopleRunID int64
+		// Phase 2: Tracks (auto-create/update from unlinked topics).
+		if d.tracksPipe != nil {
+			var trackRunID int64
 			if d.db != nil {
-				peopleRunID, _ = d.db.CreatePipelineRun("people", "daemon")
+				trackRunID, _ = d.db.CreatePipelineRun("tracks", "daemon")
 			}
-			n, err := d.peoplePipe.Run(ctx)
-			if err != nil {
-				d.logger.Printf("people cards error: %v", err)
-			} else {
-				if n > 0 {
-					d.logger.Printf("generated %d people card(s)", n)
-				}
-				d.lastPeople = now
-				d.saveLastPeople()
-			}
-			if peopleRunID > 0 {
-				var errMsg string
-				if err != nil {
-					errMsg = err.Error()
-				}
-				_ = d.db.CompletePipelineRun(peopleRunID, n, 0, 0, 0, 0, nil, nil, errMsg)
-			}
-		}
-	}
-
-	// Phase 5: Tracks (depend on digests + chains for context).
-	// Throttled to run at most once per tracks interval (default 1h).
-	tracksJustRan := false
-	if d.tracksPipe != nil {
-		interval := d.config.Digest.TracksInterval
-		if interval <= 0 {
-			interval = config.DefaultTracksInterval
-		}
-		now := time.Now()
-		if d.lastTracks.IsZero() || now.Sub(d.lastTracks) >= interval {
-			tracksJustRan = true
-			var tracksRunID int64
-			if d.db != nil {
-				tracksRunID, _ = d.db.CreatePipelineRun("tracks", "daemon")
-			}
-			n, err := d.tracksPipe.Run(ctx)
+			n, updated, err := d.tracksPipe.Run(ctx)
 			if err != nil {
 				d.logger.Printf("tracks error: %v", err)
-			} else {
-				if n > 0 {
-					d.logger.Printf("extracted %d track(s)", n)
-				}
-				d.lastTracks = now
-				d.saveLastTracks()
+			} else if n > 0 || updated > 0 {
+				d.logger.Printf("tracks: created %d, updated %d", n, updated)
 			}
-			if tracksRunID > 0 {
+			if trackRunID > 0 {
 				var errMsg string
 				if err != nil {
 					errMsg = err.Error()
 				}
-				_ = d.db.CompletePipelineRun(tracksRunID, n, 0, 0, 0, 0, nil, nil, errMsg)
+				inTok, outTok, cost, _ := d.tracksPipe.AccumulatedUsage()
+				_ = d.db.CompletePipelineRun(trackRunID, n+updated, inTok, outTok, cost, 0, nil, nil, errMsg)
+			}
+
+			// Inject track context into digest pipeline for track-aware rollups.
+			if trackCtx, err := d.tracksPipe.FormatActiveTracksForPrompt(); err == nil && trackCtx != "" {
+				if d.digestPipe != nil {
+					d.digestPipe.TrackContext = trackCtx
+				}
 			}
 		}
-	}
 
-	// Check for updates on existing items (lightweight, runs every sync).
-	// Skip if tracks just ran — the data was just created, no updates to check.
-	if d.tracksPipe != nil && !tracksJustRan {
-		n, err := d.tracksPipe.CheckForUpdates(ctx)
-		if err != nil {
-			d.logger.Printf("tracks update check error: %v", err)
-		} else if n > 0 {
-			d.logger.Printf("detected updates on %d track(s)", n)
+		// Phase 3: Daily/weekly rollups (track-aware).
+		if d.digestPipe != nil {
+			if err := d.digestPipe.RunRollups(ctx); err != nil {
+				d.logger.Printf("rollup error: %v", err)
+			}
 		}
-	}
+
+		// Auto-mark rollup digests (daily/weekly) as read.
+		d.autoMarkRead()
+	}()
+
+	// Group B: People REDUCE (reads signals from Phase 1, generates people_cards).
+	phasesWg.Add(1)
+	go func() {
+		defer phasesWg.Done()
+
+		if d.peoplePipe != nil {
+			now := time.Now()
+			if d.lastPeople.IsZero() || now.Sub(d.lastPeople) >= 24*time.Hour {
+				var peopleRunID int64
+				if d.db != nil {
+					peopleRunID, _ = d.db.CreatePipelineRun("people", "daemon")
+				}
+				n, err := d.peoplePipe.Run(ctx)
+				if err != nil {
+					d.logger.Printf("people cards error: %v", err)
+				} else {
+					if n > 0 {
+						d.logger.Printf("generated %d people card(s)", n)
+					}
+					d.lastPeople = now
+					d.saveLastPeople()
+				}
+				if peopleRunID > 0 {
+					var errMsg string
+					if err != nil {
+						errMsg = err.Error()
+					}
+					_ = d.db.CompletePipelineRun(peopleRunID, n, 0, 0, 0, 0, nil, nil, errMsg)
+				}
+			}
+		}
+	}()
+
+	phasesWg.Wait()
 
 	// Phase 6: Daily briefing (depends on digests + tracks + people cards).
 	// Throttled to run at most once per day, triggered by schedule time.
@@ -404,35 +354,6 @@ func (d *Daemon) saveLastPeople() {
 	data := strconv.FormatInt(d.lastPeople.Unix(), 10)
 	if err := os.WriteFile(d.lastPeoplePath(), []byte(data), 0o600); err != nil {
 		d.logger.Printf("failed to save last people time: %v", err)
-	}
-}
-
-// lastTracksPath returns the file path for persisting the last tracks time.
-// Keeps the old filename "last_action_items.txt" for backward compatibility
-// with existing daemon installations.
-func (d *Daemon) lastTracksPath() string {
-	return filepath.Join(d.config.WorkspaceDir(), "last_action_items.txt")
-}
-
-// loadLastTracks restores lastTracks from disk so the throttle survives restarts.
-func (d *Daemon) loadLastTracks() {
-	data, err := os.ReadFile(d.lastTracksPath())
-	if err != nil {
-		return
-	}
-	unix, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
-	if err != nil {
-		return
-	}
-	d.lastTracks = time.Unix(unix, 0)
-	d.logger.Printf("restored last tracks time: %s", d.lastTracks.Format(time.RFC3339))
-}
-
-// saveLastTracks persists lastTracks to disk.
-func (d *Daemon) saveLastTracks() {
-	data := strconv.FormatInt(d.lastTracks.Unix(), 10)
-	if err := os.WriteFile(d.lastTracksPath(), []byte(data), 0o600); err != nil {
-		d.logger.Printf("failed to save last tracks time: %v", err)
 	}
 }
 

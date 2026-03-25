@@ -683,19 +683,21 @@ final class TracksViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db, domain: "acme")
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Fix the bug", status: "inbox", priority: "high")
-            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Write docs", status: "inbox", priority: "low")
+            try TestDatabase.insertTrack(db, title: "Fix the bug", priority: "high", hasUpdates: true)
+            try TestDatabase.insertTrack(db, title: "Write docs", priority: "low")
         }
 
         let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
         XCTAssertNil(vm.errorMessage, "load() error: \(vm.errorMessage ?? "")")
-        XCTAssertEqual(vm.items.count, 2)
-        // High priority first
-        XCTAssertEqual(vm.items[0].text, "Fix the bug")
-        XCTAssertEqual(vm.items[1].text, "Write docs")
-        XCTAssertEqual(vm.openCount, 2)
+        // Has updates goes to updatedTracks, rest to allTracks
+        XCTAssertEqual(vm.updatedTracks.count, 1)
+        XCTAssertEqual(vm.allTracks.count, 1)
+        XCTAssertEqual(vm.updatedTracks[0].title, "Fix the bug")
+        XCTAssertEqual(vm.allTracks[0].title, "Write docs")
+        XCTAssertEqual(vm.totalCount, 2)
+        XCTAssertEqual(vm.updatedCount, 1)
         XCTAssertEqual(vm.workspaceDomain, "acme")
         XCTAssertFalse(vm.isLoading)
     }
@@ -705,35 +707,10 @@ final class TracksViewModelTests: XCTestCase {
         let vm = TracksViewModel(dbManager: dbManager)
         vm.load()
 
-        XCTAssertTrue(vm.items.isEmpty)
-        XCTAssertEqual(vm.openCount, 0)
+        XCTAssertTrue(vm.updatedTracks.isEmpty)
+        XCTAssertTrue(vm.allTracks.isEmpty)
+        XCTAssertEqual(vm.totalCount, 0)
         XCTAssertNil(vm.errorMessage)
-    }
-
-    @MainActor
-    func testLoadWithStatusFilter() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Open task", status: "inbox")
-            try TestDatabase.insertTrack(
-                db,
-                channelID: "C001",
-                assigneeUserID: "U001",
-                text: "Done task",
-                status: "done",
-                priority: "medium",
-                periodFrom: 1700100000,
-                periodTo: 1700200000
-            )
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = "done"
-        vm.load()
-
-        XCTAssertEqual(vm.items.count, 1)
-        XCTAssertEqual(vm.items[0].text, "Done task")
     }
 
     @MainActor
@@ -741,159 +718,38 @@ final class TracksViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "High", priority: "high")
-            try TestDatabase.insertTrack(
-                db,
-                channelID: "C001",
-                assigneeUserID: "U001",
-                text: "Low",
-                priority: "low",
-                periodFrom: 1700100000,
-                periodTo: 1700200000
-            )
+            try TestDatabase.insertTrack(db, title: "High", priority: "high")
+            try TestDatabase.insertTrack(db, title: "Low", priority: "low")
         }
 
         let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
         vm.priorityFilter = "high"
         vm.load()
 
-        XCTAssertEqual(vm.items.count, 1)
-        XCTAssertEqual(vm.items[0].text, "High")
+        XCTAssertEqual(vm.allTracks.count, 1)
+        XCTAssertEqual(vm.allTracks[0].title, "High")
     }
 
     @MainActor
-    func testMarkDone() throws {
+    func testMarkRead() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Fix it", status: "inbox")
+            try TestDatabase.insertTrack(db, title: "Fix it", hasUpdates: true)
         }
 
         let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
         vm.load()
-        XCTAssertEqual(vm.items.count, 1)
+        XCTAssertEqual(vm.updatedTracks.count, 1)
 
-        let item = vm.items[0]
-        vm.markDone(item)
+        let item = vm.updatedTracks[0]
+        vm.markRead(item)
 
-        // After markDone, reload happens. Status filter nil shows inbox+active, so done item is filtered out.
-        XCTAssertTrue(vm.items.isEmpty)
-        // Verify the item is actually done via direct lookup.
+        // After markRead, the track moves from updatedTracks to allTracks
+        XCTAssertTrue(vm.updatedTracks.isEmpty)
+        XCTAssertEqual(vm.allTracks.count, 1)
         let updated = vm.itemByID(item.id)
-        XCTAssertEqual(updated?.status, "done")
-    }
-
-    @MainActor
-    func testDismiss() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "inbox")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
-        vm.load()
-
-        let item = vm.items[0]
-        vm.dismiss(item)
-
-        // After dismiss, reload happens. Status filter nil shows inbox+active, so dismissed item is filtered out.
-        XCTAssertTrue(vm.items.isEmpty)
-        let updated = vm.itemByID(item.id)
-        XCTAssertEqual(updated?.status, "dismissed")
-    }
-
-    @MainActor
-    func testReopen() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "done")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = "done"
-        vm.load()
-        XCTAssertEqual(vm.items.count, 1)
-
-        let item = vm.items[0]
-        vm.reopen(item)
-
-        // After reopen to "inbox", it won't appear under "done" filter anymore.
-        // Switch to nil filter (inbox+active) to verify.
-        vm.statusFilter = nil
-        vm.load()
-        XCTAssertEqual(vm.items.count, 1)
-        XCTAssertEqual(vm.items[0].status, "inbox")
-    }
-
-    @MainActor
-    func testSnooze() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "inbox")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
-        vm.load()
-
-        let item = vm.items[0]
-        let tomorrow = Date().addingTimeInterval(86400)
-        vm.snooze(item, until: tomorrow)
-
-        // After snooze, reload happens. Status filter nil shows inbox+active, so snoozed item is filtered out.
-        XCTAssertTrue(vm.items.isEmpty)
-        let updated = vm.itemByID(item.id)
-        XCTAssertEqual(updated?.status, "snoozed")
-        XCTAssertNotNil(updated?.snoozeUntil)
-    }
-
-    @MainActor
-    func testStatusChangeLogsHistory() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Fix it", status: "inbox")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
-        vm.load()
-        let item = vm.items[0]
-
-        // Mark done — should log history.
-        vm.markDone(item)
-
-        let history = vm.fetchHistory(for: item.id)
-        XCTAssertFalse(history.isEmpty, "Status change should create a history entry")
-        XCTAssertEqual(history.last?.event, "status_changed")
-        XCTAssertEqual(history.last?.oldValue, "inbox")
-        XCTAssertEqual(history.last?.newValue, "done")
-    }
-
-    @MainActor
-    func testAcceptNonInboxDoesNotLogHistory() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001", text: "Task", status: "active")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = "active"
-        vm.load()
-        let item = vm.items[0]
-
-        // Accept an already-active item — should NOT log phantom history.
-        vm.accept(item)
-
-        let history = vm.fetchHistory(for: item.id)
-        XCTAssertTrue(history.isEmpty, "Accepting a non-inbox item should not create phantom history")
+        XCTAssertTrue(updated?.isRead ?? false)
     }
 
     @MainActor
@@ -901,7 +757,7 @@ final class TracksViewModelTests: XCTestCase {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db, domain: "acme")
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, assigneeUserID: "U001")
+            try TestDatabase.insertTrack(db)
         }
 
         let vm = TracksViewModel(dbManager: dbManager)
@@ -920,75 +776,20 @@ final class TracksViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAvailableChannels() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1", sourceChannelName: "general")
-            try TestDatabase.insertTrack(
-                db,
-                channelID: "C002",
-                assigneeUserID: "U001",
-                text: "Task 2",
-                sourceChannelName: "engineering",
-                periodFrom: 1700100000,
-                periodTo: 1700200000
-            )
-            try TestDatabase.insertTrack(
-                db,
-                channelID: "C001",
-                assigneeUserID: "U001",
-                text: "Task 3",
-                sourceChannelName: "general",
-                periodFrom: 1700200000,
-                periodTo: 1700300000
-            )
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
-        vm.load()
-
-        let channels = vm.availableChannels
-        XCTAssertEqual(channels.count, 2)
-        // Sorted by name
-        XCTAssertEqual(channels[0].name, "engineering")
-        XCTAssertEqual(channels[1].name, "general")
-    }
-
-    @MainActor
     func testLoadWithChannelFilter() throws {
         try dbManager.dbPool.write { db in
             try TestDatabase.insertWorkspace(db)
             try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task 1")
-            try TestDatabase.insertTrack(db, channelID: "C002", assigneeUserID: "U001", text: "Task 2", periodFrom: 1700100000, periodTo: 1700200000)
+            try TestDatabase.insertTrack(db, title: "Task 1", channelIDs: #"["C001"]"#)
+            try TestDatabase.insertTrack(db, title: "Task 2", channelIDs: #"["C002"]"#)
         }
 
         let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
         vm.channelFilter = "C002"
         vm.load()
 
-        XCTAssertEqual(vm.items.count, 1)
-        XCTAssertEqual(vm.items[0].channelID, "C002")
-    }
-
-    @MainActor
-    func testAvailableChannelsFallbackToID() throws {
-        try dbManager.dbPool.write { db in
-            try TestDatabase.insertWorkspace(db)
-            try db.execute(sql: "UPDATE workspace SET current_user_id = 'U001'")
-            try TestDatabase.insertTrack(db, channelID: "C001", assigneeUserID: "U001", text: "Task", sourceChannelName: "")
-        }
-
-        let vm = TracksViewModel(dbManager: dbManager)
-        vm.statusFilter = nil
-        vm.load()
-
-        let channels = vm.availableChannels
-        XCTAssertEqual(channels.count, 1)
-        XCTAssertEqual(channels[0].name, "C001")
+        let total = vm.updatedTracks.count + vm.allTracks.count
+        XCTAssertEqual(total, 1)
     }
 }
 
@@ -1641,242 +1442,6 @@ final class OnboardingStateMachineTests: XCTestCase {
     }
 }
 
-// ChainsViewModel Tests
-
-final class ChainsViewModelTests: XCTestCase {
-    private var dbManager: DatabaseManager!
-    private var dbPath: String!
-
-    override func setUp() {
-        super.setUp()
-        do {
-            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
-        } catch {
-            XCTFail("setUp failed: \(error)")
-        }
-    }
-
-    override func tearDown() {
-        TestDatabase.cleanup(path: dbPath)
-        super.tearDown()
-    }
-
-    @MainActor
-    func testLoadEmptyChains() async {
-        let vm = ChainsViewModel(dbManager: dbManager)
-        vm.load()
-
-        XCTAssertTrue(vm.chains.isEmpty)
-        XCTAssertEqual(vm.activeChainCount, 0)
-        XCTAssertFalse(vm.isLoading)
-    }
-
-    @MainActor
-    func testLoadChainsWithData() async throws {
-        try await dbManager.dbPool.write { db in
-            try TestDatabase.insertChannel(db, id: "C001")
-            try TestDatabase.insertChain(db, title: "Migration", slug: "migration", status: "active", itemCount: 3)
-            try TestDatabase.insertChain(db, title: "Hiring", slug: "hiring", status: "resolved", itemCount: 1)
-        }
-
-        let vm = ChainsViewModel(dbManager: dbManager)
-        vm.load()
-
-        XCTAssertEqual(vm.chains.count, 2)
-        XCTAssertEqual(vm.activeChainCount, 1)
-    }
-
-    @MainActor
-    func testLoadRefs() async throws {
-        try await dbManager.dbPool.write { db in
-            try TestDatabase.insertChannel(db, id: "C001")
-            try TestDatabase.insertDigest(db, decisions: "[{\"text\":\"Use RDS\",\"by\":\"@alice\",\"importance\":\"high\"}]")
-            try TestDatabase.insertChain(db)
-            try TestDatabase.insertChainRef(
-                db,
-                chainID: 1,
-                refType: "decision",
-                digestID: 1,
-                decisionIdx: 0,
-                channelID: "C001",
-                timestamp: 1700000000
-            )
-        }
-
-        let vm = ChainsViewModel(dbManager: dbManager)
-        vm.load()
-        vm.loadRefs(for: 1)
-
-        XCTAssertEqual(vm.selectedChainRefs.count, 1)
-        XCTAssertEqual(vm.selectedChainRefs.first?.refType, "decision")
-
-        // Test decision text lookup.
-        if let ref = vm.selectedChainRefs.first, let dec = vm.decisionText(for: ref) {
-            XCTAssertEqual(dec.text, "Use RDS")
-            XCTAssertEqual(dec.by, "@alice")
-        } else {
-            XCTFail("Expected decision text")
-        }
-    }
-
-    @MainActor
-    func testArchiveChain() async throws {
-        try await dbManager.dbPool.write { db in
-            try TestDatabase.insertChain(db, status: "active")
-        }
-
-        let vm = ChainsViewModel(dbManager: dbManager)
-        vm.load()
-        XCTAssertEqual(vm.chains.first?.status, "active")
-
-        vm.archiveChain(1)
-        XCTAssertEqual(vm.chains.first?.status, "resolved")
-    }
-
-    @MainActor
-    func testChannelNameCache() async throws {
-        try await dbManager.dbPool.write { db in
-            try TestDatabase.insertChannel(db, id: "C001")
-        }
-
-        let vm = ChainsViewModel(dbManager: dbManager)
-        vm.load()
-
-        XCTAssertEqual(vm.channelName(for: "C001"), "general")
-        XCTAssertEqual(vm.channelName(for: "UNKNOWN"), "UNKNOWN")
-    }
-}
-
-// Chain Model Tests
-
-final class ChainModelTests: XCTestCase {
-    func testDecodedChannelIDs() {
-        let chain = Chain(
-            id: 1,
-            parentID: nil,
-            title: "Test",
-            slug: "test",
-            status: "active",
-            summary: "",
-            channelIDs: "[\"C1\",\"C2\"]",
-            firstSeen: 100,
-            lastSeen: 200,
-            itemCount: 0,
-            readAt: nil,
-            createdAt: "",
-            updatedAt: ""
-        )
-        XCTAssertEqual(chain.decodedChannelIDs, ["C1", "C2"])
-    }
-
-    func testDecodedChannelIDsEmpty() {
-        let chain = Chain(
-            id: 1,
-            parentID: nil,
-            title: "Test",
-            slug: "test",
-            status: "active",
-            summary: "",
-            channelIDs: "[]",
-            firstSeen: 100,
-            lastSeen: 200,
-            itemCount: 0,
-            readAt: nil,
-            createdAt: "",
-            updatedAt: ""
-        )
-        XCTAssertTrue(chain.decodedChannelIDs.isEmpty)
-    }
-
-    func testStatusProperties() {
-        let active = Chain(
-            id: 1,
-            parentID: nil,
-            title: "",
-            slug: "",
-            status: "active",
-            summary: "",
-            channelIDs: "[]",
-            firstSeen: 0,
-            lastSeen: 0,
-            itemCount: 0,
-            readAt: nil,
-            createdAt: "",
-            updatedAt: ""
-        )
-        XCTAssertTrue(active.isActive)
-        XCTAssertFalse(active.isResolved)
-        XCTAssertFalse(active.isStale)
-        XCTAssertFalse(active.isRead)
-        XCTAssertTrue(active.isParent)
-
-        let resolved = Chain(
-            id: 2,
-            parentID: 1,
-            title: "",
-            slug: "",
-            status: "resolved",
-            summary: "",
-            channelIDs: "[]",
-            firstSeen: 0,
-            lastSeen: 0,
-            itemCount: 0,
-            readAt: "2026-01-01",
-            createdAt: "",
-            updatedAt: ""
-        )
-        XCTAssertTrue(resolved.isResolved)
-        XCTAssertTrue(resolved.isRead)
-        XCTAssertFalse(resolved.isParent)
-    }
-
-    func testChainRefProperties() {
-        let decRef = ChainRef(
-            id: 1,
-            chainID: 1,
-            refType: "decision",
-            digestID: 5,
-            decisionIdx: 2,
-            trackID: 0,
-            channelID: "C1",
-            timestamp: 100,
-            createdAt: ""
-        )
-        XCTAssertTrue(decRef.isDecision)
-        XCTAssertFalse(decRef.isTrack)
-        XCTAssertFalse(decRef.isDigest)
-
-        let trackRef = ChainRef(
-            id: 2,
-            chainID: 1,
-            refType: "track",
-            digestID: 0,
-            decisionIdx: 0,
-            trackID: 3,
-            channelID: "C1",
-            timestamp: 200,
-            createdAt: ""
-        )
-        XCTAssertTrue(trackRef.isTrack)
-        XCTAssertFalse(trackRef.isDecision)
-
-        let digestRef = ChainRef(
-            id: 3,
-            chainID: 1,
-            refType: "digest",
-            digestID: 10,
-            decisionIdx: 0,
-            trackID: 0,
-            channelID: "C1",
-            timestamp: 300,
-            createdAt: ""
-        )
-        XCTAssertTrue(digestRef.isDigest)
-        XCTAssertFalse(digestRef.isDecision)
-        XCTAssertFalse(digestRef.isTrack)
-    }
-}
-
 // MARK: - BackgroundTaskManager
 
 final class BackgroundTaskManagerTests: XCTestCase {
@@ -1920,12 +1485,12 @@ final class BackgroundTaskManagerTests: XCTestCase {
         digestState.progress = decodeProgress("""
             {"pipeline":"digests","done":2,"total":5,"status":"","input_tokens":300,"output_tokens":150,"cost_usd":0.003,"finished":false}
             """)
-        var tracksState = BackgroundTaskManager.TaskState()
-        tracksState.progress = decodeProgress("""
-            {"pipeline":"tracks","done":1,"total":3,"status":"","input_tokens":300,"output_tokens":150,"cost_usd":0.003,"finished":false}
+        var peopleState = BackgroundTaskManager.TaskState()
+        peopleState.progress = decodeProgress("""
+            {"pipeline":"people","done":1,"total":3,"status":"","input_tokens":300,"output_tokens":150,"cost_usd":0.003,"finished":false}
             """)
         manager.tasks[.digests] = digestState
-        manager.tasks[.tracks] = tracksState
+        manager.tasks[.people] = peopleState
 
         XCTAssertEqual(manager.totalInputTokens, 600)
         XCTAssertEqual(manager.totalOutputTokens, 300)
@@ -1962,7 +1527,7 @@ final class BackgroundTaskManagerTests: XCTestCase {
         XCTAssertTrue(manager.allFinished) // empty is finished
 
         manager.tasks[.digests] = .init(status: .done)
-        manager.tasks[.tracks] = .init(status: .error("fail"))
+        manager.tasks[.people] = .init(status: .error("fail"))
         XCTAssertTrue(manager.allFinished)
 
         manager.tasks[.people] = .init(status: .running)
@@ -1977,7 +1542,7 @@ final class BackgroundTaskManagerTests: XCTestCase {
         manager.tasks[.digests] = .init(status: .done)
         XCTAssertFalse(manager.hasVisibleTasks)
 
-        manager.tasks[.tracks] = .init(status: .error("oops"))
+        manager.tasks[.people] = .init(status: .error("oops"))
         XCTAssertTrue(manager.hasVisibleTasks)
 
         manager.tasks[.people] = .init(status: .pending)

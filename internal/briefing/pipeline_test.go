@@ -230,3 +230,48 @@ func TestDBBriefingCRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, b3)
 }
+
+// --- Tests for Task #5: briefing adaptation ---
+
+func TestGatherTracks_NoTracks(t *testing.T) {
+	database := testDB(t)
+	pipe := New(database, testConfig(), &mockGenerator{}, log.New(io.Discard, "", 0))
+
+	ctx, hasReal := pipe.gatherTracks()
+	assert.False(t, hasReal)
+	assert.Contains(t, ctx, "No active tracks")
+}
+
+func TestGatherTracks_WithTracks(t *testing.T) {
+	database := testDB(t)
+	_, err := database.UpsertTrack(db.Track{
+		Title:         "API redesign",
+		CurrentStatus: "Under review",
+		Priority:      "high",
+		Participants:  `[{"user_id":"U1","name":"alice","role":"driver"}]`,
+		ChannelIDs:    `["C1"]`,
+	})
+	require.NoError(t, err)
+
+	pipe := New(database, testConfig(), &mockGenerator{}, log.New(io.Discard, "", 0))
+
+	ctx, hasReal := pipe.gatherTracks()
+	assert.True(t, hasReal)
+	assert.Contains(t, ctx, "API redesign")
+	assert.Contains(t, ctx, "high")
+}
+
+func TestAttentionItem(t *testing.T) {
+	input := `{
+		"attention": [{"text": "track needs attention", "source_type": "track", "source_id": "1", "priority": "high", "reason": "stale"}],
+		"your_day": [],
+		"what_happened": [],
+		"team_pulse": [],
+		"coaching": []
+	}`
+	result, err := parseBriefingResult(input)
+	require.NoError(t, err)
+	require.Len(t, result.Attention, 1)
+	assert.Equal(t, "track", result.Attention[0].SourceType)
+	assert.Equal(t, "high", result.Attention[0].Priority)
+}

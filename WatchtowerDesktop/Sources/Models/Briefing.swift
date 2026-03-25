@@ -10,12 +10,14 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
     let sourceID: String?
     let priority: String?
     let reason: String?
+    let suggestTrack: Bool?
 
     enum CodingKeys: String, CodingKey {
         case text
         case sourceType = "source_type"
         case sourceID = "source_id"
         case priority, reason
+        case suggestTrack = "suggest_track"
     }
 
     init(from decoder: Decoder) throws {
@@ -24,6 +26,7 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
         sourceType = try container.decodeIfPresent(String.self, forKey: .sourceType)
         priority = try container.decodeIfPresent(String.self, forKey: .priority)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        suggestTrack = try container.decodeIfPresent(Bool.self, forKey: .suggestTrack)
         // Accept both string and int for source_id
         if let str = try? container.decodeIfPresent(String.self, forKey: .sourceID) {
             sourceID = str
@@ -37,7 +40,7 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.text == rhs.text && lhs.sourceType == rhs.sourceType
             && lhs.sourceID == rhs.sourceID && lhs.priority == rhs.priority
-            && lhs.reason == rhs.reason
+            && lhs.reason == rhs.reason && lhs.suggestTrack == rhs.suggestTrack
     }
 }
 

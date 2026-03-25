@@ -55,7 +55,7 @@ func TestRunPromptsList(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Prompt Templates:")
 	assert.Contains(t, output, "digest.channel")
-	assert.Contains(t, output, "tracks.extract")
+	assert.Contains(t, output, "tracks.create")
 	assert.Contains(t, output, "people.reduce")
 }
 

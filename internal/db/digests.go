@@ -399,3 +399,127 @@ func (db *DB) ChannelNameByID(channelID string) (string, error) {
 	err := db.QueryRow(`SELECT name FROM channels WHERE id = ?`, channelID).Scan(&name)
 	return name, err
 }
+
+// InsertDigestTopics stores topics for a digest, replacing any existing ones.
+func (db *DB) InsertDigestTopics(digestID int64, topics []DigestTopic) error {
+	if len(topics) == 0 {
+		return nil
+	}
+
+	// Delete existing topics for this digest (idempotent on re-upsert).
+	if _, err := db.Exec(`DELETE FROM digest_topics WHERE digest_id = ?`, digestID); err != nil {
+		return fmt.Errorf("deleting old digest topics: %w", err)
+	}
+
+	for i, t := range topics {
+		_, err := db.Exec(`INSERT INTO digest_topics (digest_id, idx, title, summary, decisions, action_items, situations, key_messages)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			digestID, i, t.Title, t.Summary, t.Decisions, t.ActionItems, t.Situations, t.KeyMessages)
+		if err != nil {
+			return fmt.Errorf("inserting digest topic %d: %w", i, err)
+		}
+	}
+
+	// Populate digest_participants from topic situations.
+	db.populateDigestParticipantsFromTopics(digestID)
+
+	return nil
+}
+
+// GetDigestTopics returns all topics for a digest, ordered by idx.
+func (db *DB) GetDigestTopics(digestID int) ([]DigestTopic, error) {
+	rows, err := db.Query(`SELECT id, digest_id, idx, title, summary, decisions, action_items, situations, key_messages
+		FROM digest_topics WHERE digest_id = ? ORDER BY idx`, digestID)
+	if err != nil {
+		return nil, fmt.Errorf("querying digest topics: %w", err)
+	}
+	defer rows.Close()
+
+	var topics []DigestTopic
+	for rows.Next() {
+		var t DigestTopic
+		if err := rows.Scan(&t.ID, &t.DigestID, &t.Idx, &t.Title, &t.Summary, &t.Decisions, &t.ActionItems, &t.Situations, &t.KeyMessages); err != nil {
+			return nil, fmt.Errorf("scanning digest topic: %w", err)
+		}
+		topics = append(topics, t)
+	}
+	return topics, rows.Err()
+}
+
+// GetDigestTopicsByDigestIDs returns topics for multiple digests at once.
+func (db *DB) GetDigestTopicsByDigestIDs(digestIDs []int) ([]DigestTopic, error) {
+	if len(digestIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(digestIDs))
+	args := make([]any, len(digestIDs))
+	for i, id := range digestIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	rows, err := db.Query(fmt.Sprintf(`SELECT id, digest_id, idx, title, summary, decisions, action_items, situations, key_messages
+		FROM digest_topics WHERE digest_id IN (%s) ORDER BY digest_id, idx`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying digest topics by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var topics []DigestTopic
+	for rows.Next() {
+		var t DigestTopic
+		if err := rows.Scan(&t.ID, &t.DigestID, &t.Idx, &t.Title, &t.Summary, &t.Decisions, &t.ActionItems, &t.Situations, &t.KeyMessages); err != nil {
+			return nil, fmt.Errorf("scanning digest topic: %w", err)
+		}
+		topics = append(topics, t)
+	}
+	return topics, rows.Err()
+}
+
+// GetDigestTopicByID returns a single topic by its primary key.
+func (db *DB) GetDigestTopicByID(topicID int) (*DigestTopic, error) {
+	var t DigestTopic
+	err := db.QueryRow(`SELECT id, digest_id, idx, title, summary, decisions, action_items, situations, key_messages
+		FROM digest_topics WHERE id = ?`, topicID).
+		Scan(&t.ID, &t.DigestID, &t.Idx, &t.Title, &t.Summary, &t.Decisions, &t.ActionItems, &t.Situations, &t.KeyMessages)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting digest topic by id: %w", err)
+	}
+	return &t, nil
+}
+
+// populateDigestParticipantsFromTopics extracts participants from all topic
+// situations and inserts them into digest_participants with topic_id set.
+func (db *DB) populateDigestParticipantsFromTopics(digestID int64) {
+	topics, err := db.GetDigestTopics(int(digestID))
+	if err != nil {
+		slog.Warn("failed to get digest topics for participants", "digest_id", digestID, "error", err)
+		return
+	}
+
+	// Delete existing participants for this digest.
+	if _, err := db.Exec(`DELETE FROM digest_participants WHERE digest_id = ?`, digestID); err != nil {
+		slog.Warn("failed to delete digest participants", "digest_id", digestID, "error", err)
+	}
+
+	for _, t := range topics {
+		var situations []Situation
+		if err := json.Unmarshal([]byte(t.Situations), &situations); err != nil {
+			continue
+		}
+		for idx, s := range situations {
+			for _, p := range s.Participants {
+				if p.UserID != "" {
+					if _, err := db.Exec(`INSERT OR IGNORE INTO digest_participants (digest_id, user_id, situation_idx, role, topic_id) VALUES (?, ?, ?, ?, ?)`,
+						digestID, p.UserID, idx, p.Role, t.ID); err != nil {
+						slog.Warn("failed to insert digest participant", "digest_id", digestID, "user_id", p.UserID, "error", err)
+					}
+				}
+			}
+		}
+	}
+}

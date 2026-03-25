@@ -19,7 +19,6 @@ func TestAllCommandsRegistered(t *testing.T) {
 		"digest", "decisions", "trends", "people", "tracks",
 		"feedback", "prompts", "tune", "profile", "ask",
 		"catchup", "version", "config", "db", "auth", "logs",
-		"chains", "actions",
 	}
 
 	registeredNames := make(map[string]bool)
@@ -213,59 +212,27 @@ func TestShowPeopleList_WithRedFlagsAndConcerns(t *testing.T) {
 	database.Close()
 }
 
-// --- Chains detail with refs ---
-func TestShowChainDetail_WithRefs(t *testing.T) {
+// --- Track detail ---
+func TestShowTrackDetail(t *testing.T) {
 	cleanup := setupWatchTestEnv(t)
 	defer cleanup()
 
 	database, err := openDBFromConfig()
 	require.NoError(t, err)
 
-	now := float64(time.Now().Unix())
-	chainID, err := database.CreateChain(db.Chain{
-		Title:      "Test Chain",
-		Slug:       "test-chain",
-		Status:     "active",
-		Summary:    "A test chain",
-		ChannelIDs: `["C001"]`,
-		FirstSeen:  now - 86400,
-		LastSeen:   now,
-		ItemCount:  2,
+	_, err = database.UpsertTrack(db.Track{
+		Title:         "Test Track",
+		Narrative:     "A test narrative",
+		CurrentStatus: "Under review",
+		Priority:      "high",
+		ChannelIDs:    `["C001"]`,
+		Tags:          `["api"]`,
 	})
 	require.NoError(t, err)
 
-	// Insert a track for reference
-	trackID, err := database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "Related track",
-		Status:         "active",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
-	})
+	track, err := database.GetTrackByID(1)
 	require.NoError(t, err)
-
-	// Insert chain ref (track type)
-	err = database.InsertChainRef(db.ChainRef{
-		ChainID:   int(chainID),
-		RefType:   "track",
-		TrackID:   int(trackID),
-		ChannelID: "C001",
-		Timestamp: now,
-	})
-	require.NoError(t, err)
-
-	buf := new(bytes.Buffer)
-	err = showChainDetail(database, buf, int(chainID))
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Test Chain")
-	assert.Contains(t, output, "Timeline")
-	assert.Contains(t, output, "Related track")
+	assert.Equal(t, "Test Track", track.Title)
 
 	database.Close()
 }
@@ -332,85 +299,6 @@ func TestRunDigestStats_NegativeDays(t *testing.T) {
 	err := digestStatsCmd.RunE(digestStatsCmd, nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "No digests generated")
-}
-
-// --- Chains list with different statuses ---
-func TestRunChains_StatusIcons(t *testing.T) {
-	cleanup := setupWatchTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	for _, status := range []string{"active", "resolved", "stale"} {
-		_, err = database.CreateChain(db.Chain{
-			Title:      status + " chain",
-			Slug:       status + "-chain",
-			Status:     status,
-			ChannelIDs: `[]`,
-			FirstSeen:  now - 86400,
-			LastSeen:   now,
-			ItemCount:  1,
-		})
-		require.NoError(t, err)
-	}
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	chainsCmd.SetOut(buf)
-	chainsFlagStatus = ""
-
-	err = chainsCmd.RunE(chainsCmd, nil)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "active chain")
-	assert.Contains(t, output, "resolved chain")
-	assert.Contains(t, output, "stale chain")
-}
-
-// --- Tracks with "all" status ---
-func TestRunTracks_AllStatus(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	for _, status := range []string{"inbox", "active", "done", "dismissed"} {
-		_, err = database.UpsertTrack(db.Track{
-			ChannelID:      "C001",
-			AssigneeUserID: "U001",
-			Text:           status + " track",
-			Status:         status,
-			Priority:       "medium",
-			PeriodFrom:     now - 86400,
-			PeriodTo:       now,
-			Model:          "haiku",
-			Ownership:      "mine",
-		})
-		require.NoError(t, err)
-	}
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksCmd.SetOut(buf)
-	tracksFlagStatus = "all"
-	tracksFlagPriority = ""
-	tracksFlagChannel = ""
-	tracksFlagOwnership = ""
-	defer func() { tracksFlagStatus = "" }()
-
-	err = tracksCmd.RunE(tracksCmd, nil)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "inbox track")
-	assert.Contains(t, output, "active track")
-	assert.Contains(t, output, "done track")
-	assert.Contains(t, output, "dismissed track")
 }
 
 // --- Feedback with comment ---

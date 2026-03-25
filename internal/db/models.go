@@ -153,47 +153,28 @@ type CustomEmoji struct {
 	AliasFor string // Target emoji name if this is an alias
 }
 
-// Track represents an AI-extracted track for a user.
+// Track represents an auto-generated informational track (v3).
 type Track struct {
-	ID                int
-	ChannelID         string
-	AssigneeUserID    string
-	AssigneeRaw       string
-	Text              string
-	Context           string
-	SourceMessageTS   string
-	SourceChannelName string
-	Status            string  // "inbox", "active", "done", "dismissed", "snoozed"
-	Priority          string  // "high", "medium", "low"
-	DueDate           float64 // Unix timestamp, 0 = no deadline
-	PeriodFrom        float64
-	PeriodTo          float64
-	Model             string
-	InputTokens       int
-	OutputTokens      int
-	CostUSD           float64
-	CreatedAt         string
-	CompletedAt       sql.NullString
-	HasUpdates        bool    // true if source thread has new activity
-	LastCheckedTS     string  // Slack ts of last checked reply
-	SnoozeUntil       float64 // Unix timestamp when snooze expires, 0 = not set
-	PreSnoozeStatus   string  // status to restore after snooze
-	Participants      string  // JSON array of participants with stances
-	SourceRefs        string  // JSON array of source message references
-	RequesterName     string  // who made the request (@username)
-	RequesterUserID   string  // Slack user_id of the requester
-	Category          string  // code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
-	Blocking          string  // who/what is blocked if this isn't done
-	Tags              string  // JSON array of project/topic tags
-	DecisionSummary   string  // how the group arrived at the decision
-	DecisionOptions   string  // JSON array of options if decision pending
-	RelatedDigestIDs  string  // JSON array of related digest IDs
-	SubItems          string  // JSON array of sub-tasks with statuses
-	PromptVersion     int     // version of prompt used for generation
-	Ownership         string  // "mine", "delegated", "watching"
-	BallOn            string  // user_id of the person who needs to act next
-	OwnerUserID       string  // owner of the track (for delegated = report's user_id)
-	Fingerprint       string  // JSON array of extracted entities (ticket IDs, user_ids, IPs, CVEs)
+	ID            int
+	Title         string
+	Narrative     string
+	CurrentStatus string
+	Participants  string // JSON: [{"user_id":"U...","name":"...","role":"driver|reviewer|blocker|observer"}]
+	Timeline      string // JSON: [{"date":"2026-03-20","event":"...","channel_id":"C..."}]
+	KeyMessages   string // JSON: [{"ts":"...","author":"...","text":"...","channel_id":"C..."}]
+	Priority      string // "high", "medium", "low"
+	Tags          string // JSON: ["tag1","tag2"]
+	ChannelIDs    string // JSON: ["C1","C2"]
+	SourceRefs    string // JSON: [{"digest_id":1,"topic_id":42,"channel_id":"C...","timestamp":1234.0}]
+	ReadAt        string // "" = unread, ISO8601 = when read
+	HasUpdates    bool
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	CostUSD       float64
+	PromptVersion int
+	CreatedAt     string
+	UpdatedAt     string
 }
 
 // Digest represents an AI-generated summary of channel activity.
@@ -220,6 +201,20 @@ type Digest struct {
 	RunningSummary string         // JSON running context for next digest (channel memory)
 }
 
+// DigestTopic represents a single topic within a digest — a granular, self-contained
+// unit carrying its own decisions, action items, situations, and key messages.
+type DigestTopic struct {
+	ID          int
+	DigestID    int
+	Idx         int
+	Title       string
+	Summary     string
+	Decisions   string // JSON array of Decision objects
+	ActionItems string // JSON array of ActionItem objects
+	Situations  string // JSON array of Situation objects
+	KeyMessages string // JSON array of message timestamps
+}
+
 // Situation represents a notable interaction pattern observed in a channel digest.
 // Each situation involves multiple participants and captures dynamics between people.
 type Situation struct {
@@ -239,8 +234,7 @@ type SituationParticipant struct {
 	Role   string `json:"role"` // e.g. "blocker", "initiator", "affected", "resolver"
 }
 
-// DigestDecisionRow represents a single decision extracted from a digest,
-// used by the tracks pipeline to provide decision context.
+// DigestDecisionRow represents a single decision extracted from a digest.
 type DigestDecisionRow struct {
 	DigestID    int
 	ChannelName string
@@ -287,36 +281,6 @@ type UserProfile struct {
 	CustomPromptContext string
 	CreatedAt           string
 	UpdatedAt           string
-}
-
-// Chain represents a thematic thread grouping related decisions and tracks over time.
-type Chain struct {
-	ID         int
-	ParentID   int // 0 if top-level, otherwise parent chain ID
-	Title      string
-	Slug       string
-	Status     string // "active", "resolved", "stale"
-	Summary    string
-	ChannelIDs string  // JSON array of channel IDs
-	FirstSeen  float64 // Unix timestamp
-	LastSeen   float64 // Unix timestamp
-	ItemCount  int
-	ReadAt     string // empty if unread
-	CreatedAt  string
-	UpdatedAt  string
-}
-
-// ChainRef links a chain to a decision (in a digest), a track, or a digest itself.
-type ChainRef struct {
-	ID          int
-	ChainID     int
-	RefType     string // "decision", "track", "digest"
-	DigestID    int    // for decisions/digests: digest ID (0 if track)
-	DecisionIdx int    // for decisions: index in digest.decisions[] (0 otherwise)
-	TrackID     int    // for tracks: track ID (0 otherwise)
-	ChannelID   string
-	Timestamp   float64 // Unix timestamp
-	CreatedAt   string
 }
 
 // UserInteraction stores interaction metrics between two users for a time window.
@@ -462,6 +426,14 @@ type Prompt struct {
 	Version   int
 	Language  string // "" = auto-detect, "en", "ru", etc.
 	UpdatedAt string
+}
+
+// ChannelSettings stores per-channel user preferences (mute for AI, favorite).
+type ChannelSettings struct {
+	ChannelID     string
+	IsMutedForLLM bool
+	IsFavorite    bool
+	UpdatedAt     string
 }
 
 // PromptHistory records a snapshot of a prompt at a specific version.

@@ -21,6 +21,7 @@ type WorkspaceConfig struct {
 type AIConfig struct {
 	Model         string `mapstructure:"model"`
 	ContextBudget int    `mapstructure:"context_budget"`
+	Workers       int    `mapstructure:"workers"` // max parallel LLM calls across all pipelines
 }
 
 type SyncConfig struct {
@@ -71,6 +72,7 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("active_workspace", DefaultActiveWorkspace)
 	v.SetDefault("ai.model", DefaultAIModel)
 	v.SetDefault("ai.context_budget", DefaultAIContextBudget)
+	v.SetDefault("ai.workers", DefaultAIWorkers)
 	v.SetDefault("sync.workers", DefaultSyncWorkers)
 	v.SetDefault("sync.initial_history_days", DefaultInitialHistDays)
 	v.SetDefault("sync.poll_interval", DefaultPollInterval)
@@ -103,12 +105,20 @@ func Load(configPath string) (*Config, error) {
 
 	// Explicit bindings for key env vars
 	_ = v.BindEnv("ai.model", "WATCHTOWER_AI_MODEL")
+	_ = v.BindEnv("ai.workers", "WATCHTOWER_AI_WORKERS")
 	_ = v.BindEnv("sync.workers", "WATCHTOWER_SYNC_WORKERS")
 	_ = v.BindEnv("digest.model", "WATCHTOWER_DIGEST_MODEL")
 
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+
+	// Backward compat: migrate digest.workers → ai.workers.
+	// If user has digest.workers in config but hasn't set ai.workers explicitly,
+	// use digest.workers as the pool size.
+	if cfg.Digest.Workers > 0 && !v.InConfig("ai.workers") && os.Getenv("WATCHTOWER_AI_WORKERS") == "" {
+		cfg.AI.Workers = cfg.Digest.Workers
 	}
 
 	// Bind workspace-level slack token from env

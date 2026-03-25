@@ -6,10 +6,10 @@ struct DigestDetailView: View {
     let viewModel: DigestViewModel
     var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
-    @State private var showCreateTrack = false
     @State private var markingRead = false
     @State private var markedRead = false
     @State private var markReadError: String?
+    @State private var digestTopics: [DigestTopic] = []
 
     var body: some View {
         ScrollView {
@@ -43,9 +43,6 @@ struct DigestDetailView: View {
                 // Tracks
                 tracksSection
 
-                // Create Track button
-                createTrackButton
-
                 Divider()
 
                 // Stats footer
@@ -54,13 +51,11 @@ struct DigestDetailView: View {
             .padding()
         }
         .navigationTitle(channelName.map { "#\($0)" } ?? "Digest")
-        .sheet(isPresented: $showCreateTrack) {
+        .task {
             if let dbManager = appState.databaseManager {
-                CreateTrackFromDigestSheet(
-                    digest: digest,
-                    channelName: channelName,
-                    dbManager: dbManager
-                )
+                digestTopics = (try? dbManager.dbPool.read { db in
+                    try DigestQueries.fetchTopics(db, digestID: digest.id)
+                }) ?? []
             }
         }
     }
@@ -136,14 +131,6 @@ struct DigestDetailView: View {
 
     private var headerActionsRow: some View {
         HStack(spacing: 12) {
-            Button {
-                showCreateTrack = true
-            } label: {
-                Label("Create Track", systemImage: "plus.circle")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-
             if !digest.channelID.isEmpty {
                 Button {
                     markChannelRead()
@@ -215,18 +202,47 @@ struct DigestDetailView: View {
 
     @ViewBuilder
     private var topicsSection: some View {
-        let topics = digest.parsedTopics
-        if !topics.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Topics")
-                    .font(.headline)
-                FlowLayout(spacing: 6) {
-                    ForEach(topics, id: \.self) { topic in
-                        Text(topic)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.accentColor.opacity(0.1), in: Capsule())
+        if !digestTopics.isEmpty {
+            // New structured topics with nested decisions
+            ForEach(digestTopics) { topic in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(topic.title)
+                        .font(.headline)
+                    if !topic.summary.isEmpty {
+                        Text(topic.summary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    let decisions = topic.parsedDecisions
+                    if !decisions.isEmpty {
+                        ForEach(Array(decisions.enumerated()), id: \.element.id) { idx, decision in
+                            DecisionCard(
+                                decision: decision,
+                                slackURL: decision.messageTS.flatMap { ts in
+                                    viewModel.slackMessageURL(channelID: digest.channelID, messageTS: ts)
+                                },
+                                feedbackEntityID: "\(digest.id):\(topic.idx):\(idx)",
+                                dbManager: appState.databaseManager
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: old-style topic tags for legacy digests
+            let topicNames = digest.parsedTopics
+            if !topicNames.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Topics")
+                        .font(.headline)
+                    FlowLayout(spacing: 6) {
+                        ForEach(topicNames, id: \.self) { topic in
+                            Text(topic)
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.accentColor.opacity(0.1), in: Capsule())
+                        }
                     }
                 }
             }
@@ -289,20 +305,23 @@ struct DigestDetailView: View {
 
     @ViewBuilder
     private var decisionsSection: some View {
-        let decisions = digest.parsedDecisions
-        if !decisions.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Decisions")
-                    .font(.headline)
-                ForEach(Array(decisions.enumerated()), id: \.element.id) { idx, decision in
-                    DecisionCard(
-                        decision: decision,
-                        slackURL: decision.messageTS.flatMap { ts in
-                            viewModel.slackMessageURL(channelID: digest.channelID, messageTS: ts)
-                        },
-                        feedbackEntityID: "\(digest.id):\(idx)",
-                        dbManager: appState.databaseManager
-                    )
+        // Only show flat decisions section for legacy digests (no topics)
+        if digestTopics.isEmpty {
+            let decisions = digest.parsedDecisions
+            if !decisions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Decisions")
+                        .font(.headline)
+                    ForEach(Array(decisions.enumerated()), id: \.element.id) { idx, decision in
+                        DecisionCard(
+                            decision: decision,
+                            slackURL: decision.messageTS.flatMap { ts in
+                                viewModel.slackMessageURL(channelID: digest.channelID, messageTS: ts)
+                            },
+                            feedbackEntityID: "\(digest.id):\(idx)",
+                            dbManager: appState.databaseManager
+                        )
+                    }
                 }
             }
         }
@@ -333,19 +352,6 @@ struct DigestDetailView: View {
                 }
             }
         }
-    }
-
-    private var createTrackButton: some View {
-        Button {
-            showCreateTrack = true
-        } label: {
-            Label("Create Track", systemImage: "plus.circle.fill")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
     }
 
     private var statsFooter: some View {

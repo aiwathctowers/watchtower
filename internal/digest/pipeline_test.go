@@ -85,29 +85,35 @@ func TestParseDigestResult(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:  "clean JSON",
-			input: `{"summary":"test","topics":["a"],"decisions":[],"action_items":[],"key_messages":[]}`,
-			want:  DigestResult{Summary: "test", Topics: []string{"a"}, Decisions: []Decision{}, ActionItems: []ActionItem{}, KeyMessages: []string{}},
+			name:  "clean JSON with topics",
+			input: `{"summary":"test","topics":[{"title":"Topic A","summary":"about A","decisions":[],"action_items":[],"situations":[],"key_messages":[]}]}`,
+			want: DigestResult{
+				Summary: "test",
+				Topics:  []Topic{{Title: "Topic A", Summary: "about A", Decisions: []Decision{}, ActionItems: []ActionItem{}, KeyMessages: []string{}}},
+			},
 		},
 		{
 			name:  "wrapped in markdown fences",
-			input: "```json\n{\"summary\":\"test\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"key_messages\":[]}\n```",
-			want:  DigestResult{Summary: "test", Topics: []string{}, Decisions: []Decision{}, ActionItems: []ActionItem{}, KeyMessages: []string{}},
+			input: "```json\n{\"summary\":\"test\",\"topics\":[]}\n```",
+			want:  DigestResult{Summary: "test", Topics: []Topic{}},
 		},
 		{
 			name:  "with preamble text",
-			input: "Here is the analysis:\n{\"summary\":\"test\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"key_messages\":[]}",
-			want:  DigestResult{Summary: "test", Topics: []string{}, Decisions: []Decision{}, ActionItems: []ActionItem{}, KeyMessages: []string{}},
+			input: "Here is the analysis:\n{\"summary\":\"test\",\"topics\":[]}",
+			want:  DigestResult{Summary: "test", Topics: []Topic{}},
 		},
 		{
-			name:  "with decisions and action items",
-			input: `{"summary":"deploy discussed","topics":["deploy"],"decisions":[{"text":"deploy Friday","by":"@alice","message_ts":"1000.001"}],"action_items":[{"text":"write tests","assignee":"@bob","status":"open"}],"key_messages":["1000.001"]}`,
+			name:  "with decisions and action items in topic",
+			input: `{"summary":"deploy discussed","topics":[{"title":"Deployment","summary":"deploy plan","decisions":[{"text":"deploy Friday","by":"@alice","message_ts":"1000.001"}],"action_items":[{"text":"write tests","assignee":"@bob","status":"open"}],"situations":[],"key_messages":["1000.001"]}]}`,
 			want: DigestResult{
-				Summary:     "deploy discussed",
-				Topics:      []string{"deploy"},
-				Decisions:   []Decision{{Text: "deploy Friday", By: "@alice", MessageTS: "1000.001"}},
-				ActionItems: []ActionItem{{Text: "write tests", Assignee: "@bob", Status: "open"}},
-				KeyMessages: []string{"1000.001"},
+				Summary: "deploy discussed",
+				Topics: []Topic{{
+					Title:       "Deployment",
+					Summary:     "deploy plan",
+					Decisions:   []Decision{{Text: "deploy Friday", By: "@alice", MessageTS: "1000.001"}},
+					ActionItems: []ActionItem{{Text: "write tests", Assignee: "@bob", Status: "open"}},
+					KeyMessages: []string{"1000.001"},
+				}},
 			},
 		},
 		{
@@ -126,9 +132,11 @@ func TestParseDigestResult(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want.Summary, got.Summary)
-			assert.Equal(t, tt.want.Topics, got.Topics)
-			assert.Equal(t, tt.want.Decisions, got.Decisions)
-			assert.Equal(t, tt.want.ActionItems, got.ActionItems)
+			assert.Equal(t, len(tt.want.Topics), len(got.Topics))
+			for i := range tt.want.Topics {
+				assert.Equal(t, tt.want.Topics[i].Title, got.Topics[i].Title)
+				assert.Equal(t, tt.want.Topics[i].Summary, got.Topics[i].Summary)
+			}
 		})
 	}
 }
@@ -147,7 +155,7 @@ func TestRunChannelDigests(t *testing.T) {
 		seedMessage(t, database, "C1", ts, "U1", fmt.Sprintf("message %d about deployment", i))
 	}
 
-	mockResp := `{"summary":"Team discussed deployment","topics":["deployment"],"decisions":[],"action_items":[],"key_messages":[]}`
+	mockResp := `{"summary":"Team discussed deployment","topics":[{"title":"Deployment","summary":"deployment discussion","decisions":[],"action_items":[],"situations":[],"key_messages":[]}]}`
 	gen := &mockGenerator{response: mockResp}
 
 	p := New(database, cfg, gen, testLogger())
@@ -268,7 +276,7 @@ func TestRunDailyRollup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rollupResp := `{"summary":"Active day: frontend fixed bugs, backend deployed API v2","topics":["deployment","bugfix"],"decisions":[],"action_items":[],"key_messages":[]}`
+	rollupResp := `{"summary":"Active day: frontend fixed bugs, backend deployed API v2","topics":[{"title":"Deployment","summary":"API v2 deployed","decisions":[],"action_items":[],"situations":[],"key_messages":[]},{"title":"Bugfix","summary":"frontend bugs fixed","decisions":[],"action_items":[],"situations":[],"key_messages":[]}]}`
 	gen := &mockGenerator{response: rollupResp}
 
 	p := New(database, cfg, gen, testLogger())
@@ -320,7 +328,7 @@ func TestRunWeeklyTrends(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	weeklyResp := `{"summary":"Productive week with deployments and bug fixes","topics":["deployment","performance"],"decisions":[],"action_items":[],"key_messages":[]}`
+	weeklyResp := `{"summary":"Productive week with deployments and bug fixes","topics":[{"title":"Deployment","summary":"multiple deploys","decisions":[],"action_items":[],"situations":[],"key_messages":[]},{"title":"Performance","summary":"perf improvements","decisions":[],"action_items":[],"situations":[],"key_messages":[]}]}`
 	gen := &mockGenerator{response: weeklyResp}
 
 	p := New(database, cfg, gen, testLogger())
@@ -366,10 +374,11 @@ func TestStoreDigest(t *testing.T) {
 	p := New(database, cfg, gen, testLogger())
 
 	result := &DigestResult{
-		Summary:     "test summary",
-		Topics:      []string{"topic1", "topic2"},
-		Decisions:   []Decision{{Text: "decided X", By: "@alice"}},
-		ActionItems: []ActionItem{{Text: "do Y", Assignee: "@bob", Status: "open"}},
+		Summary: "test summary",
+		Topics: []Topic{
+			{Title: "topic1", Summary: "about topic 1", Decisions: []Decision{{Text: "decided X", By: "@alice"}}},
+			{Title: "topic2", Summary: "about topic 2", ActionItems: []ActionItem{{Text: "do Y", Assignee: "@bob", Status: "open"}}},
+		},
 	}
 
 	err := p.storeDigest("C1", "channel", 1000.0, 2000.0, result, 42, &Usage{InputTokens: 500, OutputTokens: 200, CostUSD: 0.005}, 0)
@@ -381,15 +390,22 @@ func TestStoreDigest(t *testing.T) {
 	assert.Equal(t, "test summary", d.Summary)
 	assert.Equal(t, 42, d.MessageCount)
 
-	// Verify JSON fields
-	var topics []string
-	require.NoError(t, json.Unmarshal([]byte(d.Topics), &topics))
-	assert.Equal(t, []string{"topic1", "topic2"}, topics)
+	// Verify legacy JSON fields (aggregated from topics)
+	var topicTitles []string
+	require.NoError(t, json.Unmarshal([]byte(d.Topics), &topicTitles))
+	assert.Equal(t, []string{"topic1", "topic2"}, topicTitles)
 
 	var decisions []Decision
 	require.NoError(t, json.Unmarshal([]byte(d.Decisions), &decisions))
 	assert.Len(t, decisions, 1)
 	assert.Equal(t, "decided X", decisions[0].Text)
+
+	// Verify digest_topics table
+	dbTopics, err := database.GetDigestTopics(d.ID)
+	require.NoError(t, err)
+	assert.Len(t, dbTopics, 2)
+	assert.Equal(t, "topic1", dbTopics[0].Title)
+	assert.Equal(t, "topic2", dbTopics[1].Title)
 }
 
 // capturingGenerator captures the prompt passed to Generate for inspection.
@@ -434,7 +450,7 @@ func TestProfileContextInjectedIntoDigestPrompt(t *testing.T) {
 	}))
 
 	gen := &capturingGenerator{
-		response: `{"summary":"test","topics":[],"decisions":[],"action_items":[],"key_messages":[]}`,
+		response: `{"summary":"test","topics":[]}`,
 	}
 
 	pipe := New(database, testConfig(), gen, log.Default())
@@ -466,7 +482,7 @@ func TestNoProfileContextWhenProfileEmpty(t *testing.T) {
 	}
 
 	gen := &capturingGenerator{
-		response: `{"summary":"test","topics":[],"decisions":[],"action_items":[],"key_messages":[]}`,
+		response: `{"summary":"test","topics":[]}`,
 	}
 
 	pipe := New(database, testConfig(), gen, log.Default())
@@ -498,7 +514,7 @@ func (m *threadSafeMockGenerator) Generate(_ context.Context, _, prompt, _ strin
 }
 
 func validDigestJSON() string {
-	return `{"summary":"Test summary","topics":["topic1"],"decisions":[{"text":"decided X","by":"@alice","message_ts":"123.456","importance":"high"}],"action_items":[{"text":"do Y","assignee":"@bob","status":"open"}],"key_messages":["123.456"]}`
+	return `{"summary":"Test summary","topics":[{"title":"topic1","summary":"about topic 1","decisions":[{"text":"decided X","by":"@alice","message_ts":"123.456","importance":"high"}],"action_items":[{"text":"do Y","assignee":"@bob","status":"open"}],"situations":[],"key_messages":["123.456"]}]}`
 }
 
 // seedMessagesForChannel creates n messages in the given channel with recent timestamps.
@@ -770,7 +786,7 @@ func TestRun_ContextCancelled(t *testing.T) {
 func TestRunChannelDigests_MultipleWorkers(t *testing.T) {
 	database := testDB(t)
 	cfg := testConfig()
-	cfg.Digest.Workers = 3
+	cfg.AI.Workers = 3
 
 	seedUser(t, database, "U1", "alice", "Alice")
 	for i := 0; i < 5; i++ {
@@ -819,17 +835,17 @@ func TestRunDailyRollup_WithChainContext(t *testing.T) {
 
 	gen := &capturingGenerator{response: validDigestJSON()}
 	p := New(database, cfg, gen, testLogger())
-	p.ChainContext = "=== CHAIN CONTEXT ===\nChain #1: API redesign (3 decisions linked)"
+	p.TrackContext = "=== ACTIVE TRACKS ===\nTrack #1: API redesign (high priority)"
 
 	err = p.RunDailyRollup(context.Background())
 	require.NoError(t, err)
 
-	// Chain context should be injected into the prompt.
-	assert.Contains(t, gen.capturedPrompt, "CHAIN CONTEXT")
+	// Track context should be injected into the prompt.
+	assert.Contains(t, gen.capturedPrompt, "ACTIVE TRACKS")
 	assert.Contains(t, gen.capturedPrompt, "API redesign")
 }
 
-func TestRun_WithChainLinker(t *testing.T) {
+func TestRun_WithTrackLinker(t *testing.T) {
 	database := testDB(t)
 	cfg := testConfig()
 
@@ -849,41 +865,41 @@ func TestRun_WithChainLinker(t *testing.T) {
 	p := New(database, cfg, gen, testLogger())
 	p.SinceOverride = float64(time.Now().Unix() - 7200)
 
-	linker := &mockChainLinker{
-		runResult:    3,
-		chainContext: "=== ACTIVE CHAINS ===\nChain #1: test chain",
+	linker := &mockTrackLinker{
+		created:      2,
+		updated:      1,
+		trackContext: "=== ACTIVE TRACKS ===\nTrack #1: test track",
 	}
-	p.ChainLinker = linker
+	p.TrackLinker = linker
 
 	_, _, err = p.Run(context.Background())
 	require.NoError(t, err)
 
-	// Chain linker should have been called.
-	assert.True(t, linker.runCalled, "ChainLinker.Run should be called")
-	assert.True(t, linker.formatCalled, "ChainLinker.FormatActiveChainsForPrompt should be called")
+	// Track linker should have been called.
+	assert.True(t, linker.runCalled, "TrackLinker.Run should be called")
+	assert.True(t, linker.formatCalled, "TrackLinker.FormatActiveTracksForPrompt should be called")
 
-	// ChainContext should be set from linker output.
-	assert.Contains(t, p.ChainContext, "ACTIVE CHAINS")
+	// TrackContext should be set from linker output.
+	assert.Contains(t, p.TrackContext, "ACTIVE TRACKS")
 }
 
-type mockChainLinker struct {
-	runResult    int
-	chainContext string
+type mockTrackLinker struct {
+	created      int
+	updated      int
+	trackContext string
 	runCalled    bool
 	formatCalled bool
 }
 
-func (m *mockChainLinker) Run(ctx context.Context) (int, error) {
+func (m *mockTrackLinker) Run(ctx context.Context) (int, int, error) {
 	m.runCalled = true
-	return m.runResult, nil
+	return m.created, m.updated, nil
 }
 
-func (m *mockChainLinker) FormatActiveChainsForPrompt(ctx context.Context) (string, error) {
+func (m *mockTrackLinker) FormatActiveTracksForPrompt() (string, error) {
 	m.formatCalled = true
-	return m.chainContext, nil
+	return m.trackContext, nil
 }
-
-func (m *mockChainLinker) SetOnProgress(_ ProgressFunc) {}
 
 func TestRunDailyRollup_WithDecisions(t *testing.T) {
 	database := testDB(t)
@@ -1373,7 +1389,7 @@ func TestStoreDigest_NilUsage(t *testing.T) {
 
 	result := &DigestResult{
 		Summary: "test",
-		Topics:  []string{"a"},
+		Topics:  []Topic{{Title: "a", Summary: "topic a"}},
 	}
 
 	err := p.storeDigest("C1", "channel", 1000.0, 2000.0, result, 10, nil, 0)
@@ -1392,7 +1408,7 @@ func TestStoreDigest_WithPromptVersion(t *testing.T) {
 
 	p := New(database, cfg, gen, testLogger())
 
-	result := &DigestResult{Summary: "versioned", Topics: []string{"t1"}}
+	result := &DigestResult{Summary: "versioned", Topics: []Topic{{Title: "t1", Summary: "topic"}}}
 	// Store with prompt version 3 — verifies that storeDigest accepts and passes it.
 	err := p.storeDigest("C1", "channel", 1000.0, 2000.0, result, 5, &Usage{InputTokens: 10, OutputTokens: 5}, 3)
 	require.NoError(t, err)
@@ -1407,18 +1423,19 @@ func TestStoreDigest_WithPromptVersion(t *testing.T) {
 }
 
 func TestParseDigestResult_GenericMarkdownFence(t *testing.T) {
-	input := "```\n{\"summary\":\"test\",\"topics\":[],\"decisions\":[],\"action_items\":[],\"key_messages\":[]}\n```"
+	input := "```\n{\"summary\":\"test\",\"topics\":[]}\n```"
 	result, err := parseDigestResult(input)
 	require.NoError(t, err)
 	assert.Equal(t, "test", result.Summary)
 }
 
 func TestParseDigestResult_WithImportanceField(t *testing.T) {
-	input := `{"summary":"test","topics":[],"decisions":[{"text":"use K8s","by":"@ops","message_ts":"1.1","importance":"high"}],"action_items":[],"key_messages":[]}`
+	input := `{"summary":"test","topics":[{"title":"Infra","summary":"infra topic","decisions":[{"text":"use K8s","by":"@ops","message_ts":"1.1","importance":"high"}],"action_items":[],"situations":[],"key_messages":[]}]}`
 	result, err := parseDigestResult(input)
 	require.NoError(t, err)
-	require.Len(t, result.Decisions, 1)
-	assert.Equal(t, "high", result.Decisions[0].Importance)
+	require.Len(t, result.Topics, 1)
+	require.Len(t, result.Topics[0].Decisions, 1)
+	assert.Equal(t, "high", result.Topics[0].Decisions[0].Importance)
 }
 
 // --- Tests for pooled.go ---
@@ -1762,7 +1779,7 @@ func TestRunPeriodSummary_ParseError(t *testing.T) {
 func TestRunChannelDigests_WorkersDefault(t *testing.T) {
 	database := testDB(t)
 	cfg := testConfig()
-	cfg.Digest.Workers = 0 // should default to 1
+	cfg.AI.Workers = 0 // should default to DefaultAIWorkers
 
 	seedChannel(t, database, "C1", "general")
 	seedUser(t, database, "U1", "alice", "Alice")
@@ -1806,7 +1823,7 @@ func TestFallbackPromptFormatVerbs(t *testing.T) {
 // validDigestJSONWithRunningSummary returns a valid JSON response that includes
 // a running_summary field for testing channel memory round-trip.
 func validDigestJSONWithRunningSummary() string {
-	return `{"summary":"Test summary","topics":["topic1"],"decisions":[],"action_items":[],"key_messages":[],"situations":[],"running_summary":{"active_topics":[{"topic":"Migration","status":"in_progress","started":"2026-03-18","last_update":"2026-03-21","key_participants":["U1"],"summary":"Working on migration"}],"recent_decisions":[],"channel_dynamics":"Active channel","open_questions":["When to deploy?"]}}`
+	return `{"summary":"Test summary","topics":[{"title":"topic1","summary":"about topic 1","decisions":[],"action_items":[],"situations":[],"key_messages":[]}],"running_summary":{"active_topics":[{"topic":"Migration","status":"in_progress","started":"2026-03-18","last_update":"2026-03-21","key_participants":["U1"],"summary":"Working on migration"}],"recent_decisions":[],"channel_dynamics":"Active channel","open_questions":["When to deploy?"]}}`
 }
 
 func TestChannelMemory_RunningSummaryStoredAndLoaded(t *testing.T) {

@@ -152,4 +152,25 @@ enum DigestQueries {
         let readCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM decision_reads") ?? 0
         return max(0, totalDecisionCount - readCount)
     }
+
+    // MARK: - Digest Topics
+
+    static func fetchTopics(_ db: Database, digestID: Int) throws -> [DigestTopic] {
+        guard try db.tableExists("digest_topics") else { return [] }
+        return try DigestTopic.fetchAll(
+            db,
+            sql: "SELECT * FROM digest_topics WHERE digest_id = ? ORDER BY idx",
+            arguments: [digestID]
+        )
+    }
+
+    static func fetchTopicsByDigestIDs(_ db: Database, digestIDs: [Int]) throws -> [DigestTopic] {
+        guard !digestIDs.isEmpty, try db.tableExists("digest_topics") else { return [] }
+        let placeholders = digestIDs.map { _ in "?" }.joined(separator: ",")
+        return try DigestTopic.fetchAll(
+            db,
+            sql: "SELECT * FROM digest_topics WHERE digest_id IN (\(placeholders)) ORDER BY digest_id, idx",
+            arguments: StatementArguments(digestIDs)
+        )
+    }
 }

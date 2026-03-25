@@ -182,14 +182,32 @@ CREATE TABLE IF NOT EXISTS digest_participants (
     user_id        TEXT NOT NULL,
     situation_idx  INTEGER NOT NULL DEFAULT 0,
     role           TEXT NOT NULL DEFAULT '',
+    topic_id       INTEGER NOT NULL DEFAULT 0,  -- 0 = legacy (pre-v39), >0 = digest_topics.id
     PRIMARY KEY (digest_id, user_id, situation_idx)
 );
 CREATE INDEX IF NOT EXISTS idx_digest_participants_user ON digest_participants(user_id);
 
+-- Digest topics: each digest is decomposed into granular, self-contained topics.
+-- Each topic carries its own decisions, action_items, situations, key_messages.
+CREATE TABLE IF NOT EXISTS digest_topics (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    digest_id     INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+    idx           INTEGER NOT NULL DEFAULT 0,
+    title         TEXT NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',
+    decisions     TEXT NOT NULL DEFAULT '[]',
+    action_items  TEXT NOT NULL DEFAULT '[]',
+    situations    TEXT NOT NULL DEFAULT '[]',
+    key_messages  TEXT NOT NULL DEFAULT '[]',
+    UNIQUE(digest_id, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_digest_topics_digest ON digest_topics(digest_id);
+
 -- Per-decision read tracking (local-only, Desktop app)
 CREATE TABLE IF NOT EXISTS decision_reads (
     digest_id    INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
-    decision_idx INTEGER NOT NULL,  -- index in the decisions JSON array
+    decision_idx INTEGER NOT NULL,  -- index in the decisions JSON array within a topic
+    topic_id     INTEGER NOT NULL DEFAULT 0,  -- 0 = legacy (pre-v39), >0 = digest_topics.id
     read_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (digest_id, decision_idx)
 );
@@ -254,57 +272,37 @@ CREATE TABLE IF NOT EXISTS custom_emojis (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
--- Tracks extracted by AI for the current user (cross-channel)
+-- Auto-generated informational tracks (v3 — replaces chains + old tracks)
 CREATE TABLE IF NOT EXISTS tracks (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id          TEXT NOT NULL,
-    assignee_user_id    TEXT NOT NULL,           -- users.id of the assigned user
-    assignee_raw        TEXT NOT NULL DEFAULT '', -- how AI wrote it ("@ivan", "Иван")
-    text                TEXT NOT NULL,
-    context             TEXT NOT NULL DEFAULT '', -- brief context from the conversation
-    source_message_ts   TEXT NOT NULL DEFAULT '', -- Slack timestamp of source message
-    source_channel_name TEXT NOT NULL DEFAULT '', -- channel name for display
-    status              TEXT NOT NULL DEFAULT 'inbox' CHECK(status IN ('inbox','active','done','dismissed','snoozed')),
-    priority            TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
-    due_date            REAL,                    -- Unix timestamp if AI extracted a deadline
-    period_from         REAL NOT NULL,           -- analysis window start
-    period_to           REAL NOT NULL,           -- analysis window end
-    model               TEXT NOT NULL DEFAULT '',
-    input_tokens        INTEGER NOT NULL DEFAULT 0,
-    output_tokens       INTEGER NOT NULL DEFAULT 0,
-    cost_usd            REAL NOT NULL DEFAULT 0,
-    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    completed_at        TEXT,
-    has_updates         INTEGER NOT NULL DEFAULT 0,  -- 1 if source thread has new activity
-    last_checked_ts     TEXT NOT NULL DEFAULT '',     -- Slack ts of last checked reply
-    snooze_until        REAL,                        -- Unix timestamp when snooze expires
-    pre_snooze_status   TEXT NOT NULL DEFAULT '',     -- status to restore after snooze
-    participants        TEXT NOT NULL DEFAULT '[]',    -- JSON: participants with stances
-    source_refs         TEXT NOT NULL DEFAULT '[]',   -- JSON: key source message references
-    requester_name      TEXT NOT NULL DEFAULT '',     -- who made the request (@username)
-    requester_user_id   TEXT NOT NULL DEFAULT '',     -- Slack user_id of the requester
-    category            TEXT NOT NULL DEFAULT '',     -- code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
-    blocking            TEXT NOT NULL DEFAULT '',     -- who/what is blocked if not done
-    tags                TEXT NOT NULL DEFAULT '[]',   -- JSON array of project/topic tags
-    decision_summary    TEXT NOT NULL DEFAULT '',     -- how the group arrived at the decision
-    decision_options    TEXT NOT NULL DEFAULT '[]',   -- JSON array of options if decision pending
-    related_digest_ids  TEXT NOT NULL DEFAULT '[]',   -- JSON array of related digest IDs
-    sub_items           TEXT NOT NULL DEFAULT '[]',   -- JSON array of sub-tasks with statuses
-    prompt_version      INTEGER NOT NULL DEFAULT 0,  -- version of prompt used for generation
-    ownership           TEXT NOT NULL DEFAULT 'mine' CHECK(ownership IN ('mine', 'delegated', 'watching')),
-    ball_on             TEXT NOT NULL DEFAULT '',     -- user_id of the person who needs to act next
-    owner_user_id       TEXT NOT NULL DEFAULT '',     -- owner of the track (for delegated = report's user_id)
-    fingerprint         TEXT NOT NULL DEFAULT '[]'   -- JSON array of extracted entities for dedup
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT NOT NULL,
+    narrative       TEXT NOT NULL DEFAULT '',
+    current_status  TEXT NOT NULL DEFAULT '',
+    participants    TEXT NOT NULL DEFAULT '[]',    -- JSON: [{user_id, name, role}]
+    timeline        TEXT NOT NULL DEFAULT '[]',    -- JSON: [{date, event, channel_id}]
+    key_messages    TEXT NOT NULL DEFAULT '[]',    -- JSON: [{ts, author, text, channel_id}]
+    priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
+    tags            TEXT NOT NULL DEFAULT '[]',    -- JSON: ["tag1","tag2"]
+    channel_ids     TEXT NOT NULL DEFAULT '[]',    -- JSON: ["C1","C2"]
+    source_refs     TEXT NOT NULL DEFAULT '[]',    -- JSON: [{digest_id, topic_id, channel_id, timestamp}]
+    read_at         TEXT,                          -- NULL = unread, ISO8601 = when read
+    has_updates     INTEGER NOT NULL DEFAULT 0,
+    model           TEXT NOT NULL DEFAULT '',
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    cost_usd        REAL NOT NULL DEFAULT 0,
+    prompt_version  INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_dedup ON tracks(channel_id, assignee_user_id, source_message_ts, text);
-CREATE INDEX IF NOT EXISTS idx_tracks_assignee ON tracks(assignee_user_id);
-CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(status);
-CREATE INDEX IF NOT EXISTS idx_tracks_period ON tracks(period_from, period_to);
+CREATE INDEX IF NOT EXISTS idx_tracks_priority ON tracks(priority);
+CREATE INDEX IF NOT EXISTS idx_tracks_has_updates ON tracks(has_updates);
+CREATE INDEX IF NOT EXISTS idx_tracks_updated ON tracks(updated_at DESC);
 
 -- Feedback on AI-generated content (thumbs up/down)
 CREATE TABLE IF NOT EXISTS feedback (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis', 'briefing', 'chain')),
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis', 'briefing')),
     entity_id   TEXT NOT NULL,       -- digest.id, tracks.id, or "digest_id:decision_idx"
     rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),  -- -1 = bad, +1 = good
     comment     TEXT NOT NULL DEFAULT '',
@@ -334,23 +332,12 @@ CREATE TABLE IF NOT EXISTS prompt_history (
 CREATE INDEX IF NOT EXISTS idx_prompt_history_prompt ON prompt_history(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_history(prompt_id, version);
 
--- Track change history
-CREATE TABLE IF NOT EXISTS track_history (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    track_id        INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-    event           TEXT NOT NULL,       -- 'created', 'priority_changed', 'context_updated', 'status_changed', 'due_date_changed', 'reopened'
-    field           TEXT NOT NULL DEFAULT '',
-    old_value       TEXT NOT NULL DEFAULT '',
-    new_value       TEXT NOT NULL DEFAULT '',
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_track_history_track ON track_history(track_id);
-
 -- Decision importance corrections (training signal for prompt tuning)
 CREATE TABLE IF NOT EXISTS decision_importance_corrections (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     digest_id            INTEGER NOT NULL,
     decision_idx         INTEGER NOT NULL,
+    topic_id             INTEGER NOT NULL DEFAULT 0,  -- 0 = legacy (pre-v39), >0 = digest_topics.id
     decision_text        TEXT NOT NULL DEFAULT '',
     original_importance  TEXT NOT NULL CHECK(original_importance IN ('high', 'medium', 'low')),
     new_importance       TEXT NOT NULL CHECK(new_importance IN ('high', 'medium', 'low')),
@@ -378,43 +365,6 @@ CREATE TABLE IF NOT EXISTS user_profile (
     created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-
--- Chains: thematic threads grouping related decisions and tracks over time
-CREATE TABLE IF NOT EXISTS chains (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_id   INTEGER REFERENCES chains(id) ON DELETE SET NULL,
-    title       TEXT NOT NULL,
-    slug        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'resolved', 'stale')),
-    summary     TEXT NOT NULL DEFAULT '',
-    channel_ids TEXT NOT NULL DEFAULT '[]',
-    first_seen  REAL NOT NULL,
-    last_seen   REAL NOT NULL,
-    item_count  INTEGER NOT NULL DEFAULT 0,
-    read_at     TEXT,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_chains_status ON chains(status);
-CREATE INDEX IF NOT EXISTS idx_chains_last_seen ON chains(last_seen DESC);
-CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id);
-
--- Chain refs: links chains to decisions (in digests), tracks, and digests themselves
-CREATE TABLE IF NOT EXISTS chain_refs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
-    ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
-    digest_id     INTEGER NOT NULL DEFAULT 0,
-    decision_idx  INTEGER NOT NULL DEFAULT 0,
-    track_id      INTEGER NOT NULL DEFAULT 0,
-    channel_id    TEXT NOT NULL DEFAULT '',
-    timestamp     REAL NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
-);
-CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id);
-CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id);
-CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id);
 
 -- User interaction edges (social graph) — computed per analysis window
 CREATE TABLE IF NOT EXISTS user_interactions (
@@ -572,10 +522,18 @@ CREATE TABLE IF NOT EXISTS briefings (
 );
 CREATE INDEX IF NOT EXISTS idx_briefings_user_date ON briefings(user_id, date DESC);
 
+-- Per-channel user settings (mute for AI, favorite)
+CREATE TABLE IF NOT EXISTS channel_settings (
+    channel_id       TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+    is_muted_for_llm INTEGER NOT NULL DEFAULT 0,
+    is_favorite      INTEGER NOT NULL DEFAULT 0,
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
 -- Pipeline run history — logs every pipeline invocation (CLI, daemon, desktop)
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    pipeline         TEXT NOT NULL,                          -- 'digests', 'tracks', 'people', 'chains'
+    pipeline         TEXT NOT NULL,                          -- 'digests', 'tracks', 'people'
     source           TEXT NOT NULL DEFAULT 'cli',            -- 'cli', 'daemon'
     status           TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'done', 'error')),
     error_msg        TEXT NOT NULL DEFAULT '',

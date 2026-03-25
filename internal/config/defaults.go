@@ -6,6 +6,7 @@ const (
 	DefaultActiveWorkspace = ""
 	DefaultAIModel         = "claude-sonnet-4-6"
 	DefaultAIContextBudget = 150000
+	DefaultAIWorkers       = 5
 	DefaultSyncWorkers     = 1
 	DefaultInitialHistDays = 2
 	DefaultPollInterval    = 15 * time.Minute
@@ -15,7 +16,7 @@ const (
 	DefaultDigestModel     = "claude-haiku-4-5-20251001"
 	DefaultDigestMinMsgs   = 5
 	DefaultDigestLang      = "Russian"
-	DefaultDigestWorkers   = 5
+	DefaultDigestWorkers   = 5 // Deprecated: use DefaultAIWorkers. Kept for backward compat.
 	DefaultTracksInterval  = 1 * time.Hour
 	DefaultBriefingEnabled = true
 	DefaultBriefingHour    = 8

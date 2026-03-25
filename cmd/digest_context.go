@@ -24,7 +24,7 @@ func buildDigestContext(database *db.DB) string {
 		var sb strings.Builder
 		d := dailyDigests[0]
 		fmt.Fprintf(&sb, "Daily summary: %s\n", d.Summary)
-		appendTopics(&sb, d.Topics)
+		appendTopicsFromDB(&sb, database, d.ID, d.Topics)
 		return sb.String()
 	}
 
@@ -49,9 +49,30 @@ func buildDigestContext(database *db.DB) string {
 	return sb.String()
 }
 
+// appendTopics renders old-style flat topic names from a JSON string array.
+// Retained for backward compatibility with tests and legacy digests.
 func appendTopics(sb *strings.Builder, topicsJSON string) {
-	var topics []string
-	if err := json.Unmarshal([]byte(topicsJSON), &topics); err == nil && len(topics) > 0 {
-		fmt.Fprintf(sb, "Topics: %s\n", strings.Join(topics, ", "))
+	var topicNames []string
+	if err := json.Unmarshal([]byte(topicsJSON), &topicNames); err == nil && len(topicNames) > 0 {
+		fmt.Fprintf(sb, "Topics: %s\n", strings.Join(topicNames, ", "))
+	}
+}
+
+func appendTopicsFromDB(sb *strings.Builder, database *db.DB, digestID int, topicsJSON string) {
+	// Try topic-structured data first
+	topics, _ := database.GetDigestTopics(digestID)
+	if len(topics) > 0 {
+		names := make([]string, len(topics))
+		for i, t := range topics {
+			names[i] = t.Title
+		}
+		fmt.Fprintf(sb, "Topics: %s\n", strings.Join(names, ", "))
+		return
+	}
+
+	// Fallback to old flat topics
+	var topicNames []string
+	if err := json.Unmarshal([]byte(topicsJSON), &topicNames); err == nil && len(topicNames) > 0 {
+		fmt.Fprintf(sb, "Topics: %s\n", strings.Join(topicNames, ", "))
 	}
 }

@@ -62,6 +62,7 @@ struct BriefingDetailView: View {
         }
     }
 
+    @ViewBuilder
     private func attentionCard(_ item: AttentionItem) -> some View {
         Button {
             navigateToSource(type: item.sourceType, id: item.sourceID)
@@ -104,6 +105,7 @@ struct BriefingDetailView: View {
             )
         }
         .buttonStyle(.plain)
+
     }
 
     // MARK: - Your Day
@@ -111,12 +113,22 @@ struct BriefingDetailView: View {
     @ViewBuilder
     private var yourDaySection: some View {
         let items = briefing.parsedYourDay
-        if !items.isEmpty {
-            sectionView(
-                title: "Your Day",
-                icon: "calendar",
-                iconColor: .green
-            ) {
+        sectionView(
+            title: "Your Day",
+            icon: "calendar",
+            iconColor: .green
+        ) {
+            if items.isEmpty {
+                Text("No tracks yet. Tracks are auto-generated from digests.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.green.opacity(0.04),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+            } else {
                 ForEach(items) { item in
                     yourDayCard(item)
                 }
@@ -362,13 +374,11 @@ struct BriefingDetailView: View {
         switch type {
         case "track":
             appState.selectedDestination = .tracks
-        case "chain":
-            appState.selectedDestination = .chains
         case "digest":
             if let id, let intID = Int(id) {
                 appState.navigateToDigest(intID)
             } else {
-                appState.selectedDestination = .chains
+                appState.selectedDestination = .digests
             }
         case "people":
             appState.selectedDestination = .people
@@ -414,7 +424,6 @@ struct BriefingDetailView: View {
         let (icon, label): (String, String) = {
             switch type {
             case "track": return ("checklist", "Track")
-            case "chain": return ("link.circle", "Chain")
             case "digest": return ("newspaper", "Digest")
             case "people": return ("person.2", "Person")
             default: return ("questionmark.circle", type)
@@ -428,7 +437,6 @@ struct BriefingDetailView: View {
     private func statusBadge(_ status: String) -> some View {
         let color: Color = {
             switch status {
-            case "inbox": return .blue
             case "active": return .green
             case "done": return .gray
             default: return .secondary

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 35"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 43"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -782,8 +782,10 @@ func (db *DB) migrate() error {
 
 		// Fix JSON column defaults for existing rows ('' → '[]').
 		for _, col := range []string{"participants", "source_refs", "tags", "decision_options", "related_digest_ids", "sub_items"} {
-			if _, err := tx.Exec(fmt.Sprintf(`UPDATE tracks SET %s = '[]' WHERE %s = ''`, col, col)); err != nil {
-				return fmt.Errorf("migration v19 fix JSON default %s: %w", col, err)
+			if hasColumn(tx, "tracks", col) {
+				if _, err := tx.Exec(fmt.Sprintf(`UPDATE tracks SET %s = '[]' WHERE %s = ''`, col, col)); err != nil {
+					return fmt.Errorf("migration v19 fix JSON default %s: %w", col, err)
+				}
 			}
 		}
 
@@ -1008,47 +1010,49 @@ func (db *DB) migrate() error {
 		}
 		defer tx.Rollback()
 
-		// Add parent_id to chains if not present.
-		if !hasColumn(tx, "chains", "parent_id") {
-			if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN parent_id INTEGER REFERENCES chains(id) ON DELETE SET NULL`); err != nil {
-				return fmt.Errorf("migration v24 add parent_id: %w", err)
+		// Add parent_id + read_at to chains, widen chain_refs CHECK.
+		// Guard: v43 drops chains/chain_refs, so skip if tables don't exist.
+		if hasColumn(tx, "chains", "id") {
+			if !hasColumn(tx, "chains", "parent_id") {
+				if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN parent_id INTEGER REFERENCES chains(id) ON DELETE SET NULL`); err != nil {
+					return fmt.Errorf("migration v24 add parent_id: %w", err)
+				}
 			}
-		}
-		// Add read_at to chains if not present.
-		if !hasColumn(tx, "chains", "read_at") {
-			if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN read_at TEXT`); err != nil {
-				return fmt.Errorf("migration v24 add read_at: %w", err)
+			if !hasColumn(tx, "chains", "read_at") {
+				if _, err := tx.Exec(`ALTER TABLE chains ADD COLUMN read_at TEXT`); err != nil {
+					return fmt.Errorf("migration v24 add read_at: %w", err)
+				}
 			}
-		}
-		// Index on parent_id.
-		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id)`); err != nil {
-			return fmt.Errorf("migration v24 create idx_chains_parent: %w", err)
-		}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chains_parent ON chains(parent_id)`); err != nil {
+				return fmt.Errorf("migration v24 create idx_chains_parent: %w", err)
+			}
 
-		// Widen chain_refs.ref_type CHECK to include 'digest'.
-		// SQLite doesn't support ALTER CHECK, so we recreate the table.
-		for _, stmt := range []string{
-			`CREATE TABLE IF NOT EXISTS chain_refs_new (
-				id            INTEGER PRIMARY KEY AUTOINCREMENT,
-				chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
-				ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
-				digest_id     INTEGER NOT NULL DEFAULT 0,
-				decision_idx  INTEGER NOT NULL DEFAULT 0,
-				track_id      INTEGER NOT NULL DEFAULT 0,
-				channel_id    TEXT NOT NULL DEFAULT '',
-				timestamp     REAL NOT NULL,
-				created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-				UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
-			)`,
-			`INSERT INTO chain_refs_new SELECT * FROM chain_refs`,
-			`DROP TABLE chain_refs`,
-			`ALTER TABLE chain_refs_new RENAME TO chain_refs`,
-			`CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id)`,
-			`CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id)`,
-			`CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id)`,
-		} {
-			if _, err := tx.Exec(stmt); err != nil {
-				return fmt.Errorf("migration v24 recreate chain_refs: %w", err)
+			// Widen chain_refs.ref_type CHECK to include 'digest'.
+			if hasColumn(tx, "chain_refs", "id") {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS chain_refs_new (
+						id            INTEGER PRIMARY KEY AUTOINCREMENT,
+						chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+						ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest')),
+						digest_id     INTEGER NOT NULL DEFAULT 0,
+						decision_idx  INTEGER NOT NULL DEFAULT 0,
+						track_id      INTEGER NOT NULL DEFAULT 0,
+						channel_id    TEXT NOT NULL DEFAULT '',
+						timestamp     REAL NOT NULL,
+						created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+						UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id)
+					)`,
+					`INSERT INTO chain_refs_new SELECT id, chain_id, ref_type, digest_id, decision_idx, track_id, channel_id, timestamp, created_at FROM chain_refs`,
+					`DROP TABLE chain_refs`,
+					`ALTER TABLE chain_refs_new RENAME TO chain_refs`,
+					`CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id)`,
+				} {
+					if _, err := tx.Exec(stmt); err != nil {
+						return fmt.Errorf("migration v24 recreate chain_refs: %w", err)
+					}
+				}
 			}
 		}
 
@@ -1329,49 +1333,48 @@ func (db *DB) migrate() error {
 		}
 		defer tx.Rollback()
 
-		// Deduplicate chains: for each slug, keep the chain with the highest item_count
-		// and reassign all chain_refs from duplicates to the keeper.
-		if _, err := tx.Exec(`
-			UPDATE chain_refs
-			SET chain_id = (
-				SELECT c2.id FROM chains c2
-				WHERE c2.slug = (SELECT slug FROM chains WHERE id = chain_refs.chain_id)
-				ORDER BY c2.item_count DESC, c2.id ASC
-				LIMIT 1
-			)
-			WHERE chain_id NOT IN (
-				SELECT id FROM (
-					SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
-					FROM chains
-				) WHERE rn = 1
-			)
-		`); err != nil {
-			return fmt.Errorf("migration v30 reassign chain_refs: %w", err)
-		}
+		// Deduplicate chains (guard: v43 drops chains, so skip if missing).
+		if hasColumn(tx, "chains", "id") {
+			if _, err := tx.Exec(`
+				UPDATE chain_refs
+				SET chain_id = (
+					SELECT c2.id FROM chains c2
+					WHERE c2.slug = (SELECT slug FROM chains WHERE id = chain_refs.chain_id)
+					ORDER BY c2.item_count DESC, c2.id ASC
+					LIMIT 1
+				)
+				WHERE chain_id NOT IN (
+					SELECT id FROM (
+						SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
+						FROM chains
+					) WHERE rn = 1
+				)
+			`); err != nil {
+				return fmt.Errorf("migration v30 reassign chain_refs: %w", err)
+			}
 
-		if _, err := tx.Exec(`
-			DELETE FROM chains WHERE id NOT IN (
-				SELECT id FROM (
-					SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
-					FROM chains
-				) WHERE rn = 1
-			)
-		`); err != nil {
-			return fmt.Errorf("migration v30 delete duplicate chains: %w", err)
-		}
+			if _, err := tx.Exec(`
+				DELETE FROM chains WHERE id NOT IN (
+					SELECT id FROM (
+						SELECT id, ROW_NUMBER() OVER (PARTITION BY slug ORDER BY item_count DESC, id ASC) as rn
+						FROM chains
+					) WHERE rn = 1
+				)
+			`); err != nil {
+				return fmt.Errorf("migration v30 delete duplicate chains: %w", err)
+			}
 
-		// Update item_count for remaining chains.
-		if _, err := tx.Exec(`
-			UPDATE chains SET item_count = (
-				SELECT COUNT(*) FROM chain_refs WHERE chain_refs.chain_id = chains.id
-			)
-		`); err != nil {
-			return fmt.Errorf("migration v30 update item_count: %w", err)
-		}
+			if _, err := tx.Exec(`
+				UPDATE chains SET item_count = (
+					SELECT COUNT(*) FROM chain_refs WHERE chain_refs.chain_id = chains.id
+				)
+			`); err != nil {
+				return fmt.Errorf("migration v30 update item_count: %w", err)
+			}
 
-		// Add unique index on slug to prevent future duplicates.
-		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_slug ON chains(slug)`); err != nil {
-			return fmt.Errorf("migration v30 create unique index: %w", err)
+			if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chains_slug ON chains(slug)`); err != nil {
+				return fmt.Errorf("migration v30 create unique index: %w", err)
+			}
 		}
 
 		if _, err := tx.Exec("PRAGMA user_version = 30"); err != nil {
@@ -1616,6 +1619,351 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v35: %w", err)
 		}
 		version = 35
+	}
+
+	if version < 36 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v36: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Tracks are no longer auto-created as "inbox"; promote all inbox tracks to "active".
+		// Guard: v43 drops tracks table and recreates without status column.
+		if hasColumn(tx, "tracks", "status") {
+			if _, err := tx.Exec(`UPDATE tracks SET status = 'active' WHERE status = 'inbox'`); err != nil {
+				return fmt.Errorf("migration v36 inbox→active: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 36"); err != nil {
+			return fmt.Errorf("setting schema version v36: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v36: %w", err)
+		}
+		version = 36
+	}
+
+	if version < 37 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v37: %w", err)
+		}
+		defer tx.Rollback()
+
+		if !hasColumn(tx, "tracks", "user_intent") {
+			if _, err := tx.Exec(`ALTER TABLE tracks ADD COLUMN user_intent TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migration v37 add user_intent: %w", err)
+			}
+		}
+		if !hasColumn(tx, "tracks", "source_chain_id") {
+			if _, err := tx.Exec(`ALTER TABLE tracks ADD COLUMN source_chain_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return fmt.Errorf("migration v37 add source_chain_id: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 37"); err != nil {
+			return fmt.Errorf("setting schema version v37: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v37: %w", err)
+		}
+		version = 37
+	}
+
+	if version < 38 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v38: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Guard: v43 drops chains table, so skip if it doesn't exist.
+		if hasColumn(tx, "chains", "id") {
+			for _, col := range []struct{ table, column, ddl string }{
+				{"chains", "participants", `ALTER TABLE chains ADD COLUMN participants TEXT NOT NULL DEFAULT '[]'`},
+				{"chains", "timeline", `ALTER TABLE chains ADD COLUMN timeline TEXT NOT NULL DEFAULT '[]'`},
+				{"chains", "current_status", `ALTER TABLE chains ADD COLUMN current_status TEXT NOT NULL DEFAULT ''`},
+				{"chains", "key_messages", `ALTER TABLE chains ADD COLUMN key_messages TEXT NOT NULL DEFAULT '[]'`},
+				{"chains", "related_track_ids", `ALTER TABLE chains ADD COLUMN related_track_ids TEXT NOT NULL DEFAULT '[]'`},
+			} {
+				if !hasColumn(tx, col.table, col.column) {
+					if _, err := tx.Exec(col.ddl); err != nil {
+						return fmt.Errorf("migration v38 add %s.%s: %w", col.table, col.column, err)
+					}
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 38"); err != nil {
+			return fmt.Errorf("setting schema version v38: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v38: %w", err)
+		}
+		version = 38
+	}
+
+	if version < 39 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v39: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Create digest_topics table.
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS digest_topics (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			digest_id     INTEGER NOT NULL REFERENCES digests(id) ON DELETE CASCADE,
+			idx           INTEGER NOT NULL DEFAULT 0,
+			title         TEXT NOT NULL,
+			summary       TEXT NOT NULL DEFAULT '',
+			decisions     TEXT NOT NULL DEFAULT '[]',
+			action_items  TEXT NOT NULL DEFAULT '[]',
+			situations    TEXT NOT NULL DEFAULT '[]',
+			key_messages  TEXT NOT NULL DEFAULT '[]',
+			UNIQUE(digest_id, idx)
+		)`); err != nil {
+			return fmt.Errorf("migration v39 create digest_topics: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_digest_topics_digest ON digest_topics(digest_id)`); err != nil {
+			return fmt.Errorf("migration v39 create digest_topics index: %w", err)
+		}
+
+		// Add topic_id columns to existing tables.
+		// Guard: some tables (chain_refs) may not exist if v43 dropped them.
+		for _, col := range []struct{ table, column, ddl string }{
+			{"chain_refs", "topic_id", `ALTER TABLE chain_refs ADD COLUMN topic_id INTEGER NOT NULL DEFAULT 0`},
+			{"decision_reads", "topic_id", `ALTER TABLE decision_reads ADD COLUMN topic_id INTEGER NOT NULL DEFAULT 0`},
+			{"decision_importance_corrections", "topic_id", `ALTER TABLE decision_importance_corrections ADD COLUMN topic_id INTEGER NOT NULL DEFAULT 0`},
+			{"digest_participants", "topic_id", `ALTER TABLE digest_participants ADD COLUMN topic_id INTEGER NOT NULL DEFAULT 0`},
+		} {
+			if hasColumn(tx, col.table, "id") && !hasColumn(tx, col.table, col.column) {
+				if _, err := tx.Exec(col.ddl); err != nil {
+					return fmt.Errorf("migration v39 add %s.%s: %w", col.table, col.column, err)
+				}
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 39"); err != nil {
+			return fmt.Errorf("setting schema version v39: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v39: %w", err)
+		}
+		version = 39
+	}
+
+	if version < 40 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v40: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS channel_settings (
+			channel_id       TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
+			is_muted_for_llm INTEGER NOT NULL DEFAULT 0,
+			is_favorite      INTEGER NOT NULL DEFAULT 0,
+			updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v40 create channel_settings: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 40"); err != nil {
+			return fmt.Errorf("setting schema version v40: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v40: %w", err)
+		}
+		version = 40
+	}
+
+	if version < 41 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v41: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Fix UNIQUE constraint on chain_refs to include topic_id.
+		// Guard: v43 drops chains/chain_refs, so skip if missing.
+		if hasColumn(tx, "chain_refs", "id") {
+			if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS chain_refs_new (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				chain_id      INTEGER NOT NULL REFERENCES chains(id) ON DELETE CASCADE,
+				ref_type      TEXT NOT NULL CHECK(ref_type IN ('decision', 'track', 'digest', 'topic')),
+				digest_id     INTEGER NOT NULL DEFAULT 0,
+				decision_idx  INTEGER NOT NULL DEFAULT 0,
+				track_id      INTEGER NOT NULL DEFAULT 0,
+				topic_id      INTEGER NOT NULL DEFAULT 0,
+				channel_id    TEXT NOT NULL DEFAULT '',
+				timestamp     REAL NOT NULL,
+				created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+				UNIQUE(chain_id, ref_type, digest_id, decision_idx, track_id, topic_id)
+			)`); err != nil {
+				return fmt.Errorf("migration v41 create chain_refs_new: %w", err)
+			}
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO chain_refs_new (id, chain_id, ref_type, digest_id, decision_idx, track_id, topic_id, channel_id, timestamp, created_at)
+				SELECT id, chain_id, ref_type, digest_id, decision_idx, track_id, topic_id, channel_id, timestamp, created_at FROM chain_refs`); err != nil {
+				return fmt.Errorf("migration v41 copy chain_refs: %w", err)
+			}
+			if _, err := tx.Exec(`DROP TABLE chain_refs`); err != nil {
+				return fmt.Errorf("migration v41 drop old chain_refs: %w", err)
+			}
+			if _, err := tx.Exec(`ALTER TABLE chain_refs_new RENAME TO chain_refs`); err != nil {
+				return fmt.Errorf("migration v41 rename chain_refs: %w", err)
+			}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_refs_chain ON chain_refs(chain_id)`); err != nil {
+				return fmt.Errorf("migration v41 chain_refs chain index: %w", err)
+			}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_refs_digest ON chain_refs(digest_id)`); err != nil {
+				return fmt.Errorf("migration v41 chain_refs digest index: %w", err)
+			}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_refs_track ON chain_refs(track_id)`); err != nil {
+				return fmt.Errorf("migration v41 chain_refs track index: %w", err)
+			}
+		}
+
+		// Delete ghost chains: 0 refs and created more than 1 hour ago.
+		if hasColumn(tx, "chains", "id") {
+			if _, err := tx.Exec(`DELETE FROM chains WHERE id IN (
+				SELECT c.id FROM chains c
+				LEFT JOIN chain_refs r ON r.chain_id = c.id
+				WHERE r.id IS NULL
+				AND c.created_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')
+			)`); err != nil {
+				return fmt.Errorf("migration v41 cleanup ghost chains: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 41"); err != nil {
+			return fmt.Errorf("setting schema version v41: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v41: %w", err)
+		}
+		version = 41
+	}
+
+	if version < 42 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v42: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Guard: v43 drops chains/chain_refs, so skip if missing.
+		if hasColumn(tx, "chains", "id") {
+			cols := []struct{ column, def string }{
+				{"priority", `TEXT NOT NULL DEFAULT 'medium'`},
+				{"tags", `TEXT NOT NULL DEFAULT '[]'`},
+			}
+			for _, col := range cols {
+				if !hasColumn(tx, "chains", col.column) {
+					if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE chains ADD COLUMN %s %s", col.column, col.def)); err != nil {
+						return fmt.Errorf("migration v42 add chains.%s: %w", col.column, err)
+					}
+				}
+			}
+		}
+
+		if hasColumn(tx, "chain_refs", "id") {
+			if _, err := tx.Exec(`DELETE FROM chain_refs WHERE ref_type = 'track' AND track_id > 0
+				AND track_id NOT IN (SELECT id FROM tracks)`); err != nil {
+				return fmt.Errorf("migration v42 cleanup orphan track refs: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 42"); err != nil {
+			return fmt.Errorf("setting schema version v42: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v42: %w", err)
+		}
+		version = 42
+	}
+
+	if version < 43 {
+		// Tracks v3: replace chains + old tracks with auto-generated informational tracks.
+		if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("migration v43 disable FK: %w", err)
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v43: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Drop old tables.
+		for _, stmt := range []string{
+			`DROP TABLE IF EXISTS chain_refs`,
+			`DROP TABLE IF EXISTS chains`,
+			`DROP TABLE IF EXISTS track_history`,
+			`DROP TABLE IF EXISTS tracks`,
+		} {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("migration v43 drop: %w", err)
+			}
+		}
+
+		// Create new tracks table.
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS tracks (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			title           TEXT NOT NULL,
+			narrative       TEXT NOT NULL DEFAULT '',
+			current_status  TEXT NOT NULL DEFAULT '',
+			participants    TEXT NOT NULL DEFAULT '[]',
+			timeline        TEXT NOT NULL DEFAULT '[]',
+			key_messages    TEXT NOT NULL DEFAULT '[]',
+			priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
+			tags            TEXT NOT NULL DEFAULT '[]',
+			channel_ids     TEXT NOT NULL DEFAULT '[]',
+			source_refs     TEXT NOT NULL DEFAULT '[]',
+			read_at         TEXT,
+			has_updates     INTEGER NOT NULL DEFAULT 0,
+			model           TEXT NOT NULL DEFAULT '',
+			input_tokens    INTEGER NOT NULL DEFAULT 0,
+			output_tokens   INTEGER NOT NULL DEFAULT 0,
+			cost_usd        REAL NOT NULL DEFAULT 0,
+			prompt_version  INTEGER NOT NULL DEFAULT 0,
+			created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v43 create tracks: %w", err)
+		}
+		for _, idx := range []string{
+			`CREATE INDEX idx_tracks_priority ON tracks(priority)`,
+			`CREATE INDEX idx_tracks_has_updates ON tracks(has_updates)`,
+			`CREATE INDEX idx_tracks_updated ON tracks(updated_at DESC)`,
+		} {
+			if _, err := tx.Exec(idx); err != nil {
+				return fmt.Errorf("migration v43 index: %w", err)
+			}
+		}
+
+		// Clean up stale prompt/feedback data.
+		if _, err := tx.Exec(`DELETE FROM prompts WHERE id = 'chains.enrich'`); err != nil {
+			return fmt.Errorf("migration v43 delete chains.enrich prompt: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM prompts WHERE id = 'tracks.update'`); err != nil {
+			return fmt.Errorf("migration v43 delete tracks.update prompt: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM feedback WHERE entity_type = 'chain'`); err != nil {
+			return fmt.Errorf("migration v43 delete chain feedback: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 43"); err != nil {
+			return fmt.Errorf("setting schema version v43: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v43: %w", err)
+		}
+		if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+			return fmt.Errorf("migration v43 re-enable FK: %w", err)
+		}
+		version = 43
 	}
 
 	_ = version // silence unused variable if this is the last migration

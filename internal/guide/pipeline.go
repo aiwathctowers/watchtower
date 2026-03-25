@@ -22,7 +22,6 @@ import (
 const (
 	DefaultWindowDays  = 7
 	DefaultMinMessages = 3
-	DefaultWorkers     = 10
 )
 
 // PeopleCardResult is the AI output for a unified people card.
@@ -67,7 +66,6 @@ type Pipeline struct {
 
 	OnProgress      ProgressFunc
 	ForceRegenerate bool
-	Workers         int
 
 	// LastStep* fields are set before each OnProgress callback with the
 	// current step's message count and time window. Read them in OnProgress.
@@ -125,13 +123,17 @@ func (p *Pipeline) Run(ctx context.Context) (int, error) {
 
 // RunForWindow executes the people card pipeline for a specific time window.
 func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, error) {
+	t0 := time.Now()
 	p.loadCaches()
+	p.logger.Printf("people: loadCaches took %s", time.Since(t0).Round(time.Millisecond))
 
 	if !p.ForceRegenerate {
+		t1 := time.Now()
 		existing, err := p.db.GetPeopleCardsForWindow(from, to)
 		if err != nil {
 			return 0, fmt.Errorf("checking existing people cards: %w", err)
 		}
+		p.logger.Printf("people: GetPeopleCardsForWindow took %s (%d existing)", time.Since(t1).Round(time.Millisecond), len(existing))
 		if len(existing) > 0 {
 			p.logger.Printf("people: window already has %d cards, skipping", len(existing))
 			return 0, nil
@@ -140,7 +142,9 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 
 	p.progress(0, 0, "Computing user statistics...")
 
+	t1 := time.Now()
 	allStats, err := p.db.ComputeAllUserStats(from, to, DefaultMinMessages)
+	p.logger.Printf("people: ComputeAllUserStats took %s (%d users)", time.Since(t1).Round(time.Millisecond), len(allStats))
 	if err != nil {
 		return 0, fmt.Errorf("computing user stats: %w", err)
 	}
@@ -151,7 +155,9 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 	}
 
 	// Load all situations for v2 pipeline
+	t1 = time.Now()
 	allSituations, err := p.db.GetSituationsForWindow(from, to)
+	p.logger.Printf("people: GetSituationsForWindow took %s (%d users with situations)", time.Since(t1).Round(time.Millisecond), len(allSituations))
 	if err != nil {
 		p.logger.Printf("people: warning: failed to load situations: %v", err)
 		allSituations = make(map[string][]db.ChannelSituations)
@@ -172,9 +178,9 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 		teamNorms.TotalUsers, teamNorms.AvgMessages, len(allSituations))
 
 	totalUsers := len(allStats)
-	workers := p.Workers
+	workers := p.cfg.AI.Workers
 	if workers <= 0 {
-		workers = DefaultWorkers
+		workers = config.DefaultAIWorkers
 	}
 	if workers > totalUsers {
 		workers = totalUsers

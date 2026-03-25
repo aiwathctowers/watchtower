@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 43, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -117,7 +117,7 @@ func TestAllTablesExist(t *testing.T) {
 		"workspace", "users", "channels", "messages",
 		"reactions", "files", "sync_state", "watch_list", "user_checkpoints",
 		"digests", "decision_reads", "user_analyses", "period_summaries",
-		"custom_emojis", "tracks", "track_history", "decision_importance_corrections",
+		"custom_emojis", "tracks", "decision_importance_corrections",
 		"feedback", "prompts", "prompt_history", "user_profile",
 	}
 
@@ -447,25 +447,36 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 	db1, err := Open(dbPath)
 	require.NoError(t, err)
 
-	// Rename tables back to v18 names and restore v18 indexes.
+	// Drop v43 tracks table and create v18-era action_items + action_item_history from scratch.
 	_, err = db1.Exec("PRAGMA foreign_keys = OFF")
 	require.NoError(t, err)
-	_, err = db1.Exec("ALTER TABLE tracks RENAME TO action_items")
+	_, err = db1.Exec("DROP TABLE IF EXISTS tracks")
 	require.NoError(t, err)
-	_, err = db1.Exec("ALTER TABLE track_history RENAME TO action_item_history")
+	_, err = db1.Exec(`CREATE TABLE action_items (
+		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+		channel_id          TEXT NOT NULL DEFAULT '',
+		assignee_user_id    TEXT NOT NULL DEFAULT '',
+		source_message_ts   TEXT NOT NULL DEFAULT '',
+		text                TEXT NOT NULL,
+		status              TEXT NOT NULL DEFAULT 'inbox',
+		priority            TEXT NOT NULL DEFAULT 'medium',
+		period_from         REAL NOT NULL DEFAULT 0,
+		period_to           REAL NOT NULL DEFAULT 0,
+		participants        TEXT NOT NULL DEFAULT '',
+		created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+		updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+	)`)
 	require.NoError(t, err)
-	_, err = db1.Exec("ALTER TABLE action_item_history RENAME COLUMN track_id TO action_item_id")
+	_, err = db1.Exec(`CREATE TABLE action_item_history (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		action_item_id  INTEGER NOT NULL,
+		event           TEXT NOT NULL,
+		field           TEXT NOT NULL DEFAULT '',
+		old_value       TEXT NOT NULL DEFAULT '',
+		new_value       TEXT NOT NULL DEFAULT '',
+		created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+	)`)
 	require.NoError(t, err)
-	// Drop v19 indexes so migration can recreate them.
-	for _, idx := range []string{
-		"idx_tracks_dedup", "idx_tracks_assignee", "idx_tracks_status",
-		"idx_tracks_period", "idx_track_history_track",
-		"idx_feedback_entity", "idx_feedback_rating",
-	} {
-		_, err = db1.Exec("DROP INDEX IF EXISTS " + idx)
-		require.NoError(t, err)
-	}
-	// Create v18-era indexes that migration expects to drop.
 	_, err = db1.Exec("CREATE UNIQUE INDEX idx_action_items_dedup ON action_items(channel_id, assignee_user_id, source_message_ts, text)")
 	require.NoError(t, err)
 	_, err = db1.Exec("CREATE INDEX idx_action_items_assignee ON action_items(assignee_user_id)")
@@ -515,54 +526,31 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 	require.NoError(t, err)
 	db1.Close()
 
-	// Reopen — migration v19 should run.
+	// Reopen — migrations v19..v43 should run.
 	db2, err := Open(dbPath)
 	require.NoError(t, err)
 	defer db2.Close()
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 43, v)
 
-	// Verify table rename: action_items → tracks.
-	var text string
-	err = db2.QueryRow("SELECT text FROM tracks WHERE id = 1").Scan(&text)
-	require.NoError(t, err)
-	assert.Equal(t, "review PR", text)
+	// v43 drops old tracks/track_history/chains and recreates tracks with new schema.
+	// Verify new tracks table exists with v3 columns.
+	_, err = db2.Exec(`INSERT INTO tracks (title, priority) VALUES ('test track', 'high')`)
+	require.NoError(t, err, "new tracks table should accept v3 inserts")
 
-	// Verify column rename: action_item_id → track_id.
-	var event string
-	err = db2.QueryRow("SELECT event FROM track_history WHERE track_id = 1").Scan(&event)
+	// Verify track_history no longer exists (dropped by v43).
+	var cnt int
+	err = db2.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='track_history'").Scan(&cnt)
 	require.NoError(t, err)
-	assert.Equal(t, "created", event)
+	assert.Equal(t, 0, cnt, "track_history should not exist after v43")
 
 	// Verify feedback entity_type transformed: action_item → track.
 	var entityType string
 	err = db2.QueryRow("SELECT entity_type FROM feedback WHERE entity_id = '1'").Scan(&entityType)
 	require.NoError(t, err)
 	assert.Equal(t, "track", entityType)
-
-	// Verify user_analysis entity type is now allowed by updated CHECK constraint.
-	_, err = db2.Exec(`INSERT INTO feedback (entity_type, entity_id, rating) VALUES ('user_analysis', '1', 1)`)
-	require.NoError(t, err, "user_analysis entity_type should be allowed by CHECK constraint")
-
-	// Verify prompt ID renamed.
-	var promptID string
-	err = db2.QueryRow("SELECT id FROM prompts WHERE id = 'tracks.extract'").Scan(&promptID)
-	require.NoError(t, err)
-	assert.Equal(t, "tracks.extract", promptID)
-
-	// Verify customized prompt template was reset (arity mismatch protection).
-	var tmpl string
-	err = db2.QueryRow("SELECT template FROM prompts WHERE id = 'tracks.extract'").Scan(&tmpl)
-	require.NoError(t, err)
-	assert.Equal(t, "", tmpl, "customized prompt should be reset to force fallback to built-in default")
-
-	// Verify JSON column defaults fixed: '' → '[]'.
-	var participants string
-	err = db2.QueryRow("SELECT participants FROM tracks WHERE id = 1").Scan(&participants)
-	require.NoError(t, err)
-	assert.Equal(t, "[]", participants, "empty JSON columns should be migrated to '[]'")
 }
 
 func TestNullableFields(t *testing.T) {

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,16 +84,6 @@ func TestRunProfile_OnboardingNotDone(t *testing.T) {
 	assert.Contains(t, output, "Onboarding: not completed")
 }
 
-// --- Tracks generate flags ---
-func TestTracksGenerate_RequiresConfig(t *testing.T) {
-	oldFlagConfig := flagConfig
-	flagConfig = "/nonexistent/config.yaml"
-	defer func() { flagConfig = oldFlagConfig }()
-
-	err := tracksGenerateCmd.RunE(tracksGenerateCmd, nil)
-	assert.Error(t, err)
-}
-
 // --- Status with last sync time ---
 func TestStatusCommand_WithLastSync(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -162,40 +151,26 @@ func TestRunTracks_PriorityFilter(t *testing.T) {
 	database, err := openDBFromConfig()
 	require.NoError(t, err)
 
-	now := float64(time.Now().Unix())
 	_, err = database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "High priority task",
-		Status:         "inbox",
-		Priority:       "high",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
+		Title:      "High priority task",
+		Priority:   "high",
+		ChannelIDs: `["C001"]`,
 	})
 	require.NoError(t, err)
 
 	_, err = database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "Low priority task",
-		Status:         "inbox",
-		Priority:       "low",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
+		Title:      "Low priority task",
+		Priority:   "low",
+		ChannelIDs: `["C001"]`,
 	})
 	require.NoError(t, err)
 	database.Close()
 
 	buf := new(bytes.Buffer)
 	tracksCmd.SetOut(buf)
-	tracksFlagStatus = ""
 	tracksFlagPriority = "high"
 	tracksFlagChannel = ""
-	tracksFlagOwnership = ""
+	tracksFlagUpdates = false
 	defer func() { tracksFlagPriority = "" }()
 
 	err = tracksCmd.RunE(tracksCmd, nil)
@@ -211,68 +186,24 @@ func TestRunTracks_ChannelFilterSuccess(t *testing.T) {
 	database, err := openDBFromConfig()
 	require.NoError(t, err)
 
-	now := float64(time.Now().Unix())
 	_, err = database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "General task",
-		Status:         "inbox",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
+		Title:      "General task",
+		Priority:   "medium",
+		ChannelIDs: `["C001"]`,
 	})
 	require.NoError(t, err)
 	database.Close()
 
 	buf := new(bytes.Buffer)
 	tracksCmd.SetOut(buf)
-	tracksFlagStatus = ""
 	tracksFlagPriority = ""
 	tracksFlagChannel = "general"
-	tracksFlagOwnership = ""
+	tracksFlagUpdates = false
 	defer func() { tracksFlagChannel = "" }()
 
 	err = tracksCmd.RunE(tracksCmd, nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "General task")
-}
-
-// --- Tracks ownership filter ---
-func TestRunTracks_OwnershipFilter(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	_, err = database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "Delegated task",
-		Status:         "inbox",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "delegated",
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksCmd.SetOut(buf)
-	tracksFlagStatus = ""
-	tracksFlagPriority = ""
-	tracksFlagChannel = ""
-	tracksFlagOwnership = "delegated"
-	defer func() { tracksFlagOwnership = "" }()
-
-	err = tracksCmd.RunE(tracksCmd, nil)
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Delegated task")
 }
 
 // --- printTracks with channel lookup from DB ---
@@ -286,66 +217,16 @@ func TestPrintTracks_ChannelLookup(t *testing.T) {
 
 	tracks := []db.Track{
 		{
-			ID:        1,
-			ChannelID: "C001",
-			// SourceChannelName is empty, so should lookup from DB
-			Text:     "Task without channel name",
-			Status:   "inbox",
-			Priority: "medium",
+			ID:         1,
+			Title:      "Task without channel name",
+			Priority:   "medium",
+			ChannelIDs: `["C001"]`,
 		},
 	}
 
 	buf := new(bytes.Buffer)
 	printTracks(buf, tracks, database)
 	assert.Contains(t, buf.String(), "#general")
-}
-
-// --- Tracks snooze with hours ---
-func TestRunTracksSnooze_WithHours(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	id, err := database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "Snooze hours test",
-		Status:         "inbox",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	tracksSnoozeFlagUntil = ""
-	tracksSnoozeFlagHours = 4
-	defer func() { tracksSnoozeFlagUntil = ""; tracksSnoozeFlagHours = 0 }()
-
-	buf := new(bytes.Buffer)
-	tracksSnoozeCmd.SetOut(buf)
-
-	err = tracksSnoozeCmd.RunE(tracksSnoozeCmd, []string{fmt.Sprintf("%d", id)})
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "snoozed until")
-}
-
-// --- Tracks done for nonexistent ID ---
-func TestRunTracksDone_NotFound(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	buf := new(bytes.Buffer)
-	tracksDoneCmd.SetOut(buf)
-
-	err := tracksDoneCmd.RunE(tracksDoneCmd, []string{"99999"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
 }
 
 // --- ShowDigestCatchup with channel digest and unknown channel ---

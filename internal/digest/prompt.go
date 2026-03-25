@@ -8,11 +8,16 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
 
 {
   "summary": "2-3 sentence overview of what was discussed",
-  "topics": ["topic1", "topic2"],
-  "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
-  "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
-  "key_messages": ["1234567890.123456", "1234567891.123456"],
-  "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}, {"user_id": "U789012", "role": "contributor"}], "dynamic": "what happened between people", "outcome": "result or current state", "red_flags": [], "observations": ["notable observation"], "message_refs": ["1234567890.123456"]}],
+  "topics": [
+    {
+      "title": "Short topic title (5-10 words)",
+      "summary": "1-2 sentence summary of this specific topic",
+      "decisions": [{"text": "what was decided", "by": "@username", "message_ts": "1234567890.123456", "importance": "high"}],
+      "action_items": [{"text": "what needs to be done", "assignee": "@username", "status": "open"}],
+      "situations": [{"topic": "Auth refactor ownership", "type": "collaboration", "participants": [{"user_id": "U123456", "role": "initiator"}], "dynamic": "what happened", "outcome": "result", "red_flags": [], "observations": [], "message_refs": ["1234567890.123456"]}],
+      "key_messages": ["1234567890.123456"]
+    }
+  ],
   "running_summary": {"active_topics": [{"topic": "...", "status": "in_progress|resolved|stale", "started": "2026-03-18", "last_update": "2026-03-21", "key_participants": ["U123"], "summary": "..."}], "recent_decisions": [{"decision": "...", "date": "2026-03-20", "by": "U123", "status": "active"}], "channel_dynamics": "Brief description of channel culture and key players", "open_questions": ["..."]}
 }
 
@@ -20,8 +25,12 @@ Analyze the messages below and return ONLY a JSON object (no markdown fences, no
 
 Rules:
 - summary: Concise overview of the channel activity
-- topics: Main themes discussed (2-5 topics)
-- decisions: A DECISION is a conscious choice between alternatives that changes the course of action. Each decision MUST have a clear "who decided" and "what was chosen" and ideally "why" or "instead of what". Do NOT include:
+- topics: EACH TOPIC is a self-contained thematic unit about ONE specific subject. A production incident and an inter-team conflict are TWO separate topics, even if they involve the same people or channel.
+  * 2-7 topics per digest
+  * title: specific, descriptive (e.g. "Hashbank deposit processing failure", not "Issues")
+  * summary: what happened in this topic specifically
+  * Each topic carries its OWN decisions, action_items, situations, key_messages — do NOT mix content across topics
+- decisions (within each topic): A DECISION is a conscious choice between alternatives that changes the course of action. Each decision MUST have a clear "who decided" and "what was chosen" and ideally "why" or "instead of what". Do NOT include:
   * Status updates ("X was deployed", "X was updated")
   * Notifications or FYIs ("users were notified about X")
   * Expected behaviors ("caching delay is normal")
@@ -31,11 +40,11 @@ Rules:
   * "high" — changes architecture, strategy, budget, staffing, product direction, security posture, or has org-wide impact
   * "medium" — changes a process, workflow, or technical approach within a team/project
   * "low" — minor tactical choices (naming, formatting, scheduling, tooling tweaks)
-  If only 0-1 true decisions exist, return an empty or single-item array. Do NOT inflate the list.
-- action_items: Tasks mentioned or assigned. status is always "open" for new items
-- key_messages: Timestamps of the most important messages (max 5)
-- situations: Notable INTERACTIONS between people (max 3-5). Capture dynamics BETWEEN people, not individual behavior. Each situation has:
-  * topic: Short label for the topic/project (e.g. "Auth refactor ownership", "Sprint planning conflict")
+  If only 0-1 true decisions exist in a topic, return an empty or single-item array. Do NOT inflate the list.
+- action_items (within each topic): Tasks mentioned or assigned. status is always "open" for new items
+- key_messages (within each topic): Timestamps of the most important messages (max 5 per topic)
+- situations (within each topic): Notable INTERACTIONS between people (max 2-3 per topic). Capture dynamics BETWEEN people, not individual behavior. Each situation has:
+  * topic: Short label for the interaction (e.g. "Auth refactor ownership", "Sprint planning conflict")
   * type: "bottleneck", "conflict", "collaboration", "knowledge_transfer", "decision_deadlock", "mentoring", "escalation", "handoff", "misalignment"
   * participants: Each person involved with their role ("blocker", "affected", "initiator", "resolver", "mediator", "mentor", "mentee", "decision_maker", "contributor")
   * dynamic: What happened between the participants (1-2 sentences)

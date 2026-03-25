@@ -143,7 +143,7 @@ func TestPipeline_Run(t *testing.T) {
 	gen := &mockGenerator{response: mockResp}
 	pipe := New(database, cfg, gen, logger)
 	pipe.ForceRegenerate = true
-	pipe.Workers = 1
+	cfg.AI.Workers = 1
 
 	n, err := pipe.RunForWindow(context.Background(), from, to)
 	require.NoError(t, err)
@@ -189,14 +189,13 @@ func TestPipeline_SkipsExistingWindow(t *testing.T) {
 	gen := &mockGenerator{response: `{"summary":"test","communication_style":"","decision_role":"","red_flags":[],"highlights":[],"accomplishments":[],"communication_guide":"","decision_style":"","tactics":[]}`}
 	pipe := New(database, cfg, gen, logger)
 	pipe.ForceRegenerate = true
-	pipe.Workers = 1
+	cfg.AI.Workers = 1
 
 	n1, err := pipe.RunForWindow(context.Background(), from, to)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n1)
 
 	pipe2 := New(database, cfg, gen, logger)
-	pipe2.Workers = 1
 	n2, err := pipe2.RunForWindow(context.Background(), from, to)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n2)

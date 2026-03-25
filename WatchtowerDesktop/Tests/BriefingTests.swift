@@ -100,6 +100,24 @@ final class BriefingModelTests: XCTestCase {
         XCTAssertEqual(items.first?.relatedUserID, "U001")
     }
 
+    func testAttentionSuggestTrack() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertBriefing(
+                db,
+                attention: """
+                [{"text":"Track suggestion","source_type":"track","source_id":"3","suggest_track":true},{"text":"Normal item","priority":"low"}]
+                """
+            )
+        }
+
+        let briefing = try db.read { db in try BriefingQueries.fetchLatest(db) }
+        let items = briefing?.parsedAttention ?? []
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].suggestTrack, true)
+        XCTAssertNil(items[1].suggestTrack)
+    }
+
     func testBriefingEmptyJSONReturnsEmptyArrays() throws {
         let db = try TestDatabase.create()
         try db.write { db in

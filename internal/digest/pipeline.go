@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -39,12 +40,19 @@ type Generator interface {
 // DigestResult is the structured output from Claude for a digest.
 type DigestResult struct {
 	Summary        string          `json:"summary"`
-	Topics         []string        `json:"topics"`
-	Decisions      []Decision      `json:"decisions"`
-	ActionItems    []ActionItem    `json:"action_items"`
-	KeyMessages    []string        `json:"key_messages"`
-	Situations     []db.Situation  `json:"situations"`
+	Topics         []Topic         `json:"topics"`
 	RunningSummary json.RawMessage `json:"running_summary,omitempty"`
+}
+
+// Topic is a self-contained thematic unit within a digest.
+// Each topic carries its own decisions, action items, situations, and key messages.
+type Topic struct {
+	Title       string         `json:"title"`
+	Summary     string         `json:"summary"`
+	Decisions   []Decision     `json:"decisions"`
+	ActionItems []ActionItem   `json:"action_items"`
+	Situations  []db.Situation `json:"situations"`
+	KeyMessages []string       `json:"key_messages"`
 }
 
 // DigestSituationParticipant mirrors db.SituationParticipant for JSON parsing.
@@ -79,12 +87,11 @@ type ActionItem struct {
 	Status   string `json:"status"`
 }
 
-// ChainLinker runs the chains pipeline between channel digests and rollups.
-// Defined as an interface to avoid import cycles (chains imports digest).
-type ChainLinker interface {
-	Run(ctx context.Context) (int, error)
-	FormatActiveChainsForPrompt(ctx context.Context) (string, error)
-	SetOnProgress(fn ProgressFunc)
+// TrackLinker runs the tracks pipeline between channel digests and rollups.
+// Defined as an interface to avoid import cycles (tracks imports digest).
+type TrackLinker interface {
+	Run(ctx context.Context) (int, int, error)
+	FormatActiveTracksForPrompt() (string, error)
 }
 
 // ProgressFunc is called during digest generation to report progress.
@@ -105,14 +112,14 @@ type Pipeline struct {
 	// OnProgress is called to report progress during digest generation.
 	OnProgress ProgressFunc
 
-	// ChainContext is injected by the daemon after chains pipeline runs.
+	// TrackContext is injected by the daemon after tracks pipeline runs.
 	// If non-empty, it's prepended to the daily/weekly rollup prompt to make
-	// rollups chain-aware (collapsing chained decisions instead of repeating them).
-	ChainContext string
+	// rollups track-aware (collapsing tracked topics instead of repeating them).
+	TrackContext string
 
-	// ChainLinker, if set, runs chains pipeline between channel digests and rollups.
+	// TrackLinker, if set, runs tracks pipeline between channel digests and rollups.
 	// Used by `digest generate` to replicate the daemon's phased pipeline.
-	ChainLinker ChainLinker
+	TrackLinker TrackLinker
 
 	// accumulated usage across all Generate calls (atomic for concurrent workers)
 	totalInputTokens  atomic.Int64
@@ -261,12 +268,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	}
 	if totalDeduped > 0 {
 		p.logger.Printf("digest: cleaned up %d duplicate digests", totalDeduped)
-		// Remove chain_refs pointing to deleted digests
-		if orphaned, err := p.db.CleanOrphanedChainRefs(); err != nil {
-			p.logger.Printf("digest: warning: orphaned chain ref cleanup failed: %v", err)
-		} else if orphaned > 0 {
-			p.logger.Printf("digest: cleaned up %d orphaned chain refs", orphaned)
-		}
 	}
 
 	p.loadCaches()
@@ -281,9 +282,9 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	}
 
 	if p.OnProgress != nil {
-		p.OnProgress(0, 0, "Linking decision chains...")
+		p.OnProgress(0, 0, "Creating tracks...")
 	}
-	p.runChainLinker(ctx)
+	p.runTrackLinker(ctx)
 
 	if p.OnProgress != nil {
 		p.OnProgress(0, 0, "Generating daily rollup...")
@@ -322,11 +323,6 @@ func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, erro
 	}
 	if totalDeduped > 0 {
 		p.logger.Printf("digest: cleaned up %d duplicate digests", totalDeduped)
-		if orphaned, err := p.db.CleanOrphanedChainRefs(); err != nil {
-			p.logger.Printf("digest: warning: orphaned chain ref cleanup failed: %v", err)
-		} else if orphaned > 0 {
-			p.logger.Printf("digest: cleaned up %d orphaned chain refs", orphaned)
-		}
 	}
 
 	p.loadCaches()
@@ -334,13 +330,11 @@ func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, erro
 	return p.RunChannelDigests(ctx)
 }
 
-// RunRollups runs daily and weekly rollups only (no channel digests).
-// runChainLinker runs the chains pipeline (if configured) and injects chain context for rollups.
-func (p *Pipeline) runChainLinker(ctx context.Context) {
-	if p.ChainLinker == nil || ctx.Err() != nil {
+// runTrackLinker runs the tracks pipeline (if configured) and injects track context for rollups.
+func (p *Pipeline) runTrackLinker(ctx context.Context) {
+	if p.TrackLinker == nil || ctx.Err() != nil {
 		return
 	}
-	// Reset LastStep* so chains progress doesn't show stale digest metrics.
 	p.lastStepMu.Lock()
 	p.LastStepMessageCount = 0
 	p.LastStepInputTokens = 0
@@ -348,21 +342,33 @@ func (p *Pipeline) runChainLinker(ctx context.Context) {
 	p.LastStepCostUSD = 0
 	p.LastStepDurationSeconds = 0
 	p.lastStepMu.Unlock()
-	if p.OnProgress != nil {
-		p.ChainLinker.SetOnProgress(p.OnProgress)
+
+	var trackErr error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				trackErr = fmt.Errorf("tracks pipeline panicked: %v\n%s", r, debug.Stack())
+			}
+		}()
+		created, updated, err := p.TrackLinker.Run(ctx)
+		if err != nil {
+			trackErr = err
+		} else if created > 0 || updated > 0 {
+			p.logger.Printf("digest: tracks created=%d updated=%d", created, updated)
+		}
+	}()
+
+	if trackErr != nil {
+		p.logger.Printf("digest: tracks error: %v", trackErr)
+		return
 	}
-	n, err := p.ChainLinker.Run(ctx)
-	if err != nil {
-		p.logger.Printf("digest: chains error: %v", err)
-	} else if n > 0 {
-		p.logger.Printf("digest: linked %d decision(s) to chains", n)
-	}
-	if chainCtx, err := p.ChainLinker.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
-		p.ChainContext = chainCtx
+
+	if trackCtx, err := p.TrackLinker.FormatActiveTracksForPrompt(); err == nil && trackCtx != "" {
+		p.TrackContext = trackCtx
 	}
 }
 
-// RunRollups generates daily/weekly rollups. Used by daemon after chains pipeline has linked decisions.
+// RunRollups generates daily/weekly rollups. Used by daemon after tracks pipeline has created tracks.
 func (p *Pipeline) RunRollups(ctx context.Context) error {
 	if !p.cfg.Digest.Enabled {
 		return nil
@@ -415,6 +421,27 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 	}
 
 	p.logger.Printf("digest: found %d channels with new messages", len(channels))
+
+	// Filter out muted channels
+	mutedIDs, err := p.db.GetMutedChannelIDs()
+	if err != nil {
+		p.logger.Printf("digest: warning: failed to load muted channels: %v", err)
+	} else if len(mutedIDs) > 0 {
+		muted := make(map[string]bool, len(mutedIDs))
+		for _, id := range mutedIDs {
+			muted[id] = true
+		}
+		var filtered []string
+		for _, ch := range channels {
+			if !muted[ch] {
+				filtered = append(filtered, ch)
+			}
+		}
+		if skipped := len(channels) - len(filtered); skipped > 0 {
+			p.logger.Printf("digest: skipped %d muted channel(s)", skipped)
+		}
+		channels = filtered
+	}
 
 	if len(channels) == 0 {
 		p.logger.Println("digest: no channels with new messages")
@@ -471,9 +498,9 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 	}
 
 	total := len(tasks)
-	workers := p.cfg.Digest.Workers
+	workers := p.cfg.AI.Workers
 	if workers <= 0 {
-		workers = 1
+		workers = config.DefaultAIWorkers
 	}
 	if workers > total {
 		workers = total
@@ -521,10 +548,10 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				p.LastStepInputTokens = 0
 				p.LastStepOutputTokens = 0
 				p.LastStepCostUSD = 0
-				p.lastStepMu.Unlock()
 				if p.OnProgress != nil {
 					p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", t.channelName, len(t.msgs)))
 				}
+				p.lastStepMu.Unlock()
 
 				stepStart := time.Now()
 				result, usage, pv, err := p.generateChannelDigest(ctx, t.channelID, t.channelName, t.msgs, sinceUnix, nowUnix)
@@ -602,7 +629,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 					p.LastStepOutputTokens = 0
 					p.LastStepCostUSD = 0
 				}
-				p.lastStepMu.Unlock()
 				if usage != nil {
 					totalInput.Add(int64(usage.InputTokens))
 					totalOutput.Add(int64(usage.OutputTokens))
@@ -613,6 +639,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				if p.OnProgress != nil {
 					p.OnProgress(done, total, fmt.Sprintf("#%s done", t.channelName))
 				}
+				p.lastStepMu.Unlock()
 				if usage != nil {
 					p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens, $%.4f)",
 						t.channelName, len(t.msgs), usage.InputTokens, usage.OutputTokens, usage.CostUSD)
@@ -676,8 +703,18 @@ func (p *Pipeline) runDailyRollupForDate(ctx context.Context, dayStart time.Time
 		// Sanitize AI-generated values to prevent prompt injection via prior AI output
 		summary := sanitizePromptValue(d.Summary)
 		fmt.Fprintf(&sb, "### #%s (%d messages)\nSummary: %s\n", name, d.MessageCount, summary)
-		// Include channel-level decisions so the rollup can consolidate them
-		if d.Decisions != "" && d.Decisions != "[]" {
+		// Include topics with their decisions for the rollup
+		topics, _ := p.db.GetDigestTopics(d.ID)
+		if len(topics) > 0 {
+			fmt.Fprintf(&sb, "Topics:\n")
+			for _, t := range topics {
+				fmt.Fprintf(&sb, "- %s: %s\n", sanitizePromptValue(t.Title), sanitizePromptValue(t.Summary))
+				if t.Decisions != "" && t.Decisions != "[]" {
+					fmt.Fprintf(&sb, "  Decisions: %s\n", sanitizePromptValue(t.Decisions))
+				}
+			}
+		} else if d.Decisions != "" && d.Decisions != "[]" {
+			// Fallback for old digests without topics
 			fmt.Fprintf(&sb, "Decisions: %s\n", sanitizePromptValue(d.Decisions))
 		}
 		sb.WriteString("\n")
@@ -686,8 +723,8 @@ func (p *Pipeline) runDailyRollupForDate(ctx context.Context, dayStart time.Time
 	// Prepend chain context if available (decisions grouped into chains are shown
 	// as chain updates rather than repeated individually).
 	channelInput := sb.String()
-	if p.ChainContext != "" {
-		channelInput = p.ChainContext + "\n" + channelInput
+	if p.TrackContext != "" {
+		channelInput = p.TrackContext + "\n" + channelInput
 	}
 
 	previousContext := p.loadPreviousContext("", "daily")
@@ -738,7 +775,16 @@ func (p *Pipeline) RunWeeklyTrends(ctx context.Context) error {
 		date := time.Unix(int64(d.PeriodFrom), 0).Local().Format("2006-01-02")
 		summary := sanitizePromptValue(d.Summary)
 		fmt.Fprintf(&sb, "### %s (%d messages)\nSummary: %s\n", date, d.MessageCount, summary)
-		if d.Decisions != "" && d.Decisions != "[]" {
+		topics, _ := p.db.GetDigestTopics(d.ID)
+		if len(topics) > 0 {
+			fmt.Fprintf(&sb, "Topics:\n")
+			for _, t := range topics {
+				fmt.Fprintf(&sb, "- %s: %s\n", sanitizePromptValue(t.Title), sanitizePromptValue(t.Summary))
+				if t.Decisions != "" && t.Decisions != "[]" {
+					fmt.Fprintf(&sb, "  Decisions: %s\n", sanitizePromptValue(t.Decisions))
+				}
+			}
+		} else if d.Decisions != "" && d.Decisions != "[]" {
 			fmt.Fprintf(&sb, "Decisions: %s\n", sanitizePromptValue(d.Decisions))
 		}
 		sb.WriteString("\n")
@@ -809,7 +855,14 @@ func (p *Pipeline) RunPeriodSummary(ctx context.Context, from, to time.Time) (*D
 			label = "Weekly trends"
 		}
 		date := time.Unix(int64(d.PeriodFrom), 0).Local().Format("2006-01-02")
-		fmt.Fprintf(&sb, "### %s — %s (%d messages)\n%s\n\n", date, label, d.MessageCount, sanitizePromptValue(d.Summary))
+		fmt.Fprintf(&sb, "### %s — %s (%d messages)\n%s\n", date, label, d.MessageCount, sanitizePromptValue(d.Summary))
+		topics, _ := p.db.GetDigestTopics(d.ID)
+		if len(topics) > 0 {
+			for _, t := range topics {
+				fmt.Fprintf(&sb, "- %s: %s\n", sanitizePromptValue(t.Title), sanitizePromptValue(t.Summary))
+			}
+		}
+		sb.WriteString("\n")
 	}
 
 	fromStr := from.Format("2006-01-02")
@@ -900,10 +953,22 @@ func (p *Pipeline) generateChannelDigest(ctx context.Context, channelID, channel
 }
 
 func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, result *DigestResult, msgCount int, usage *Usage, promptVersion int) error {
-	topics, _ := json.Marshal(result.Topics)
-	decisions, _ := json.Marshal(result.Decisions)
-	actionItems, _ := json.Marshal(result.ActionItems)
-	situations, _ := json.Marshal(result.Situations)
+	// Aggregate topics into flat arrays for legacy columns (backward compat).
+	var allTopicTitles []string
+	var allDecisions []Decision
+	var allActionItems []ActionItem
+	var allSituations []db.Situation
+	for _, t := range result.Topics {
+		allTopicTitles = append(allTopicTitles, t.Title)
+		allDecisions = append(allDecisions, t.Decisions...)
+		allActionItems = append(allActionItems, t.ActionItems...)
+		allSituations = append(allSituations, t.Situations...)
+	}
+
+	topics, _ := json.Marshal(allTopicTitles)
+	decisions, _ := json.Marshal(allDecisions)
+	actionItems, _ := json.Marshal(allActionItems)
+	situations, _ := json.Marshal(allSituations)
 
 	// Store running_summary as-is (json.RawMessage → string)
 	runningSummary := ""
@@ -933,8 +998,35 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 		d.CostUSD = usage.CostUSD
 	}
 
-	_, err := p.db.UpsertDigest(d)
-	return err
+	digestID, err := p.db.UpsertDigest(d)
+	if err != nil {
+		return err
+	}
+
+	// Store structured topics in digest_topics table.
+	if len(result.Topics) > 0 {
+		var dbTopics []db.DigestTopic
+		for i, t := range result.Topics {
+			dec, _ := json.Marshal(t.Decisions)
+			ai, _ := json.Marshal(t.ActionItems)
+			sit, _ := json.Marshal(t.Situations)
+			km, _ := json.Marshal(t.KeyMessages)
+			dbTopics = append(dbTopics, db.DigestTopic{
+				Idx:         i,
+				Title:       t.Title,
+				Summary:     t.Summary,
+				Decisions:   string(dec),
+				ActionItems: string(ai),
+				Situations:  string(sit),
+				KeyMessages: string(km),
+			})
+		}
+		if err := p.db.InsertDigestTopics(digestID, dbTopics); err != nil {
+			p.logger.Printf("warning: failed to store digest topics: %v", err)
+		}
+	}
+
+	return nil
 }
 
 func (p *Pipeline) lastDigestTime() float64 {
@@ -1132,8 +1224,63 @@ func parseDigestResult(raw string) (*DigestResult, error) {
 
 	var result DigestResult
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		return nil, fmt.Errorf("parsing digest JSON: %w (raw: %.200s)", err, raw)
+		// Fallback: AI may return flat format (topics as strings, decisions/action_items at top level).
+		// Convert to structured Topic format.
+		var flat flatDigestResult
+		if flatErr := json.Unmarshal([]byte(cleaned), &flat); flatErr != nil {
+			return nil, fmt.Errorf("parsing digest JSON: %w (raw: %.200s)", err, raw)
+		}
+		result = flat.toDigestResult()
+		return &result, nil
 	}
 
 	return &result, nil
+}
+
+// flatDigestResult is the legacy AI response format with topics as strings
+// and decisions/action_items at the top level (not nested within topics).
+type flatDigestResult struct {
+	Summary        string          `json:"summary"`
+	Topics         []string        `json:"topics"`
+	Decisions      []Decision      `json:"decisions"`
+	ActionItems    []ActionItem    `json:"action_items"`
+	KeyMessages    []string        `json:"key_messages"`
+	Situations     []db.Situation  `json:"situations"`
+	RunningSummary json.RawMessage `json:"running_summary,omitempty"`
+}
+
+func (f flatDigestResult) toDigestResult() DigestResult {
+	var topics []Topic
+	if len(f.Topics) > 0 {
+		// Put all decisions/action_items/situations into a single topic
+		// or distribute evenly if multiple topics exist.
+		if len(f.Topics) == 1 {
+			topics = []Topic{{
+				Title:       f.Topics[0],
+				Summary:     f.Summary,
+				Decisions:   f.Decisions,
+				ActionItems: f.ActionItems,
+				Situations:  f.Situations,
+				KeyMessages: f.KeyMessages,
+			}}
+		} else {
+			// Create topics from titles, put all items in the first topic
+			for i, title := range f.Topics {
+				t := Topic{Title: title}
+				if i == 0 {
+					t.Summary = f.Summary
+					t.Decisions = f.Decisions
+					t.ActionItems = f.ActionItems
+					t.Situations = f.Situations
+					t.KeyMessages = f.KeyMessages
+				}
+				topics = append(topics, t)
+			}
+		}
+	}
+	return DigestResult{
+		Summary:        f.Summary,
+		Topics:         topics,
+		RunningSummary: f.RunningSummary,
+	}
 }

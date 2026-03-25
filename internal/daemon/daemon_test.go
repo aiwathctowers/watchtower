@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
@@ -347,23 +346,6 @@ func TestDaemon_SaveLoadPeopleTime(t *testing.T) {
 	assert.Equal(t, now.Unix(), d2.lastPeople.Unix())
 }
 
-func TestDaemon_SaveLoadTracksTime(t *testing.T) {
-	orch, cfg, _ := testDaemonWithTempHome(t)
-
-	d := New(orch, cfg)
-	d.SetLogger(log.New(os.Stderr, "[test] ", 0))
-
-	now := time.Now().Truncate(time.Second)
-	d.lastTracks = now
-	d.saveLastTracks()
-
-	d2 := New(orch, cfg)
-	d2.SetLogger(log.New(os.Stderr, "[test2] ", 0))
-	d2.loadLastTracks()
-
-	assert.Equal(t, now.Unix(), d2.lastTracks.Unix())
-}
-
 func TestDaemon_LoadPeopleMissingFile(t *testing.T) {
 	orch, cfg, _ := testDaemonWithTempHome(t)
 
@@ -467,14 +449,12 @@ func TestDaemon_RunSyncWithAllPipelines(t *testing.T) {
 	l := log.New(os.Stderr, "[test-pipe] ", 0)
 
 	digestPipe := digest.New(database, cfg, gen, l)
-	chainsPipe := chains.New(database, cfg, gen, l)
 	tracksPipe := tracks.New(database, cfg, gen, l)
 	peoplePipe := guide.New(database, cfg, gen, l)
 
 	d := New(orch, cfg)
 	d.SetLogger(log.New(os.Stderr, "[test-daemon] ", 0))
 	d.SetDigestPipeline(digestPipe)
-	d.SetChainsPipeline(chainsPipe)
 	d.SetTracksPipeline(tracksPipe)
 	d.SetPeoplePipeline(peoplePipe)
 

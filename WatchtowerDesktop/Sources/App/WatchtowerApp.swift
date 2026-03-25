@@ -36,12 +36,12 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
                 if let digestID = userInfo["digestId"] as? Int {
                     appState?.navigateToDigest(digestID)
                 } else {
-                    appState?.selectedDestination = .chains
+                    appState?.selectedDestination = .digests
                 }
             case "track", "track_update":
                 appState?.selectedDestination = .tracks
             case "daily_summary":
-                appState?.selectedDestination = .chains
+                appState?.selectedDestination = .digests
             default:
                 break
             }
