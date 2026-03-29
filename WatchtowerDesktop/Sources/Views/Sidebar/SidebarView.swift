@@ -4,26 +4,21 @@ import GRDB
 struct SidebarView: View {
     @Binding var selection: SidebarDestination
     @Environment(AppState.self) private var appState
-    @State private var statusCounts: [String: Int] = [:]
-    @State private var totalCount: Int = 0
-    @State private var ownershipCounts: [String: Int] = [:]
-    @State private var unreadChainCount: Int = 0
+    @State private var updatedTrackCount: Int = 0
+    @State private var totalTrackCount: Int = 0
     @State private var unreadDigestCount: Int = 0
     @State private var unreadBriefingCount: Int = 0
+    @State private var recommendationCount: Int = 0
+    @State private var activeTaskCount: Int = 0
+    @State private var overdueTaskCount: Int = 0
+    @State private var inboxPendingCount: Int = 0
+    @State private var inboxHighPriorityCount: Int = 0
     @State private var countsObservationTask: Task<Void, Never>?
-
-    private var isTracksExpanded: Bool { selection == .tracks }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(SidebarDestination.mainItems) { item in
                 sidebarButton(item)
-
-                // Track status sub-items
-                if item == .tracks && isTracksExpanded {
-                    trackSubItems
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
             }
 
             Spacer()
@@ -69,104 +64,7 @@ struct SidebarView: View {
         .frame(maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { startObservingCounts() }
-        .onChange(of: selection) { loadCounts(db: appState.databaseManager!) }
         .onDisappear { countsObservationTask?.cancel() }
-    }
-
-    // MARK: - Track Sub-Items
-
-    private var trackSubItems: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Ownership filters
-            Text("OWNERSHIP")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.quaternary)
-                .padding(.horizontal, 8)
-                .padding(.top, 2)
-            trackOwnershipRow(label: "Mine", ownership: "mine", icon: "person.fill", count: ownershipCounts["mine"] ?? 0)
-            trackOwnershipRow(label: "Delegated", ownership: "delegated", icon: "arrow.right.circle.fill", count: ownershipCounts["delegated"] ?? 0)
-            trackOwnershipRow(label: "Watching", ownership: "watching", icon: "eye.fill", count: ownershipCounts["watching"] ?? 0)
-
-            Divider()
-                .padding(.vertical, 2)
-
-            // Status filters
-            trackFilterRow(label: "Inbox", filter: nil, icon: "tray", count: statusCounts["inbox"] ?? 0)
-            trackFilterRow(label: "Active", filter: "active", icon: "bolt.circle", count: statusCounts["active"] ?? 0)
-            trackFilterRow(label: "Done", filter: "done", icon: "checkmark.circle", count: statusCounts["done"] ?? 0)
-            trackFilterRow(label: "Dismissed", filter: "dismissed", icon: "xmark.circle", count: statusCounts["dismissed"] ?? 0)
-            trackFilterRow(label: "Snoozed", filter: "snoozed", icon: "moon.zzz", count: statusCounts["snoozed"] ?? 0)
-            trackFilterRow(label: "All", filter: "all", icon: "list.bullet", count: totalCount)
-        }
-        .padding(.leading, 20)
-        .padding(.trailing, 2)
-        .padding(.vertical, 2)
-    }
-
-    private func trackOwnershipRow(label: String, ownership: String, icon: String, count: Int) -> some View {
-        Button {
-            // Toggle: if already selected, clear; otherwise set
-            if appState.trackOwnershipFilter == ownership {
-                appState.trackOwnershipFilter = nil
-            } else {
-                appState.trackOwnershipFilter = ownership
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(appState.trackOwnershipFilter == ownership ? .white : .secondary)
-                    .frame(width: 16)
-                Text(label)
-                    .font(.subheadline)
-                    .foregroundStyle(appState.trackOwnershipFilter == ownership ? .white : .primary)
-                Spacer()
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption2)
-                        .foregroundStyle(appState.trackOwnershipFilter == ownership ? Color.white.opacity(0.8) : Color.secondary)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                appState.trackOwnershipFilter == ownership ? Color.accentColor : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func trackFilterRow(label: String, filter: String?, icon: String, count: Int) -> some View {
-        let isSelected = appState.trackStatusFilter == filter
-        return Button {
-            appState.trackStatusFilter = filter
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(isSelected ? .white : .secondary)
-                    .frame(width: 16)
-                Text(label)
-                    .font(.subheadline)
-                    .foregroundStyle(isSelected ? .white : .primary)
-                Spacer()
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption2)
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.secondary)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                isSelected ? Color.accentColor : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Main Sidebar Button
@@ -203,8 +101,11 @@ struct SidebarView: View {
         let count: Int = {
             switch item {
             case .briefings: return unreadBriefingCount
-            case .tracks: return statusCounts["inbox"] ?? 0
-            case .chains: return unreadChainCount
+            case .inbox: return inboxPendingCount
+            case .tasks: return overdueTaskCount > 0 ? overdueTaskCount : activeTaskCount
+            case .tracks: return updatedTrackCount
+            case .digests: return unreadDigestCount
+            case .statistics: return recommendationCount
             default: return 0
             }
         }()
@@ -215,7 +116,15 @@ struct SidebarView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1)
-                .background(.red, in: Capsule())
+                .background(
+                    item == .tracks ? .orange
+                        : item == .inbox && inboxHighPriorityCount > 0 ? .red
+                        : item == .inbox ? .blue
+                        : item == .tasks && overdueTaskCount > 0 ? .red
+                        : item == .tasks ? .blue
+                        : .red,
+                    in: Capsule()
+                )
         }
     }
 
@@ -226,61 +135,87 @@ struct SidebarView: View {
         loadCounts(db: db)
         let dbPool = db.dbPool
         countsObservationTask = Task {
-            // Observe tracks, chains, and briefings tables for badge updates
-            let observation = ValueObservation.tracking { db -> (Int, Int, Int) in
+            let observation = ValueObservation.tracking { db -> (Int, Int, Int, Int) in
                 let tracks = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tracks") ?? 0
-                let chains = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM chains") ?? 0
-                let briefings = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM briefings") ?? 0
-                return (tracks, chains, briefings)
+                let briefings = try Int.fetchOne(
+                    db, sql: "SELECT COUNT(*) FROM briefings"
+                ) ?? 0
+                let tasks = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks") ?? 0
+                let inbox = (try? Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inbox_items")) ?? 0
+                return (tracks, briefings, tasks, inbox)
             }
             do {
                 for try await _ in observation.values(in: dbPool).dropFirst() {
-                    guard !Task.isCancelled else { break }
-                    loadCounts(db: appState.databaseManager!)
+                    guard !Task.isCancelled, let dbMgr = appState.databaseManager else { break }
+                    loadCounts(db: dbMgr)
                 }
             } catch {}
         }
     }
 
     private struct SidebarCounts {
-        let statusCounts: [String: Int]
-        let totalCount: Int
-        let ownershipCounts: [String: Int]
-        let unreadChainCount: Int
+        let updatedTrackCount: Int
+        let totalTrackCount: Int
         let unreadDigestCount: Int
         let unreadBriefingCount: Int
+        let recommendationCount: Int
+        let activeTaskCount: Int
+        let overdueTaskCount: Int
+        let inboxPendingCount: Int
+        let inboxHighPriorityCount: Int
     }
 
     private func loadCounts(db: DatabaseManager) {
         Task {
             let result = try? await db.dbPool.read { db -> SidebarCounts in
                 let uid = try TrackQueries.fetchCurrentUserID(db)
+
                 guard let uid else {
                     return SidebarCounts(
-                        statusCounts: [:],
-                        totalCount: 0,
-                        ownershipCounts: [:],
-                        unreadChainCount: 0,
+                        updatedTrackCount: 0,
+                        totalTrackCount: 0,
                         unreadDigestCount: 0,
-                        unreadBriefingCount: 0
+                        unreadBriefingCount: 0,
+                        recommendationCount: 0,
+                        activeTaskCount: 0,
+                        overdueTaskCount: 0,
+                        inboxPendingCount: 0,
+                        inboxHighPriorityCount: 0
                     )
                 }
+
+                let trackCounts = try TrackQueries.fetchCounts(db)
+                let taskCounts = try TaskQueries.fetchCounts(db)
+                let inboxCounts = (try? InboxQueries.fetchCounts(db)) ?? (pending: 0, unread: 0, highPriority: 0)
+
+                let recCount: Int
+                if let allStats = try? ChannelStatsQueries.fetchAll(db, currentUserID: uid) {
+                    recCount = ChannelStatsQueries.computeRecommendations(from: allStats).count
+                } else {
+                    recCount = 0
+                }
                 return SidebarCounts(
-                    statusCounts: try TrackQueries.fetchStatusCounts(db, assigneeUserID: uid),
-                    totalCount: try TrackQueries.fetchTotalCount(db, assigneeUserID: uid),
-                    ownershipCounts: try TrackQueries.fetchOwnershipCounts(db, assigneeUserID: uid),
-                    unreadChainCount: try ChainQueries.fetchUnreadCount(db),
+                    updatedTrackCount: trackCounts.updated,
+                    totalTrackCount: trackCounts.total,
                     unreadDigestCount: try DigestQueries.unreadDigestCount(db),
-                    unreadBriefingCount: try BriefingQueries.unreadCount(db)
+                    unreadBriefingCount: try BriefingQueries.unreadCount(db),
+                    recommendationCount: recCount,
+                    activeTaskCount: taskCounts.active,
+                    overdueTaskCount: taskCounts.overdue,
+                    inboxPendingCount: inboxCounts.pending,
+                    inboxHighPriorityCount: inboxCounts.highPriority
                 )
             }
             if let r = result {
-                self.statusCounts = r.statusCounts
-                self.totalCount = r.totalCount
-                self.ownershipCounts = r.ownershipCounts
-                self.unreadChainCount = r.unreadChainCount
+                self.updatedTrackCount = r.updatedTrackCount
+                self.totalTrackCount = r.totalTrackCount
                 self.unreadDigestCount = r.unreadDigestCount
                 self.unreadBriefingCount = r.unreadBriefingCount
+                self.recommendationCount = r.recommendationCount
+                self.activeTaskCount = r.activeTaskCount
+                self.overdueTaskCount = r.overdueTaskCount
+                self.inboxPendingCount = r.inboxPendingCount
+                self.inboxHighPriorityCount = r.inboxHighPriorityCount
             }
         }
     }

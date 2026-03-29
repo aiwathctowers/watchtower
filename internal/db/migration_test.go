@@ -38,8 +38,8 @@ func TestHasColumn_WithTransaction(t *testing.T) {
 	require.NoError(t, err)
 	defer tx.Rollback()
 
-	assert.True(t, hasColumn(tx, "tracks", "ownership"))
-	assert.True(t, hasColumn(tx, "tracks", "ball_on"))
+	assert.True(t, hasColumn(tx, "tracks", "text"))
+	assert.True(t, hasColumn(tx, "tracks", "priority"))
 	assert.False(t, hasColumn(tx, "tracks", "nonexistent"))
 }
 
@@ -90,22 +90,12 @@ func TestMigrationFromV20_CreatesChains(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
-	// Verify chains table created by v22
-	id, err := db2.CreateChain(Chain{
-		Title: "Test Chain", Slug: "test-chain", Status: "active",
-		ChannelIDs: `["C1"]`, FirstSeen: 1000, LastSeen: 2000, ItemCount: 1,
-	})
-	require.NoError(t, err)
-	assert.Greater(t, id, int64(0))
-
-	// Verify chain_refs work
-	err = db2.InsertChainRef(ChainRef{
-		ChainID: int(id), RefType: "decision",
-		DigestID: 1, DecisionIdx: 0, ChannelID: "C1", Timestamp: 1500,
-	})
-	require.NoError(t, err)
+	// Verify chains/chain_refs tables are DROPPED by v43
+	var n string
+	err = db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chains'").Scan(&n)
+	assert.Equal(t, sql.ErrNoRows, err, "chains table should not exist after v43")
 
 	// Verify user_interactions created by v23
 	_, err = db2.Exec(`INSERT INTO user_interactions (user_a, user_b, period_from, period_to, shared_channels)
@@ -143,14 +133,15 @@ func TestMigrationFromV21_ChainsAndInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
-	// Verify all tables exist and are usable
-	for _, tbl := range []string{"chains", "chain_refs", "user_interactions"} {
-		var n string
-		err := db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n)
-		require.NoError(t, err, "table %q should exist", tbl)
-	}
+	// After v43: chains/chain_refs dropped, user_interactions should exist
+	var n string
+	err = db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='user_interactions'").Scan(&n)
+	require.NoError(t, err, "user_interactions table should exist")
+
+	err = db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chains'").Scan(&n)
+	assert.Equal(t, sql.ErrNoRows, err, "chains should not exist after v43")
 }
 
 // TestMigrationFromV22_UserInteractions tests v23 migration only.
@@ -175,7 +166,7 @@ func TestMigrationFromV22_UserInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
 	// Insert and query to verify table structure
 	err = db2.UpsertUserInteractions([]UserInteraction{
@@ -204,16 +195,7 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 	db1, err := Open(dbPath)
 	require.NoError(t, err)
 
-	// Insert test data in tracks
-	_, err = db1.UpsertTrack(Track{
-		ChannelID: "C1", AssigneeUserID: "U1", Text: "test track",
-		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
-		Ownership: "mine", Participants: "[]", SourceRefs: "[]",
-		Tags: "[]", SubItems: "[]", RelatedDigestIDs: "[]", DecisionOptions: "[]",
-	})
-	require.NoError(t, err)
-
-	// Downgrade to v20 — v21 migration uses hasColumn, will detect ownership exists
+	// Downgrade to v20 — v21 migration will run, then v43 drops/recreates tracks
 	setUserVersion(t, db1, 20)
 	db1.Close()
 
@@ -223,14 +205,16 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
-	// Data should survive
-	tracks, err := db2.GetTracks(TrackFilter{Status: "inbox"})
+	// v45 creates new tracks table — should be usable
+	_, err = db2.UpsertTrack(Track{Text: "new track", Priority: "high"})
+	require.NoError(t, err)
+
+	tracks, err := db2.GetAllActiveTracks()
 	require.NoError(t, err)
 	require.Len(t, tracks, 1)
-	assert.Equal(t, "test track", tracks[0].Text)
-	assert.Equal(t, "mine", tracks[0].Ownership)
+	assert.Equal(t, "new track", tracks[0].Text)
 }
 
 // TestMigrationIdempotent_V22HasColumn tests that v22 migration is idempotent
@@ -240,13 +224,6 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "watchtower.db")
 
 	db1, err := Open(dbPath)
-	require.NoError(t, err)
-
-	// Insert test data in chains
-	chainID, err := db1.CreateChain(Chain{
-		Title: "Existing Chain", Slug: "existing", Status: "active",
-		ChannelIDs: `["C1"]`, FirstSeen: 1000, LastSeen: 2000,
-	})
 	require.NoError(t, err)
 
 	// Downgrade to v21 — v22 migration uses hasColumn on chains.id
@@ -259,12 +236,12 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
-	// Chain data should survive
-	chain, err := db2.GetChainByID(int(chainID))
-	require.NoError(t, err)
-	assert.Equal(t, "Existing Chain", chain.Title)
+	// After v43: chains table should not exist
+	var n string
+	err = db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='chains'").Scan(&n)
+	assert.Equal(t, sql.ErrNoRows, err)
 }
 
 // TestMigrationIdempotent_V23HasColumn tests that v23 migration is idempotent
@@ -292,7 +269,7 @@ func TestMigrationIdempotent_V23HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
 	// Data should survive
 	interactions, err := db2.GetUserInteractions("U1", 1000, 2000)
@@ -307,19 +284,19 @@ func TestUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 }
 
 // TestUserVersion_CustomValue verifies UserVersion after manual set.
 func TestUserVersion_CustomValue(t *testing.T) {
 	db := openTestDB(t)
 
-	_, err := db.Exec("PRAGMA user_version = 42")
+	_, err := db.Exec("PRAGMA user_version = 99")
 	require.NoError(t, err)
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 42, v)
+	assert.Equal(t, 99, v)
 }
 
 // TestChannelNameByID tests the ChannelNameByID helper.
@@ -555,7 +532,7 @@ PRAGMA user_version = 1;
 	// Verify schema version is now 23
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 35, v)
+	assert.Equal(t, 52, v)
 
 	// Verify data survived all migrations
 	var wsName string
@@ -608,33 +585,21 @@ PRAGMA user_version = 1;
 	})
 	require.NoError(t, err)
 
-	// V19 migration: action_items renamed to tracks (v13+ built the table as action_items,
-	// v19 renamed it). Since we started from v1, v10 created action_items, v13 rebuilt it,
-	// v19 renamed it to tracks.
+	// V45 migration: old tracks table dropped, new hybrid v2 tracks table created.
 	trackID, err := db.UpsertTrack(Track{
-		ChannelID: "C1", AssigneeUserID: "U1", Text: "test track",
-		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
-		Participants: "[]", SourceRefs: "[]", Tags: "[]", SubItems: "[]",
-		RelatedDigestIDs: "[]", DecisionOptions: "[]",
+		Text: "test track", Priority: "high",
+		ChannelIDs: `["C1"]`, SourceRefs: `[]`, Tags: `[]`,
 	})
 	require.NoError(t, err)
 	assert.Greater(t, trackID, int64(0))
 
-	// V20 migration: user_profile table should exist
-	require.NoError(t, db.UpsertUserProfile(UserProfile{SlackUserID: "U1", Role: "engineer"}))
-
-	// V21 migration: tracks should have ownership column
 	track, err := db.GetTrackByID(int(trackID))
 	require.NoError(t, err)
-	assert.Equal(t, "mine", track.Ownership)
+	assert.Equal(t, "test track", track.Text)
+	assert.Equal(t, "high", track.Priority)
 
-	// V22 migration: chains should exist
-	chainID, err := db.CreateChain(Chain{
-		Title: "Test", Slug: "test", Status: "active",
-		ChannelIDs: `["C1"]`, FirstSeen: 1000, LastSeen: 2000,
-	})
-	require.NoError(t, err)
-	assert.Greater(t, chainID, int64(0))
+	// V20 migration: user_profile table should exist
+	require.NoError(t, db.UpsertUserProfile(UserProfile{SlackUserID: "U1", Role: "engineer"}))
 
 	// V23 migration: user_interactions should exist
 	err = db.UpsertUserInteractions([]UserInteraction{
@@ -642,19 +607,26 @@ PRAGMA user_version = 1;
 	})
 	require.NoError(t, err)
 
-	// Verify all tables exist
+	// Verify tables exist (chains/chain_refs/track_history dropped by v43)
 	for _, tbl := range []string{
 		"workspace", "users", "channels", "messages", "reactions", "files",
 		"sync_state", "watch_list", "user_checkpoints",
 		"digests", "decision_reads", "user_analyses", "period_summaries",
-		"custom_emojis", "tracks", "track_history",
+		"custom_emojis", "tracks",
 		"feedback", "prompts", "prompt_history",
 		"decision_importance_corrections", "user_profile",
-		"chains", "chain_refs", "user_interactions",
+		"user_interactions",
 	} {
 		var n string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n)
 		require.NoError(t, err, "table %q should exist after full migration from v1", tbl)
+	}
+
+	// Verify dropped tables do NOT exist
+	for _, tbl := range []string{"chains", "chain_refs", "track_history"} {
+		var n string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl).Scan(&n)
+		assert.Equal(t, sql.ErrNoRows, err, "table %q should NOT exist after v43 migration", tbl)
 	}
 }
 
@@ -731,14 +703,6 @@ func TestMigrationPreservesDataAcrossVersions(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = db1.UpsertTrack(Track{
-		ChannelID: "C1", AssigneeUserID: "U1", Text: "review PR",
-		Status: "inbox", Priority: "high", PeriodFrom: 1000, PeriodTo: 2000,
-		Participants: "[]", SourceRefs: "[]", Tags: "[]", SubItems: "[]",
-		RelatedDigestIDs: "[]", DecisionOptions: "[]",
-	})
-	require.NoError(t, err)
-
 	// Drop v22/v23 tables and downgrade
 	_, err = db1.Exec("DROP TABLE IF EXISTS chain_refs")
 	require.NoError(t, err)
@@ -749,12 +713,12 @@ func TestMigrationPreservesDataAcrossVersions(t *testing.T) {
 	setUserVersion(t, db1, 20)
 	db1.Close()
 
-	// Reopen — v21-v23 migrations run
+	// Reopen — v21-v43 migrations run
 	db2, err := Open(dbPath)
 	require.NoError(t, err)
 	defer db2.Close()
 
-	// Verify existing data
+	// Verify existing non-track data is preserved
 	ch, err := db2.GetChannelByID("C1")
 	require.NoError(t, err)
 	assert.Equal(t, "general", ch.Name)
@@ -764,8 +728,9 @@ func TestMigrationPreservesDataAcrossVersions(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "hello", msgs[0].Text)
 
-	tracks, err := db2.GetTracks(TrackFilter{Status: "inbox"})
+	// v43 drops old tracks table, so no old tracks survive.
+	// New v3 tracks table should be empty and usable.
+	tracks, err := db2.GetAllActiveTracks()
 	require.NoError(t, err)
-	require.Len(t, tracks, 1)
-	assert.Equal(t, "review PR", tracks[0].Text)
+	assert.Len(t, tracks, 0)
 }

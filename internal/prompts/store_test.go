@@ -74,7 +74,7 @@ func TestSeedIdempotentWithExisting(t *testing.T) {
 	tmpl, version, err := store2.Get(DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, "custom text", tmpl)
-	assert.Equal(t, 2, version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, version)
 }
 
 func TestGetFromDB(t *testing.T) {
@@ -84,7 +84,7 @@ func TestGetFromDB(t *testing.T) {
 
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
-	assert.Equal(t, 1, version)
+	assert.Equal(t, DefaultVersions[DigestChannel], version)
 	assert.Contains(t, tmpl, "analyzing Slack messages")
 }
 
@@ -132,7 +132,7 @@ func TestUpdate(t *testing.T) {
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, "custom prompt text", tmpl)
-	assert.Equal(t, 2, version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, version)
 }
 
 func TestUpdateMultipleTimes(t *testing.T) {
@@ -140,15 +140,16 @@ func TestUpdateMultipleTimes(t *testing.T) {
 	store := New(database, nil)
 	_ = store.Seed()
 
+	seedVer := DefaultVersions[DigestChannel]
 	for i := 0; i < 5; i++ {
-		text := fmt.Sprintf("version %d text", i+2)
+		text := fmt.Sprintf("version %d text", seedVer+i+1)
 		require.NoError(t, store.Update(DigestChannel, text, fmt.Sprintf("edit %d", i+1)))
 	}
 
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
-	assert.Equal(t, "version 6 text", tmpl)
-	assert.Equal(t, 6, version)
+	assert.Equal(t, fmt.Sprintf("version %d text", seedVer+5), tmpl)
+	assert.Equal(t, seedVer+5, version)
 
 	// History should have all versions
 	history, err := store.History(DigestChannel)
@@ -186,12 +187,12 @@ func TestRollback(t *testing.T) {
 	_ = store.Update(DigestChannel, "v2 text", "tune")
 	_ = store.Update(DigestChannel, "v3 text", "tune")
 
-	err := store.Rollback(DigestChannel, 1)
+	err := store.Rollback(DigestChannel, DefaultVersions[DigestChannel])
 	require.NoError(t, err)
 
 	tmpl, _, err := store.Get(DigestChannel)
 	require.NoError(t, err)
-	assert.Contains(t, tmpl, "analyzing Slack messages") // original v1
+	assert.Contains(t, tmpl, "analyzing Slack messages") // original seed version
 }
 
 func TestRollbackToV2(t *testing.T) {
@@ -201,7 +202,7 @@ func TestRollbackToV2(t *testing.T) {
 	_ = store.Update(DigestChannel, "v2 text", "tune")
 	_ = store.Update(DigestChannel, "v3 text", "tune")
 
-	err := store.Rollback(DigestChannel, 2)
+	err := store.Rollback(DigestChannel, DefaultVersions[DigestChannel]+1)
 	require.NoError(t, err)
 
 	tmpl, _, err := store.Get(DigestChannel)
@@ -218,9 +219,9 @@ func TestHistory(t *testing.T) {
 	history, err := store.History(DigestChannel)
 	require.NoError(t, err)
 	require.Len(t, history, 2)
-	assert.Equal(t, 2, history[0].Version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, history[0].Version)
 	assert.Equal(t, "manual", history[0].Reason)
-	assert.Equal(t, 1, history[1].Version)
+	assert.Equal(t, DefaultVersions[DigestChannel], history[1].Version)
 }
 
 func TestHistoryEmpty(t *testing.T) {
@@ -315,7 +316,7 @@ func TestGetForRole_NoRole(t *testing.T) {
 
 	tmpl, version, err := store.GetForRole(DigestChannel, "")
 	require.NoError(t, err)
-	assert.Equal(t, 1, version)
+	assert.Equal(t, DefaultVersions[DigestChannel], version)
 	assert.Contains(t, tmpl, "analyzing Slack messages")
 }
 
@@ -346,7 +347,7 @@ func TestGetForRole_FallsBackToStandard(t *testing.T) {
 	// No role variant exists — should fall back to standard
 	tmpl, version, err := store.GetForRole(DigestChannel, "some_unknown_role")
 	require.NoError(t, err)
-	assert.Equal(t, 1, version) // from seeded DB
+	assert.Equal(t, DefaultVersions[DigestChannel], version) // from seeded DB
 	assert.Contains(t, tmpl, "analyzing Slack messages")
 }
 
@@ -500,7 +501,7 @@ func TestSuggest_ValidJSON(t *testing.T) {
 	result, err := tuner.Suggest(context.Background(), DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, DigestChannel, result.PromptID)
-	assert.Equal(t, 1, result.CurrentVersion)
+	assert.Equal(t, DefaultVersions[DigestChannel], result.CurrentVersion)
 	assert.Equal(t, "improved template %s", result.Suggestion)
 	assert.Equal(t, "made it better", result.Explanation)
 	assert.Len(t, result.Changes, 2)
@@ -673,7 +674,7 @@ func TestApply(t *testing.T) {
 
 	result := &TuneResult{
 		PromptID:       DigestChannel,
-		CurrentVersion: 1,
+		CurrentVersion: DefaultVersions[DigestChannel],
 		Suggestion:     "applied prompt text",
 		Explanation:    "improved based on feedback",
 		Changes:        []string{"change 1"},
@@ -686,7 +687,7 @@ func TestApply(t *testing.T) {
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, "applied prompt text", tmpl)
-	assert.Equal(t, 2, version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, version)
 
 	// Verify history has the reason
 	history, err := store.History(DigestChannel)
@@ -702,7 +703,7 @@ func TestApply_ManualTune(t *testing.T) {
 
 	result := &TuneResult{
 		PromptID:       DigestChannel,
-		CurrentVersion: 1,
+		CurrentVersion: DefaultVersions[DigestChannel],
 		Suggestion:     "manually tuned",
 		Explanation:    "user wanted changes",
 		Changes:        []string{"change 1"},
@@ -746,7 +747,7 @@ func TestApply_LongExplanationTruncated(t *testing.T) {
 	longExplanation := strings.Repeat("x", 300)
 	result := &TuneResult{
 		PromptID:       DigestChannel,
-		CurrentVersion: 1,
+		CurrentVersion: DefaultVersions[DigestChannel],
 		Suggestion:     "new prompt",
 		Explanation:    longExplanation,
 	}
@@ -993,7 +994,7 @@ func TestApplyImportance(t *testing.T) {
 
 	result := &TuneResult{
 		PromptID:       DigestChannel,
-		CurrentVersion: 1,
+		CurrentVersion: DefaultVersions[DigestChannel],
 		Suggestion:     "improved importance",
 		Explanation:    "tuned",
 	}
@@ -1010,7 +1011,7 @@ func TestApplyImportance(t *testing.T) {
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, "improved importance", tmpl)
-	assert.Equal(t, 2, version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, version)
 }
 
 func TestApplyImportance_VersionMismatch(t *testing.T) {
@@ -1121,7 +1122,7 @@ func TestSuggestAndApplyFlow(t *testing.T) {
 	// Suggest
 	result, err := tuner.Suggest(context.Background(), DigestChannel)
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.CurrentVersion)
+	assert.Equal(t, DefaultVersions[DigestChannel], result.CurrentVersion)
 
 	// Apply
 	err = tuner.Apply(result)
@@ -1131,7 +1132,7 @@ func TestSuggestAndApplyFlow(t *testing.T) {
 	tmpl, version, err := store.Get(DigestChannel)
 	require.NoError(t, err)
 	assert.Equal(t, "concise channel analysis %s", tmpl)
-	assert.Equal(t, 2, version)
+	assert.Equal(t, DefaultVersions[DigestChannel]+1, version)
 
 	// History should record both versions
 	history, err := store.History(DigestChannel)

@@ -10,12 +10,16 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
     let sourceID: String?
     let priority: String?
     let reason: String?
+    let suggestTrack: Bool? // swiftlint:disable:this discouraged_optional_boolean
+    let suggestTask: Bool? // swiftlint:disable:this discouraged_optional_boolean
 
     enum CodingKeys: String, CodingKey {
         case text
         case sourceType = "source_type"
         case sourceID = "source_id"
         case priority, reason
+        case suggestTrack = "suggest_track"
+        case suggestTask = "suggest_task"
     }
 
     init(from decoder: Decoder) throws {
@@ -24,6 +28,8 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
         sourceType = try container.decodeIfPresent(String.self, forKey: .sourceType)
         priority = try container.decodeIfPresent(String.self, forKey: .priority)
         reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        suggestTrack = try container.decodeIfPresent(Bool.self, forKey: .suggestTrack)
+        suggestTask = try container.decodeIfPresent(Bool.self, forKey: .suggestTask)
         // Accept both string and int for source_id
         if let str = try? container.decodeIfPresent(String.self, forKey: .sourceID) {
             sourceID = str
@@ -37,7 +43,8 @@ struct AttentionItem: Decodable, Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.text == rhs.text && lhs.sourceType == rhs.sourceType
             && lhs.sourceID == rhs.sourceID && lhs.priority == rhs.priority
-            && lhs.reason == rhs.reason
+            && lhs.reason == rhs.reason && lhs.suggestTrack == rhs.suggestTrack
+            && lhs.suggestTask == rhs.suggestTask
     }
 }
 
@@ -45,6 +52,7 @@ struct YourDayItem: Decodable, Identifiable, Equatable {
     let id = UUID()
     let text: String
     let trackID: Int?
+    let taskID: Int?
     let dueDate: String?
     let priority: String?
     let status: String?
@@ -53,12 +61,14 @@ struct YourDayItem: Decodable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case text
         case trackID = "track_id"
+        case taskID = "task_id"
         case dueDate = "due_date"
         case priority, status, ownership
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.text == rhs.text && lhs.trackID == rhs.trackID
+            && lhs.taskID == rhs.taskID
             && lhs.dueDate == rhs.dueDate && lhs.priority == rhs.priority
             && lhs.status == rhs.status && lhs.ownership == rhs.ownership
     }

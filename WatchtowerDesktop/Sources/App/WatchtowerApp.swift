@@ -36,12 +36,14 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
                 if let digestID = userInfo["digestId"] as? Int {
                     appState?.navigateToDigest(digestID)
                 } else {
-                    appState?.selectedDestination = .chains
+                    appState?.selectedDestination = .digests
                 }
             case "track", "track_update":
                 appState?.selectedDestination = .tracks
+            case "task_overdue":
+                appState?.selectedDestination = .tasks
             case "daily_summary":
-                appState?.selectedDestination = .chains
+                appState?.selectedDestination = .digests
             default:
                 break
             }
@@ -91,6 +93,28 @@ struct WatchtowerApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                .background(SettingsWindowAccessor())
+        }
+    }
+}
+
+/// Makes the Settings window appear on the same fullscreen Space as the main window.
+struct SettingsWindowAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowView { SettingsWindowView() }
+    func updateNSView(_ nsView: SettingsWindowView, context: Context) {}
+}
+
+class SettingsWindowView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.collectionBehavior.insert(.canJoinAllSpaces)
+        window.level = .floating
+        // Reset to normal level after a brief delay so the window doesn't stay always-on-top
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak window] in
+            window?.level = .normal
+            window?.collectionBehavior.remove(.canJoinAllSpaces)
+            window?.collectionBehavior.insert(.fullScreenAuxiliary)
         }
     }
 }
@@ -109,6 +133,9 @@ class OpaqueBackgroundView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
+
+        // Persist window frame (position + size) across launches
+        window.setFrameAutosaveName("WatchtowerMainWindow")
 
         window.isOpaque = true
         window.backgroundColor = .windowBackgroundColor

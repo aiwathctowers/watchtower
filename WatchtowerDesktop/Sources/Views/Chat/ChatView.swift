@@ -18,6 +18,7 @@ struct ChatView: View {
 /// Extracted so that @State (historyWidth, showHistory) lives here — survives tab switches
 /// because AppState keeps the VMs alive and this view just re-renders around them.
 private struct ChatSplitView: View {
+    @Environment(AppState.self) private var appState
     @Bindable var chatVM: ChatViewModel
     let historyVM: ChatHistoryViewModel
     @State private var showHistory = true
@@ -112,6 +113,15 @@ private struct ChatSplitView: View {
             Spacer()
 
             Button {
+                appState.startOnboarding()
+            } label: {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(appState.profileComplete ? "Update Profile" : "Setup Profile")
+
+            Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showHistory.toggle()
                 }
@@ -188,6 +198,8 @@ private struct ChatSplitView: View {
             Text("Press \(Image(systemName: "command")) N or click \"+\" to begin")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
+
+            setupProfileButton
         }
         .padding(.top, 60)
     }
@@ -205,7 +217,22 @@ private struct ChatSplitView: View {
                 quickPromptButton("Summarize activity")
             }
             .padding(.bottom, 20)
+
+            setupProfileButton
         }
+    }
+
+    private var setupProfileButton: some View {
+        Button {
+            appState.startOnboarding()
+        } label: {
+            Label(
+                appState.profileComplete ? "Update Profile" : "Setup Profile",
+                systemImage: "person.crop.circle.badge.questionmark"
+            )
+        }
+        .buttonStyle(.bordered)
+        .padding(.top, 8)
     }
 
     private func quickPromptButton(_ text: String) -> some View {

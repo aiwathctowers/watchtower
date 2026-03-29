@@ -52,6 +52,40 @@ func NewClaudeGenerator(model, claudePath string) *ClaudeGenerator {
 	return &ClaudeGenerator{model: model, claudePath: claudePath}
 }
 
+// ValidateModel sends a minimal request to verify the configured model is valid.
+// Returns nil if the model works, or an error describing the problem.
+func (g *ClaudeGenerator) ValidateModel() error {
+	claudeBin := claude.FindBinary(g.claudePath)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, claudeBin,
+		"-p", "reply ok",
+		"--output-format", "json",
+		"--model", g.model,
+		"--no-session-persistence",
+		"--tools", "",
+		"--max-tokens", "10",
+	)
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Dir = os.TempDir()
+
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("model validation failed for %q: %w", g.model, err)
+	}
+
+	resp, err := parseCLIOutput(output)
+	if err != nil {
+		return fmt.Errorf("model validation: unexpected response for %q: %w", g.model, err)
+	}
+	if resp.IsError {
+		return fmt.Errorf("model %q is not available: %s", g.model, resp.Result)
+	}
+	return nil
+}
+
 // cliUsage is the nested usage object in the Claude CLI response.
 type cliUsage struct {
 	InputTokens              int `json:"input_tokens"`

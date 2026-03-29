@@ -413,12 +413,29 @@ struct PromptID: Identifiable {
 let sharedPromptLabels: [String: String] = [
     "digest.channel": "Channel Digest",
     "digest.daily": "Daily Rollup",
-    "digest.weekly": "Weekly Summary",
+    "digest.weekly": "Weekly Trends",
     "digest.period": "Period Summary",
-    "tracks.extract": "Tracks Extract",
-    "tracks.update": "Tracks Update",
-    "analysis.user": "User Analysis",
-    "analysis.period": "Period Analysis"
+    "tracks.update": "Track Update Check",
+    "tracks.extract": "Track Extraction",
+    "guide.user": "Communication Guide",
+    "guide.period": "Team Guide",
+    "people.reduce": "People Card",
+    "people.team": "Team Summary",
+    "briefing.daily": "Daily Briefing"
+]
+
+// Shared prompt descriptions — what each prompt does
+let sharedPromptDescriptions: [String: String] = [
+    "digest.channel": "Per-channel message analysis and topic extraction",
+    "digest.daily": "Cross-channel daily summary rollup",
+    "digest.weekly": "Week-over-week trends analysis",
+    "digest.period": "Comprehensive period overview",
+    "tracks.extract": "Per-channel action item extraction with cross-channel merge",
+    "guide.user": "Personal communication coaching per user",
+    "guide.period": "Cross-user communication tips for the team",
+    "people.reduce": "Build unified user profile from signals",
+    "people.team": "Cross-user attention priorities and tips",
+    "briefing.daily": "Personalized morning briefing summary"
 ]
 
 // MARK: - Stat Card
@@ -469,14 +486,18 @@ struct PromptCard: View {
     private var categoryColor: Color {
         if prompt.id.hasPrefix("digest") { return .blue }
         if prompt.id.hasPrefix("tracks") { return .orange }
-        if prompt.id.hasPrefix("analysis") { return .purple }
+        if prompt.id.hasPrefix("guide") { return .purple }
+        if prompt.id.hasPrefix("people") { return .pink }
+        if prompt.id.hasPrefix("briefing") { return .green }
         return .gray
     }
 
     private var categoryLabel: String {
         if prompt.id.hasPrefix("digest") { return "Digest" }
         if prompt.id.hasPrefix("tracks") { return "Tracks" }
-        if prompt.id.hasPrefix("analysis") { return "Analysis" }
+        if prompt.id.hasPrefix("guide") { return "Guide" }
+        if prompt.id.hasPrefix("people") { return "People" }
+        if prompt.id.hasPrefix("briefing") { return "Briefing" }
         return "Other"
     }
 
@@ -508,6 +529,14 @@ struct PromptCard: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+
+                // Description
+                if let desc = sharedPromptDescriptions[prompt.id] {
+                    Text(desc)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
 
                 // Preview of template
                 Text(prompt.template.prefix(80) + (prompt.template.count > 80 ? "..." : ""))

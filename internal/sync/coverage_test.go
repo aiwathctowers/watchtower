@@ -97,6 +97,13 @@ func TestSyncEmojiErrorNonFatal(t *testing.T) {
 			"ok": true, "user_id": "U001", "user": "alice", "team_id": "T024BE7LD",
 		})
 	})
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "messages": []any{}, "has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
+	})
 
 	ts := newTestSetup(t, mux)
 
@@ -196,6 +203,13 @@ func TestSyncCurrentUserRetryOnCachedWorkspace(t *testing.T) {
 	mux.HandleFunc("/emoji.list", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "emoji": map[string]string{}})
+	})
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "messages": []any{}, "has_more": false,
+			"response_metadata": map[string]any{"next_cursor": ""},
+		})
 	})
 
 	ts := newTestSetup(t, mux)
@@ -517,13 +531,11 @@ func TestResultFromSnapshot(t *testing.T) {
 	snap := Snapshot{
 		StartTime:       time.Now().Add(-30 * time.Second),
 		MessagesFetched: 500,
-		ThreadsFetched:  100,
 	}
 
 	// Without error
 	result := ResultFromSnapshot(snap, nil)
 	assert.Equal(t, 500, result.MessagesFetched)
-	assert.Equal(t, 100, result.ThreadsFetched)
 	assert.Empty(t, result.Error)
 	assert.InDelta(t, 30.0, result.DurationSecs, 2.0)
 
@@ -541,7 +553,6 @@ func TestWriteAndReadSyncResult(t *testing.T) {
 		FinishedAt:      time.Now(),
 		DurationSecs:    30.0,
 		MessagesFetched: 500,
-		ThreadsFetched:  100,
 		Error:           "",
 	}
 
@@ -556,7 +567,6 @@ func TestWriteAndReadSyncResult(t *testing.T) {
 	loaded, err := ReadSyncResult(path)
 	require.NoError(t, err)
 	assert.Equal(t, 500, loaded.MessagesFetched)
-	assert.Equal(t, 100, loaded.ThreadsFetched)
 	assert.InDelta(t, 30.0, loaded.DurationSecs, 0.1)
 }
 

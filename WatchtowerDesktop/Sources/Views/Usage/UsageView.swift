@@ -4,9 +4,7 @@ import GRDB
 struct UsageView: View {
     @Environment(AppState.self) private var appState
     @State private var selectedTab: Tab = .progress
-    @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
-    @State private var usage: TokenUsageSummary?
-    @State private var isLoading = false
+    @State private var viewModel = PipelineHistoryViewModel()
 
     enum Tab: String, CaseIterable {
         case progress = "Progress"
@@ -25,122 +23,145 @@ struct UsageView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    switch selectedTab {
-                    case .progress:
-                        ProgressDetailContent()
-                            .environment(appState)
-                    case .usage:
-                        historicalSection
-                    }
+            switch selectedTab {
+            case .progress:
+                ScrollView {
+                    ProgressDetailContent()
+                        .environment(appState)
+                        .padding(20)
                 }
-                .padding(20)
+            case .usage:
+                usageContent
             }
         }
-        .onAppear { loadUsage() }
+        .onAppear {
+            if let db = appState.databaseManager {
+                viewModel.start(dbPool: db.dbPool)
+            }
+        }
+        .onDisappear {
+            viewModel.stop()
+        }
     }
 
-    // MARK: - Historical Section
+    // MARK: - Usage Content
 
-    @ViewBuilder
-    private var historicalSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Historical Usage")
-                    .font(.title2)
-                    .fontWeight(.bold)
-
-                Spacer()
-
-                dayPicker
-            }
-
-            if let usage, !usage.rows.isEmpty {
-                totalSummary(usage)
-                byModelSection(usage)
-                byFeatureSection(usage)
-            } else if isLoading {
+    private var usageContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Header with day picker
                 HStack {
+                    Text("AI Usage Log")
+                        .font(.title2)
+                        .fontWeight(.bold)
                     Spacer()
-                    ProgressView()
-                    Spacer()
+                    dayPicker
                 }
-            } else {
-                Text("No AI usage data yet.")
-                    .foregroundStyle(.secondary)
+
+                if viewModel.isLoading {
+                    HStack { Spacer(); ProgressView(); Spacer() }
+                } else if viewModel.runs.isEmpty {
+                    Text("No AI calls on this day.")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 32)
+                } else {
+                    // Day summary
+                    daySummary
+                    // Cost breakdown chart
+                    costChart
+                    // Chronological log
+                    runsList
+                }
             }
+            .padding(20)
         }
     }
+
+    // MARK: - Day Picker
 
     private var dayPicker: some View {
         HStack(spacing: 8) {
-            Button {
-                selectedDate = Calendar.current.date(
-                    byAdding: .day, value: -1, to: selectedDate
-                ) ?? selectedDate
-                loadUsage()
-            } label: {
+            Button { viewModel.goToPreviousDay() } label: {
                 Image(systemName: "chevron.left")
             }
             .buttonStyle(.borderless)
 
-            Text(selectedDate, style: .date)
+            Text(viewModel.selectedDate, style: .date)
                 .font(.subheadline)
                 .monospacedDigit()
                 .frame(minWidth: 100)
 
-            Button {
-                let next = Calendar.current.date(
-                    byAdding: .day, value: 1, to: selectedDate
-                ) ?? selectedDate
-                let today = Calendar.current.startOfDay(for: Date())
-                if next <= today {
-                    selectedDate = next
-                    loadUsage()
-                }
-            } label: {
+            Button { viewModel.goToNextDay() } label: {
                 Image(systemName: "chevron.right")
             }
             .buttonStyle(.borderless)
-            .disabled(Calendar.current.isDateInToday(selectedDate))
+            .disabled(viewModel.isToday)
 
-            Button("Today") {
-                selectedDate = Calendar.current.startOfDay(for: Date())
-                loadUsage()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(Calendar.current.isDateInToday(selectedDate))
+            Button("Today") { viewModel.goToToday() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(viewModel.isToday)
         }
     }
 
-    private func totalSummary(_ usage: TokenUsageSummary) -> some View {
-        GroupBox("Total") {
+    // MARK: - Day Summary
+
+    private var daySummary: some View {
+        GroupBox {
             HStack(spacing: 24) {
-                costItem(label: "AI Calls", value: "\(usage.totalCalls)")
-                costItem(label: "Input (clean)", value: formatTokens(usage.totalInputTokens), tooltip: "Estimated tokens from Watchtower prompts (~4 chars/token)")
-                costItem(label: "Output", value: formatTokens(usage.totalOutputTokens))
-                costItem(label: "Cost", value: formatCost(usage.totalCost))
+                summaryItem(label: "AI Calls", value: "\(viewModel.totalCalls)")
+                summaryItem(
+                    label: "Input (clean)",
+                    value: formatTokens(viewModel.totalInputTokens),
+                    tooltip: "Estimated tokens from Watchtower prompts (~4 chars/token)"
+                )
+                summaryItem(
+                    label: "Input (full)",
+                    value: formatTokens(viewModel.totalApiTokens),
+                    tooltip: "Total input tokens processed by the API, including CLI overhead and caching"
+                )
+                summaryItem(label: "Output", value: formatTokens(viewModel.totalOutputTokens))
+                summaryItem(label: "Cost", value: formatCost(viewModel.totalCost))
             }
             .padding(4)
         }
     }
 
-    private func byModelSection(_ usage: TokenUsageSummary) -> some View {
-        GroupBox("By Model") {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(usage.byModel, id: \.model) { entry in
-                    HStack {
-                        Text(entry.model)
-                            .font(.body.monospaced())
-                        Spacer()
-                        Text("\(entry.calls) calls")
+    // MARK: - Cost Chart
+
+    private var costChart: some View {
+        let shares = viewModel.costByPipeline
+        let maxCost = shares.map(\.cost).max() ?? 1
+
+        return GroupBox("Cost by Pipeline") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(shares) { share in
+                    HStack(spacing: 8) {
+                        Image(systemName: share.icon)
+                            .frame(width: 16)
+                            .foregroundStyle(.secondary)
+                        Text(share.label)
+                            .frame(width: 110, alignment: .leading)
+                            .font(.callout)
+
+                        GeometryReader { geo in
+                            let fraction = maxCost > 0 ? share.cost / maxCost : 0
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(pipelineColor(share.pipeline))
+                                .frame(width: max(geo.size.width * fraction, 2))
+                        }
+                        .frame(height: 16)
+
+                        Text("\(share.calls) calls")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(formatCost(entry.cost))
+                            .frame(width: 55, alignment: .trailing)
+
+                        Text(formatCost(share.cost))
                             .monospacedDigit()
                             .fontWeight(.medium)
+                            .frame(width: 70, alignment: .trailing)
                     }
                 }
             }
@@ -148,47 +169,26 @@ struct UsageView: View {
         }
     }
 
-    private func byFeatureSection(_ usage: TokenUsageSummary) -> some View {
-        let bySource = groupBySource(usage.rows)
-        return GroupBox("By Feature") {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(bySource, id: \.source) { entry in
-                    HStack {
-                        Text(entry.label)
-                        Spacer()
-                        Text("\(entry.calls) calls")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(formatCost(entry.cost))
-                            .monospacedDigit()
-                            .fontWeight(.medium)
+    // MARK: - Runs List
+
+    private var runsList: some View {
+        GroupBox("Requests") {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(viewModel.runs) { run in
+                    RunRow(run: run, steps: viewModel.steps[run.id]) {
+                        viewModel.loadSteps(for: run.id)
+                    }
+                    if run.id != viewModel.runs.last?.id {
+                        Divider()
                     }
                 }
-            }
-            .padding(4)
-        }
-    }
-
-    // MARK: - Data Loading
-
-    private func loadUsage() {
-        guard let db = appState.databaseManager else { return }
-        isLoading = true
-        let date = selectedDate
-        Task.detached {
-            let result = try? await db.dbPool.read { db in
-                try TokenUsageQueries.fetchUsage(db, on: date)
-            }
-            await MainActor.run {
-                usage = result
-                isLoading = false
             }
         }
     }
 
     // MARK: - Helpers
 
-    private func costItem(label: String, value: String, tooltip: String? = nil) -> some View {
+    private func summaryItem(label: String, value: String, tooltip: String? = nil) -> some View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.headline)
@@ -200,51 +200,213 @@ struct UsageView: View {
         .help(tooltip ?? "")
     }
 
-    private func formatTokens(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        } else if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000)
+    private func pipelineColor(_ pipeline: String) -> Color {
+        switch pipeline {
+        case "digests": return .blue
+        case "tracks": return .orange
+        case "people": return .purple
+        case "briefing": return .green
+        case "inbox": return .cyan
+        default: return .gray
         }
-        return "\(count)"
     }
+}
 
-    private func formatCost(_ cost: Double) -> String {
-        if cost < 0.01 { return String(format: "$%.4f", cost) }
-        return String(format: "$%.2f", cost)
-    }
+// MARK: - Run Row
 
-    private struct SourceEntry: Identifiable {
-        let source: String
-        let label: String
-        let calls: Int
-        let cost: Double
-        var id: String { source }
-    }
+private struct RunRow: View {
+    let run: PipelineRun
+    let steps: [PipelineStepRecord]?
+    let onExpand: () -> Void
 
-    private func groupBySource(_ rows: [TokenUsageRow]) -> [SourceEntry] {
-        var map: [String: (calls: Int, cost: Double)] = [:]
-        for row in rows {
-            let existing = map[row.source, default: (0, 0)]
-            map[row.source] = (existing.calls + row.calls, existing.cost + row.costUSD)
-        }
+    @State private var isExpanded = false
 
-        let labels: [String: String] = [
-            "digests": "Digests",
-            "people": "People Analytics",
-            "summaries": "Period Summaries",
-            "tracks": "Tracks"
-        ]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row
+            Button {
+                isExpanded.toggle()
+                if isExpanded { onExpand() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
 
-        return map
-            .map {
-                SourceEntry(
-                    source: $0.key,
-                    label: labels[$0.key] ?? $0.key,
-                    calls: $0.value.calls,
-                    cost: $0.value.cost
-                )
+                    Image(systemName: run.pipelineIcon)
+                        .foregroundStyle(pipelineColor(run.pipeline))
+                        .frame(width: 18)
+
+                    Text(run.pipelineTitle)
+                        .fontWeight(.medium)
+                        .frame(width: 100, alignment: .leading)
+
+                    Text(run.model)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if run.status == "error" {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    }
+
+                    if run.aiCallCount > 1 {
+                        Text("\(run.aiCallCount) calls")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(run.source)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary)
+                        .clipShape(Capsule())
+
+                    tokenBadge("In", count: run.inputTokens)
+                    tokenBadge("Out", count: run.outputTokens)
+
+                    Text(formatCost(run.costUsd))
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                        .frame(width: 70, alignment: .trailing)
+
+                    Text(timeString(run.startedAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 55, alignment: .trailing)
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
             }
-            .sorted { $0.cost > $1.cost }
+            .buttonStyle(.plain)
+
+            // Expanded steps
+            if isExpanded {
+                expandedContent
+                    .padding(.leading, 30)
+                    .padding(.bottom, 8)
+            }
+        }
     }
+
+    @ViewBuilder
+    private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Run details
+            HStack(spacing: 16) {
+                if run.durationSeconds > 0 {
+                    Label(String(format: "%.1fs", run.durationSeconds), systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if run.itemsFound > 0 {
+                    Label("\(run.itemsFound) items", systemImage: "number")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if run.totalApiTokens > 0 {
+                    Label("API total: \(formatTokens(run.totalApiTokens))", systemImage: "arrow.up.arrow.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.bottom, 4)
+
+            if !run.errorMsg.isEmpty {
+                Text(run.errorMsg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.bottom, 4)
+            }
+
+            // Steps
+            if let steps, !steps.isEmpty {
+                ForEach(steps) { step in
+                    HStack(spacing: 8) {
+                        Text("\(step.step)/\(step.total)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 30, alignment: .trailing)
+
+                        Text(step.channelName.isEmpty ? "step \(step.step)" : "#\(step.channelName)")
+                            .font(.caption)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        if step.messageCount > 0 {
+                            Text("\(step.messageCount) msgs")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        tokenBadge("In", count: step.inputTokens, small: true)
+                        tokenBadge("Out", count: step.outputTokens, small: true)
+
+                        Text(formatCost(step.costUsd))
+                            .font(.caption)
+                            .monospacedDigit()
+                            .frame(width: 60, alignment: .trailing)
+                    }
+                    .padding(.vertical, 1)
+                }
+            } else if steps == nil {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private func tokenBadge(_ label: String, count: Int, small: Bool = false) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .font(small ? .system(size: 9) : .caption2)
+                .foregroundStyle(.tertiary)
+            Text(formatTokens(count))
+                .font(small ? .caption2 : .caption)
+                .monospacedDigit()
+        }
+    }
+
+    private func pipelineColor(_ pipeline: String) -> Color {
+        switch pipeline {
+        case "digests": return .blue
+        case "tracks": return .orange
+        case "people": return .purple
+        case "briefing": return .green
+        case "inbox": return .cyan
+        default: return .gray
+        }
+    }
+}
+
+// MARK: - Formatting Helpers
+
+private func formatTokens(_ count: Int) -> String {
+    if count >= 1_000_000 {
+        return String(format: "%.1fM", Double(count) / 1_000_000)
+    } else if count >= 1_000 {
+        return String(format: "%.1fK", Double(count) / 1_000)
+    }
+    return "\(count)"
+}
+
+private func formatCost(_ cost: Double) -> String {
+    if cost < 0.01 { return String(format: "$%.4f", cost) }
+    return String(format: "$%.2f", cost)
+}
+
+private func timeString(_ iso: String) -> String {
+    let fmt = ISO8601DateFormatter()
+    guard let date = fmt.date(from: iso) else { return "" }
+    let df = DateFormatter()
+    df.dateFormat = "HH:mm"
+    return df.string(from: date)
 }

@@ -256,6 +256,25 @@ func (db *DB) UnreadDigestChannelIDs() ([]string, error) {
 	return ids, rows.Err()
 }
 
+// ChannelIDsWithoutLastRead returns IDs of member channels that have no last_read cursor yet.
+// Used on first run to pre-fetch read state before any digests exist.
+func (db *DB) ChannelIDsWithoutLastRead() ([]string, error) {
+	rows, err := db.Query(`SELECT id FROM channels WHERE is_member = 1 AND (last_read = '' OR last_read IS NULL)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // UpdateChannelLastRead updates only the last_read cursor for a channel.
 func (db *DB) UpdateChannelLastRead(channelID, lastRead string) error {
 	_, err := db.Exec(`UPDATE channels SET last_read = ? WHERE id = ? AND (last_read = '' OR last_read < ?)`,
@@ -321,12 +340,30 @@ func (db *DB) AutoMarkReadFromSlack() (digestsMarked, tracksMarked int64, err er
 	// This is covered implicitly — the desktop app checks digest.read_at for the
 	// digest-level read status. Individual decision_reads are optional granularity.
 
-	// 4. Mark tracks as read (has_updates = 0, which is the "read" indicator for tracks)
-	// when source_message_ts <= channel's last_read.
-	// Tracks don't have a read_at column — they use status. We'll mark inbox tracks
-	// that have been read in Slack by checking source_message_ts.
-	// Actually, tracks have has_updates flag. Let's skip tracks for now since they don't
-	// have a direct "read" concept like digests do.
+	// 4. Mark tracks as read when ALL their related digests are read.
+	// Tracks reference digests via related_digest_ids (JSON array). A track is safe to
+	// mark read only when every linked digest has read_at set — this cascades from the
+	// channel digest read logic above, so we never mark a track read unless the user
+	// actually read the underlying channels in Slack.
+	// We only touch tracks that have has_updates=1 (i.e. pending user attention).
+	res, err = db.Exec(`
+		UPDATE tracks SET has_updates = 0, read_at = ` + now + `
+		WHERE has_updates = 1
+		  AND related_digest_ids != '[]'
+		  AND related_digest_ids != ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM digests d
+			WHERE d.read_at IS NULL
+			  AND EXISTS (
+				SELECT 1
+				FROM json_each(tracks.related_digest_ids) je
+				WHERE je.value = d.id
+			  )
+		  )`)
+	if err != nil {
+		return digestsMarked, 0, fmt.Errorf("auto-marking tracks: %w", err)
+	}
+	tracksMarked, _ = res.RowsAffected()
 
-	return digestsMarked, 0, nil
+	return digestsMarked, tracksMarked, nil
 }

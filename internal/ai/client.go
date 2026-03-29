@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,65 @@ import (
 
 	"watchtower/internal/claude"
 )
+
+// Usage holds token and cost metrics from an AI call.
+type Usage struct {
+	InputTokens    int
+	OutputTokens   int
+	CostUSD        float64
+	TotalAPITokens int
+}
+
+// cliUsage is the nested usage object in the Claude CLI JSON response.
+type cliUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// cliResponse is the JSON structure returned by `claude --output-format json`.
+type cliResponse struct {
+	Type       string   `json:"type"`
+	Result     string   `json:"result"`
+	CostUSD    float64  `json:"total_cost_usd"`
+	DurationMS int      `json:"duration_ms"`
+	NumTurns   int      `json:"num_turns"`
+	IsError    bool     `json:"is_error"`
+	SessionID  string   `json:"session_id"`
+	Usage      cliUsage `json:"usage"`
+}
+
+// parseCLIOutput handles both output formats from the Claude CLI:
+//   - Single JSON object: {"result": "...", ...}
+//   - Streaming JSON array: [{"type":"system",...}, ..., {"type":"result","result":"...",...}]
+func parseCLIOutput(output []byte) (*cliResponse, error) {
+	trimmed := bytes.TrimSpace(output)
+
+	// Try single JSON object first (legacy format)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var resp cliResponse
+		if err := json.Unmarshal(trimmed, &resp); err == nil {
+			return &resp, nil
+		}
+	}
+
+	// Try JSON array (streaming format) — find the "result" event
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var events []cliResponse
+		if err := json.Unmarshal(trimmed, &events); err != nil {
+			return nil, fmt.Errorf("parsing claude CLI output array: %w", err)
+		}
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Type == "result" {
+				return &events[i], nil
+			}
+		}
+		return nil, fmt.Errorf("no result event found in claude CLI streaming output (%d events)", len(events))
+	}
+
+	return nil, fmt.Errorf("unexpected claude CLI output format: %.200s", string(trimmed))
+}
 
 // Client wraps the Claude Code CLI for AI queries.
 type Client struct {
@@ -161,9 +221,10 @@ func (c *Client) Query(ctx context.Context, systemPrompt, userMessage, sessionID
 }
 
 // QuerySync sends a non-streaming request via the Claude Code CLI and returns
-// the full response text. Pass a non-empty sessionID to resume an existing session.
-func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, error) {
-	args := c.buildArgs(systemPrompt, userMessage, "text", sessionID)
+// the full response text and token usage. Pass a non-empty sessionID to resume
+// an existing session.
+func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessionID string) (string, *Usage, error) {
+	args := c.buildArgs(systemPrompt, userMessage, "json", sessionID)
 	cmd := exec.CommandContext(ctx, c.claudeCmd, args...)
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(os.Interrupt)
@@ -176,10 +237,28 @@ func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessi
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", classifyError(err, stderrBuf.String())
+		return "", nil, classifyError(err, stderrBuf.String())
 	}
 
-	return strings.TrimRight(string(output), "\n"), nil
+	resp, err := parseCLIOutput(output)
+	if err != nil {
+		// Fallback: treat as plain text if JSON parsing fails (e.g. old CLI version)
+		return strings.TrimRight(string(output), "\n"), nil, nil //nolint:nilerr // intentional fallback to plain text
+	}
+
+	if resp.IsError {
+		return "", nil, fmt.Errorf("claude returned error: %s", resp.Result)
+	}
+
+	totalAPI := resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens
+	usage := &Usage{
+		InputTokens:    resp.Usage.InputTokens,
+		OutputTokens:   resp.Usage.OutputTokens,
+		CostUSD:        resp.CostUSD,
+		TotalAPITokens: totalAPI,
+	}
+
+	return strings.TrimRight(resp.Result, "\n"), usage, nil
 }
 
 // streamEvent represents a JSON event from Claude Code CLI stream-json output.

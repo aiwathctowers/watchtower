@@ -9,6 +9,13 @@ import (
 	"watchtower/internal/sessions"
 )
 
+// validateModel is a no-op kept for call-site compatibility.
+// Model validation was removed — new model IDs often fail the check
+// before the CLI is updated, producing false negatives.
+func validateModel(_ *config.Config) error {
+	return nil
+}
+
 // cliGenerator creates a bare ClaudeGenerator for one-off CLI commands.
 func cliGenerator(cfg *config.Config) digest.Generator {
 	return digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
@@ -19,12 +26,10 @@ func cliGenerator(cfg *config.Config) digest.Generator {
 // The pool only limits how many claude processes run in parallel.
 func cliPooledGenerator(cfg *config.Config, logger *log.Logger) (digest.Generator, func()) {
 	rawGen := digest.NewClaudeGenerator(cfg.Digest.Model, cfg.ClaudePath)
-	poolSize := cfg.Digest.Workers
+	poolSize := cfg.AI.Workers
 	if poolSize <= 0 {
-		poolSize = config.DefaultDigestWorkers
+		poolSize = config.DefaultAIWorkers
 	}
-	const pipelineHeadroom = 5 // extra slots for analysis + tracks + chains workers
-	poolSize += pipelineHeadroom
 	pool := sessions.NewSessionPool(poolSize)
 	gen := digest.NewPooledGenerator(rawGen, pool)
 

@@ -1,4 +1,4 @@
-// Package tracks provides track pipeline and generation for workspace conversation grouping.
+// Package tracks provides per-channel extraction of action-item tracks with cross-channel merging.
 package tracks
 
 import (
@@ -21,9 +21,6 @@ import (
 
 // DefaultWindowHours is the default lookback period for track extraction.
 const DefaultWindowHours = 24
-
-// DefaultWorkers is the number of parallel AI workers.
-const DefaultWorkers = 3
 
 // validCategories is the set of allowed track categories.
 var validCategories = map[string]bool{
@@ -51,8 +48,6 @@ type aiItem struct {
 	StatusHint      string          `json:"status_hint"` // "done", "active", or empty
 	Text            string          `json:"text"`
 	Context         string          `json:"context"`
-	ChannelID       string          `json:"channel_id"`
-	ChannelName     string          `json:"channel_name"`
 	SourceMsgTS     string          `json:"source_message_ts"`
 	Priority        string          `json:"priority"`
 	DueDate         string          `json:"due_date"` // ISO YYYY-MM-DD or empty
@@ -68,7 +63,6 @@ type aiItem struct {
 	Ownership       string          `json:"ownership"`     // "mine", "delegated", "watching"
 	BallOn          string          `json:"ball_on"`       // user_id of next actor
 	OwnerUserID     string          `json:"owner_user_id"` // owner of the track
-	ChainID         *int            `json:"chain_id"`      // optional: link to existing chain
 }
 
 // Pipeline extracts and stores tracks for the current user.
@@ -81,12 +75,7 @@ type Pipeline struct {
 
 	OnProgress ProgressFunc
 
-	// ChainContext is injected by the daemon after chains pipeline runs.
-	// If non-empty, it's appended to the extraction prompt so AI can link tracks to chains.
-	ChainContext string
-
-	// LastStep* fields are set before each OnProgress callback with the
-	// current step's message count and time window. Read them in OnProgress.
+	// LastStep* fields are set before each OnProgress callback.
 	LastStepMessageCount    int
 	LastStepPeriodFrom      time.Time
 	LastStepPeriodTo        time.Time
@@ -95,17 +84,23 @@ type Pipeline struct {
 	LastStepOutputTokens    int
 	LastStepCostUSD         float64
 
+	// LastFrom/LastTo are set after Run() completes, for callers to pass to CompletePipelineRun.
+	LastFrom float64
+	LastTo   float64
+
 	// Accumulated token usage across all Generate calls (thread-safe).
 	totalInputTokens  atomic.Int64
 	totalOutputTokens atomic.Int64
 	totalCostMicro    atomic.Int64 // cost * 1e6 for atomic ops
 	totalAPITokens    atomic.Int64
 
-	// caches (populated once per Run/CheckForUpdates, read by workers)
-	cacheMu      sync.RWMutex
-	channelNames map[string]string
-	userNames    map[string]string
-	profile      *db.UserProfile // loaded once per Run, nil if not available
+	// caches (populated once per Run)
+	cacheMu            sync.RWMutex
+	channelNames       map[string]string
+	userNames          map[string]string
+	profile            *db.UserProfile
+	crossChannelCache  string     // pre-formatted cross-channel section
+	allActiveTracksRef []db.Track // cached active tracks for the run
 }
 
 // New creates a new tracks pipeline.
@@ -123,97 +118,88 @@ func (p *Pipeline) SetPromptStore(store *prompts.Store) {
 	p.promptStore = store
 }
 
-func (p *Pipeline) getPrompt(id string) (string, int) {
-	role := ""
-	if p.profile != nil {
-		role = p.profile.Role
-	}
-
-	if p.promptStore != nil {
-		tmpl, version, err := p.promptStore.GetForRole(id, role)
-		if err == nil {
-			// Prepend role instruction if available
-			roleInstr := prompts.GetRoleInstruction(role)
-			if roleInstr != "" {
-				tmpl = roleInstr + "\n\n" + tmpl
-			}
-			return tmpl, version
-		}
-	}
-
-	// Fallback to default
-	tmpl := prompts.Defaults[id]
-	roleInstr := prompts.GetRoleInstruction(role)
-	if roleInstr != "" {
-		tmpl = roleInstr + "\n\n" + tmpl
-	}
-	return tmpl, 0
-}
-
 // AccumulatedUsage returns the total token usage accumulated across all Generate calls.
-// Returns (inputTokens, outputTokens, costUSD, overheadTokens).
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
-	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
+	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()),
+		float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
 }
 
-// ReactivateSnoozed checks and reactivates snoozed tracks whose snooze_until has passed.
-func (p *Pipeline) ReactivateSnoozed(_ context.Context) (int, error) {
-	return p.db.ReactivateSnoozedTracks()
-}
-
-// DayWindow returns day-aligned boundaries for the given time.
-// from = start of today (midnight local), to = start of tomorrow.
-// Using fixed boundaries prevents duplicate extraction when the daemon
-// runs repeatedly within the same day — all runs share the same window.
+// DayWindow returns a 24h window ending at now.
 func DayWindow(now time.Time) (from, to float64) {
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	// M1: use time.Date for next day instead of Add(24h) to handle DST correctly
-	dayEnd := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
-	return float64(dayStart.Unix()), float64(dayEnd.Unix())
+	to2 := float64(now.Unix())
+	from2 := float64(now.Add(-DefaultWindowHours * time.Hour).Unix())
+	return from2, to2
 }
 
-// Run executes the tracks pipeline for the current user.
-// Returns the number of new tracks found.
-func (p *Pipeline) Run(ctx context.Context) (int, error) {
+// lastTracksTime returns the end of the last successful tracks pipeline run,
+// or falls back to DayWindow if none found or too old (>24h).
+func (p *Pipeline) lastTracksTime() float64 {
+	periodTo, err := p.db.GetLatestPipelineRunPeriodTo("tracks")
+	if err != nil || periodTo == 0 {
+		return 0
+	}
+
+	// Cap at 24h ago to avoid processing huge windows after long outages.
+	maxLookback := float64(time.Now().Add(-DefaultWindowHours * time.Hour).Unix())
+	if periodTo < maxLookback {
+		return maxLookback
+	}
+
+	return periodTo
+}
+
+// Run executes the tracks extraction pipeline.
+// Returns (stored count, error).
+func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	if !p.cfg.Digest.Enabled {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	currentUserID, err := p.db.GetCurrentUserID()
 	if err != nil {
-		return 0, fmt.Errorf("getting current user: %w", err)
+		return 0, 0, fmt.Errorf("getting current user: %w", err)
 	}
 	if currentUserID == "" {
 		p.logger.Println("tracks: no current user set, skipping")
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	now := time.Now()
 
-	// Use full initial history window on first run, otherwise just today.
+	// Use full initial history window on first run, incremental on subsequent runs.
 	var from, to float64
+	to = float64(now.Unix())
 	switch hasTracks, err := p.db.HasTracksForUser(currentUserID); {
 	case err != nil:
 		p.logger.Printf("tracks: warning: could not check existing tracks: %v", err)
-		from, to = DayWindow(now)
+		from, _ = DayWindow(now)
 	case !hasTracks:
 		days := p.cfg.Sync.InitialHistoryDays
 		if days <= 0 {
 			days = config.DefaultInitialHistDays
 		}
 		from = float64(now.AddDate(0, 0, -days).Unix())
-		to = float64(now.Unix())
 		p.logger.Printf("tracks: first run — single window of %d days", days)
 	default:
-		from, to = DayWindow(now)
+		if lastTo := p.lastTracksTime(); lastTo > 0 {
+			from = lastTo
+			p.logger.Printf("tracks: incremental from last run period_to=%s",
+				time.Unix(int64(lastTo), 0).Format("2006-01-02 15:04"))
+		} else {
+			from, _ = DayWindow(now)
+		}
 	}
+
+	p.LastFrom = from
+	p.LastTo = to
 
 	p.logger.Printf("tracks: window: from=%s to=%s, user=%s",
 		time.Unix(int64(from), 0).Format("2006-01-02 15:04"),
 		time.Unix(int64(to), 0).Format("2006-01-02 15:04"),
 		currentUserID)
 
-	return p.RunForWindow(ctx, currentUserID, from, to)
+	stored, err := p.RunForWindow(ctx, currentUserID, from, to)
+	return stored, 0, err
 }
 
 // RunForWindow executes track extraction for a specific time window and user.
@@ -231,479 +217,182 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 
 	userName := p.userName(userID)
 
-	// Get channels with messages in the window (non-DM only)
-	channelMsgs, err := p.getMessagesByChannel(from, to)
+	// Pre-load all active tracks once for cross-channel sections.
+	allActive, err := p.db.GetAllActiveTracks()
 	if err != nil {
-		return 0, err
+		p.logger.Printf("tracks: warning: failed to pre-load active tracks: %v", err)
 	}
+	p.cacheMu.Lock()
+	p.allActiveTracksRef = allActive
+	p.crossChannelCache = "" // reset; built lazily per-channel with exclusion
+	p.cacheMu.Unlock()
 
-	if len(channelMsgs) == 0 {
-		p.progress(0, 0, "No messages in window")
-		p.logger.Printf("tracks: no messages found in window [%.0f, %.0f] — check sync status", from, to)
-		return 0, nil
-	}
-
-	// Log channel/message breakdown for diagnostics.
-	totalMsgCount := 0
-	for _, msgs := range channelMsgs {
-		totalMsgCount += len(msgs)
-	}
-	p.logger.Printf("tracks: found %d messages across %d channels in window", totalMsgCount, len(channelMsgs))
-
-	// Delete stale inbox tracks from this window before inserting new ones.
-	if _, err := p.db.DeleteTracksForWindow(userID, from, to); err != nil {
-		p.logger.Printf("tracks: warning: cleanup failed: %v", err)
-	}
-
-	total := len(channelMsgs)
-	workers := DefaultWorkers
-	if workers > total {
-		workers = total
-	}
-
-	p.progress(0, total, fmt.Sprintf("Scanning %d channels (%d messages) for @%s (%d workers)...", total, totalMsgCount, userName, workers))
-	p.logger.Printf("tracks: scanning %d channels with %d workers", total, workers)
-
-	type task struct {
-		channelID string
-		msgs      []db.Message
-	}
-
-	taskCh := make(chan task, total)
-	for chID, msgs := range channelMsgs {
-		taskCh <- task{channelID: chID, msgs: msgs}
-	}
-	close(taskCh)
-
-	var completed atomic.Int32
-	var totalStored atomic.Int32
-	var wg sync.WaitGroup
-
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for t := range taskCh {
-				if ctx.Err() != nil {
-					return
-				}
-
-				channelName := p.channelName(t.channelID)
-				c := int(completed.Load())
-				p.LastStepMessageCount = len(t.msgs)
-				p.LastStepPeriodFrom = time.Unix(int64(from), 0)
-				p.LastStepPeriodTo = time.Unix(int64(to), 0)
-				p.LastStepDurationSeconds = 0
-				p.LastStepInputTokens = 0
-				p.LastStepOutputTokens = 0
-				p.LastStepCostUSD = 0
-				p.progress(c, total, fmt.Sprintf("#%s (%d messages)", channelName, len(t.msgs)))
-
-				stepStart := time.Now()
-				n, err := p.processChannel(ctx, userID, userName, t.channelID, channelName, t.msgs, from, to)
-				if err != nil {
-					p.logger.Printf("tracks: error processing #%s: %v", channelName, err)
-				} else if n > 0 {
-					totalStored.Add(int32(n))
-				}
-				p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
-				completed.Add(1)
-				p.progress(int(completed.Load()), total, fmt.Sprintf("#%s done", channelName))
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	stored := int(totalStored.Load())
-
-	p.progress(total, total, fmt.Sprintf("Found %d tracks for @%s across %d channels", stored, userName, total))
-	p.logger.Printf("tracks: %d tracks for @%s from %d channels", stored, userName, total)
-	return stored, nil
-}
-
-// batchUpdateResult is the parsed JSON response from a batched update check.
-type batchUpdateResult struct {
-	Results []batchUpdateItem `json:"results"`
-}
-
-type batchUpdateItem struct {
-	TrackID        int    `json:"track_id"`
-	HasUpdate      bool   `json:"has_update"`
-	UpdatedContext string `json:"updated_context"`
-	StatusHint     string `json:"status_hint"`
-	BallOn         string `json:"ball_on"`
-}
-
-// batchUpdatePrompt is the prompt template for checking multiple tracks against
-// new messages in the same channel in a single AI call.
-const batchUpdatePrompt = `You are checking whether new Slack messages in #%[1]s contain meaningful updates for any of the existing tracks listed below.
-
-%[4]s
-
-%[2]s
-
-=== TRACKS TO CHECK ===
-%[3]s
-
-=== NEW MESSAGES ===
-%[5]s
-
-For EACH track, determine if any of the new messages contain a meaningful update (progress, completion, blocker, scope change, deadline change, etc.).
-
-Return ONLY a JSON object (no markdown fences, no explanation):
-
-{
-  "results": [
-    {
-      "track_id": 123,
-      "has_update": true,
-      "updated_context": "brief summary of what changed",
-      "status_hint": "done",
-      "ball_on": "U123"
-    }
-  ]
-}
-
-Rules:
-- Include an entry for EVERY track listed above, even if has_update is false
-- has_update: true only if messages contain genuine progress, completion, or meaningful change related to THAT SPECIFIC track
-- has_update: false for unrelated chatter, bot messages, emoji-only reactions, or messages about other topics
-- updated_context: 1-2 sentences summarizing the update. Only when has_update is true.
-- status_hint: "done" (completed), "active" (progress but not done), "unchanged" (no update)
-- ball_on: user_id of the person who needs to act next. Empty string "" if unchanged or unclear.
-- Return valid JSON only, no other text`
-
-// CheckForUpdates checks for new thread activity on existing tracks.
-// Tracks are batched by channel — one AI call per channel instead of per track.
-// Returns the number of tracks that have new updates.
-func (p *Pipeline) CheckForUpdates(ctx context.Context) (int, error) {
-	if !p.cfg.Digest.Enabled {
-		return 0, nil
-	}
-
-	tracks, err := p.db.GetTracksForUpdateCheck()
+	// Load channel digests that overlap with the window.
+	// Use period_to filter (not period_from) because a digest's period may start
+	// before our window but still contain relevant data within the window.
+	digests, err := p.db.GetDigestsOverlapping("channel", from, to)
 	if err != nil {
-		return 0, fmt.Errorf("getting tracks for update check: %w", err)
+		return 0, fmt.Errorf("loading digests: %w", err)
 	}
 
-	if len(tracks) == 0 {
-		p.logger.Println("tracks: no tracks to check for updates")
+	if len(digests) == 0 {
+		p.progress(0, 0, "No digests in window")
+		p.logger.Printf("tracks: no digests found in window [%.0f, %.0f]", from, to)
 		return 0, nil
 	}
 
-	p.loadCaches()
-
-	// Group tracks by channel for batched AI calls.
-	byChannel := make(map[string][]db.Track)
-	for _, t := range tracks {
-		byChannel[t.ChannelID] = append(byChannel[t.ChannelID], t)
+	// Filter muted channels.
+	mutedIDs, err := p.db.GetMutedChannelIDs()
+	if err != nil {
+		p.logger.Printf("tracks: warning: failed to load muted channels: %v", err)
+	}
+	muted := make(map[string]bool, len(mutedIDs))
+	for _, id := range mutedIDs {
+		muted[id] = true
 	}
 
-	p.logger.Printf("tracks: checking %d tracks across %d channels for updates", len(tracks), len(byChannel))
-	p.progress(0, len(byChannel), fmt.Sprintf("Checking %d tracks in %d channels...", len(tracks), len(byChannel)))
-
-	type channelTask struct {
-		channelID string
-		tracks    []db.Track
-	}
-
-	taskCh := make(chan channelTask, len(byChannel))
-	for chID, chTracks := range byChannel {
-		taskCh <- channelTask{channelID: chID, tracks: chTracks}
-	}
-	close(taskCh)
-
-	// Worker pool — one task per channel now, so fewer workers needed.
-	const maxWorkers = 2
-	workers := maxWorkers
-	if workers > len(byChannel) {
-		workers = len(byChannel)
-	}
-
-	var completed atomic.Int32
-	var updatedCount atomic.Int32
-	var wg sync.WaitGroup
-
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ct := range taskCh {
-				if ctx.Err() != nil {
-					return
-				}
-
-				channelName := p.channelName(ct.channelID)
-				n, err := p.checkChannelTracksForUpdates(ctx, ct.channelID, ct.tracks)
-				if err != nil {
-					p.logger.Printf("tracks: error checking channel #%s: %v", channelName, err)
-				} else if n > 0 {
-					updatedCount.Add(int32(n))
-				}
-
-				c := int(completed.Add(1))
-				p.progress(c, len(byChannel), fmt.Sprintf("#%s done (%d tracks)", channelName, len(ct.tracks)))
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	total := int(updatedCount.Load())
-	p.progress(len(byChannel), len(byChannel), fmt.Sprintf("Found updates for %d tracks across %d channels", total, len(byChannel)))
-	p.logger.Printf("tracks: %d tracks have new updates (checked %d channels)", total, len(byChannel))
-	return total, nil
-}
-
-// checkChannelTracksForUpdates checks all tracks in a channel for updates in a single AI call.
-// Returns the number of tracks that have updates.
-func (p *Pipeline) checkChannelTracksForUpdates(ctx context.Context, channelID string, tracks []db.Track) (int, error) {
-	// Find the earliest afterTS among all tracks in this channel.
-	// This ensures we fetch all messages that any track might need.
-	earliestAfterTS := ""
-	for _, t := range tracks {
-		afterTS := t.SourceMessageTS
-		if t.LastCheckedTS != "" {
-			afterTS = t.LastCheckedTS
+	// Collect digest IDs and group digests by channel.
+	var digestIDs []int
+	digestsByChannel := make(map[string][]db.Digest)
+	for _, d := range digests {
+		if muted[d.ChannelID] {
+			continue
 		}
-		if earliestAfterTS == "" || afterTS < earliestAfterTS {
-			earliestAfterTS = afterTS
-		}
+		digestIDs = append(digestIDs, d.ID)
+		digestsByChannel[d.ChannelID] = append(digestsByChannel[d.ChannelID], d)
 	}
 
-	// Get thread replies for each track's source thread.
-	seenTS := make(map[string]bool)
-	var allMessages []db.Message
-	for _, t := range tracks {
-		afterTS := t.SourceMessageTS
-		if t.LastCheckedTS != "" {
-			afterTS = t.LastCheckedTS
+	if len(digestIDs) == 0 {
+		p.progress(0, 0, "No digests after filtering muted channels")
+		return 0, nil
+	}
+
+	// Load topics for all digests.
+	allTopics, err := p.db.GetDigestTopicsByDigestIDs(digestIDs)
+	if err != nil {
+		return 0, fmt.Errorf("loading digest topics: %w", err)
+	}
+
+	// Group topics by digest ID.
+	topicsByDigest := make(map[int][]db.DigestTopic)
+	for _, t := range allTopics {
+		topicsByDigest[t.DigestID] = append(topicsByDigest[t.DigestID], t)
+	}
+
+	// Build digest entries per channel.
+	var allEntries []digestEntry
+	totalTopicCount := 0
+	for chID, chDigests := range digestsByChannel {
+		var chTopics []db.DigestTopic
+		for _, d := range chDigests {
+			chTopics = append(chTopics, topicsByDigest[d.ID]...)
 		}
-		replies, err := p.db.GetThreadRepliesAfterTS(channelID, t.SourceMessageTS, afterTS)
+		topicCount := len(chTopics)
+		if topicCount == 0 {
+			continue
+		}
+		totalTopicCount += topicCount
+		allEntries = append(allEntries, digestEntry{
+			channelID:   chID,
+			channelName: p.channelName(chID),
+			digests:     chDigests,
+			topics:      chTopics,
+			topicCount:  topicCount,
+		})
+	}
+
+	if len(allEntries) == 0 {
+		p.progress(0, 0, "No topics in digests")
+		return 0, nil
+	}
+
+	// Sort by topic count descending for better batch packing.
+	sort.Slice(allEntries, func(i, j int) bool {
+		return allEntries[i].topicCount > allEntries[j].topicCount
+	})
+
+	// Estimate max topics per batch from context budget.
+	// Each digest topic includes summary, decisions, action_items, situations, key_messages.
+	// Real cost ~700 tokens/topic (measured: 510K chars / 191 topics ≈ 670 tok in production).
+	budget := p.cfg.AI.ContextBudget
+	if budget <= 0 {
+		budget = config.DefaultAIContextBudget
+	}
+	const tokensPerTopic = 700
+	const promptOverhead = 20000
+	maxTopicsPerBatch := (budget - promptOverhead) / tokensPerTopic
+	if maxTopicsPerBatch < 20 {
+		maxTopicsPerBatch = 20
+	}
+
+	batches := groupDigestBatches(allEntries, 15, maxTopicsPerBatch)
+
+	p.logger.Printf("tracks: found %d topics across %d channels → %d batch(es), budget %d tokens",
+		totalTopicCount, len(allEntries), len(batches), budget)
+	p.progress(0, len(batches), fmt.Sprintf("Scanning %d channels (%d topics) for @%s in %d batch(es)...",
+		len(allEntries), totalTopicCount, userName, len(batches)))
+
+	totalStored := 0
+	for i, batch := range batches {
+		if ctx.Err() != nil {
+			break
+		}
+
+		batchTopics := 0
+		for _, e := range batch {
+			batchTopics += e.topicCount
+		}
+
+		p.LastStepMessageCount = batchTopics
+		p.LastStepPeriodFrom = time.Unix(int64(from), 0)
+		p.LastStepPeriodTo = time.Unix(int64(to), 0)
+		p.LastStepDurationSeconds = 0
+		p.LastStepInputTokens = 0
+		p.LastStepOutputTokens = 0
+		p.LastStepCostUSD = 0
+		p.progress(i, len(batches), fmt.Sprintf("Batch %d/%d (%d channels, %d topics)", i+1, len(batches), len(batch), batchTopics))
+
+		stepStart := time.Now()
+		n, err := p.generateBatchTracks(ctx, batch, userID, userName, from, to)
 		if err != nil {
-			p.logger.Printf("tracks: warning: failed to get thread replies for track %d: %v", t.ID, err)
-			continue
+			p.logger.Printf("tracks: error in batch %d/%d: %v", i+1, len(batches), err)
+		} else {
+			totalStored += n
 		}
-		for _, r := range replies {
-			if !seenTS[r.TS] {
-				seenTS[r.TS] = true
-				allMessages = append(allMessages, r)
-			}
-		}
+		p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+		p.progress(i+1, len(batches), fmt.Sprintf("Batch %d/%d done (%d tracks)", i+1, len(batches), n))
 	}
 
-	// Get channel-level messages after the earliest cutoff.
-	channelMsgs, err := p.db.GetChannelMessagesAfterTS(channelID, earliestAfterTS, 200)
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to get channel messages for %s: %v", channelID, err)
-	}
-	for _, m := range channelMsgs {
-		if !seenTS[m.TS] {
-			seenTS[m.TS] = true
-			allMessages = append(allMessages, m)
-		}
-	}
-
-	if len(allMessages) == 0 {
-		return 0, nil
-	}
-
-	sort.Slice(allMessages, func(i, j int) bool { return allMessages[i].TSUnix < allMessages[j].TSUnix })
-
-	formatted := p.formatMessages(allMessages)
-	if strings.TrimSpace(formatted) == "" {
-		return 0, nil
-	}
-
-	// Build the tracks section for the prompt.
-	var tracksSB strings.Builder
-	for _, t := range tracks {
-		fmt.Fprintf(&tracksSB, "Track #%d: %s\n  Context: %s\n\n", t.ID, sanitize(t.Text), sanitize(truncate(t.Context, 300)))
-	}
-
-	channelName := p.channelName(channelID)
-	prompt := fmt.Sprintf(batchUpdatePrompt,
-		channelName,
-		p.languageInstruction(),
-		tracksSB.String(),
-		p.formatProfileContext(),
-		formatted,
-	)
-
-	updateSys, updateUser := digest.SplitPromptAtData(prompt)
-	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "tracks.update"), updateSys, updateUser, "")
-	if err != nil {
-		return 0, fmt.Errorf("AI generation failed for #%s: %w", channelName, err)
-	}
-
-	if usage != nil {
-		p.totalInputTokens.Add(int64(usage.InputTokens))
-		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
-		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
-		p.LastStepInputTokens += usage.InputTokens
-		p.LastStepOutputTokens += usage.OutputTokens
-		p.LastStepCostUSD += usage.CostUSD
-	}
-
-	batch, err := parseBatchUpdateResult(raw)
-	if err != nil {
-		return 0, fmt.Errorf("parsing batch update result for #%s: %w", channelName, err)
-	}
-
-	// Build a lookup for tracks by ID.
-	trackByID := make(map[int]db.Track, len(tracks))
-	for _, t := range tracks {
-		trackByID[t.ID] = t
-	}
-
-	// Find the latest message TS for updating last_checked_ts.
-	latestTS := allMessages[len(allMessages)-1].TS
-
-	// Update last_checked_ts for ALL tracks in this channel.
-	for _, t := range tracks {
-		if err := p.db.UpdateLastCheckedTS(t.ID, latestTS); err != nil {
-			p.logger.Printf("tracks: warning: failed to update last_checked_ts for track %d: %v", t.ID, err)
-		}
-	}
-
-	// Apply updates from AI results.
-	updated := 0
-	for _, item := range batch.Results {
-		if !item.HasUpdate {
-			continue
-		}
-
-		track, ok := trackByID[item.TrackID]
-		if !ok {
-			p.logger.Printf("tracks: warning: AI returned unknown track_id %d in #%s", item.TrackID, channelName)
-			continue
-		}
-
-		if err := p.db.SetTrackHasUpdates(track.ID, true); err != nil {
-			p.logger.Printf("tracks: warning: failed to set has_updates for track %d: %v", track.ID, err)
-		}
-
-		if item.UpdatedContext != "" {
-			if err := p.db.UpdateTrackContext(track.ID, item.UpdatedContext); err != nil {
-				p.logger.Printf("tracks: warning: failed to update context for track %d: %v", track.ID, err)
-			}
-		}
-
-		if item.BallOn != "" && item.BallOn != track.BallOn {
-			if err := p.db.UpdateTrackBallOn(track.ID, item.BallOn); err != nil {
-				p.logger.Printf("tracks: warning: failed to update ball_on for track %d: %v", track.ID, err)
-			} else {
-				p.logger.Printf("tracks: track %d ball moved to %s", track.ID, item.BallOn)
-			}
-		}
-
-		if item.StatusHint == "done" {
-			if err := p.db.UpdateTrackStatus(track.ID, "done"); err != nil {
-				p.logger.Printf("tracks: warning: failed to mark track %d as done: %v", track.ID, err)
-			} else {
-				p.logger.Printf("tracks: track %d auto-completed based on channel activity", track.ID)
-			}
-		}
-
-		updated++
-	}
-
-	return updated, nil
+	p.LastStepDurationSeconds = 0 // reset to avoid duplicate step recording on final progress
+	p.progress(len(batches), len(batches), fmt.Sprintf("Found %d tracks for @%s across %d channels", totalStored, userName, len(allEntries)))
+	p.logger.Printf("tracks: %d tracks for @%s from %d channels", totalStored, userName, len(allEntries))
+	return totalStored, nil //nolint:nilerr // partial results returned; per-batch errors logged above
 }
 
-func parseBatchUpdateResult(raw string) (*batchUpdateResult, error) {
-	cleaned := cleanJSON(raw)
-	var result batchUpdateResult
-	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		return nil, fmt.Errorf("parsing batch update check JSON: %w (raw: %.200s)", err, raw)
-	}
-	return &result, nil
+// digestEntry represents a channel's digest data for batch processing.
+type digestEntry struct {
+	channelID   string
+	channelName string
+	digests     []db.Digest
+	topics      []db.DigestTopic
+	topicCount  int // for batching
 }
 
-// processChannel extracts tracks for one channel.
-func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channelID, channelName string, msgs []db.Message, from, to float64) (int, error) {
-	sort.Slice(msgs, func(i, j int) bool { return msgs[i].TSUnix < msgs[j].TSUnix })
-
-	formatted := p.formatMessages(msgs)
-	if strings.TrimSpace(formatted) == "" {
-		return 0, nil
-	}
-
-	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02")
-	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02")
-
-	// Load existing tracks for this channel to help AI deduplicate.
-	existingSection := p.formatExistingItems(channelID, userID)
-
-	// Load compact summary of recently resolved tracks to prevent re-extraction.
-	resolvedSection := p.formatResolvedSummary(userID)
-
-	// Load related digest decisions for context.
-	decisionsSection := p.formatDigestDecisions(channelID, from, to)
-
-	// Load existing tracks from OTHER channels for cross-channel completion detection.
-	crossChannelSection := p.formatCrossChannelItems(channelID, userID)
-
-	profileSection := p.formatProfileContext()
-
-	tmpl, promptVersion := p.getPrompt(prompts.TracksExtract)
-	roleRules := p.formatRoleRules()
-	prompt := fmt.Sprintf(tmpl, userName, userID, channelName, channelID, fromStr, toStr, p.languageInstruction(), existingSection, decisionsSection, crossChannelSection, formatted, profileSection, roleRules)
-
-	// Append compact summary of recently resolved tracks.
-	if resolvedSection != "" {
-		prompt += "\n" + resolvedSection
-	}
-
-	// Append channel running summary for additional context if available.
-	if runningSummary := p.loadChannelRunningSummary(channelID); runningSummary != "" {
-		prompt += runningSummary
-	}
-
-	// Append active chains context so AI can link tracks to existing chains.
-	if p.ChainContext != "" {
-		prompt += "\n" + p.ChainContext + "\nIf a track relates to one of the active chains above, include \"chain_id\": <id> in your response for that track.\n"
-	}
-
-	systemPrompt, userMessage := digest.SplitPromptAtData(prompt)
-	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "tracks.extract"), systemPrompt, userMessage, "")
-	if err != nil {
-		return 0, fmt.Errorf("AI generation failed: %w", err)
-	}
-
-	if usage != nil {
-		p.totalInputTokens.Add(int64(usage.InputTokens))
-		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
-		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
-		p.LastStepInputTokens += usage.InputTokens
-		p.LastStepOutputTokens += usage.OutputTokens
-		p.LastStepCostUSD += usage.CostUSD
-	}
-
-	result, err := parseResult(raw)
-	if err != nil {
-		return 0, fmt.Errorf("parsing result: %w", err)
-	}
-
-	if len(result.Items) == 0 {
-		p.logger.Printf("tracks: #%s → 0 items from %d messages", channelName, len(msgs))
-		return 0, nil
-	}
-
-	// Divide token cost across items to avoid inflating totals when summed.
+// storeTrackItems validates and persists AI-extracted track items into the database.
+// Returns the number of tracks successfully stored/updated.
+func (p *Pipeline) storeTrackItems(items []aiItem, userID, channelID, channelName string,
+	usage *digest.Usage, promptVersion int, from, to float64) int {
+	// Divide token cost across items.
 	var inputTokens, outputTokens int
 	var costUSD float64
-	if usage != nil && len(result.Items) > 0 {
-		inputTokens = usage.InputTokens / len(result.Items)
-		outputTokens = usage.OutputTokens / len(result.Items)
-		costUSD = usage.CostUSD / float64(len(result.Items))
+	if usage != nil && len(items) > 0 {
+		inputTokens = usage.InputTokens / len(items)
+		outputTokens = usage.OutputTokens / len(items)
+		costUSD = usage.CostUSD / float64(len(items))
 	}
 
 	// Look up related digest IDs for this channel + time window.
-	relatedDigestIDs := ""
+	relatedDigestIDs := "[]"
 	if digestIDs, err := p.db.FindRelatedDigestIDs(channelID, from, to); err == nil && len(digestIDs) > 0 {
 		if b, err := json.Marshal(digestIDs); err == nil {
 			relatedDigestIDs = string(b)
@@ -711,22 +400,18 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 	}
 
 	stored := 0
-	for _, item := range result.Items {
+	for _, item := range items {
 		priority := item.Priority
-		if priority == "" {
-			priority = "medium"
-		}
 		if priority != "high" && priority != "medium" && priority != "low" {
 			priority = "medium"
 		}
 
-		// Validate ownership.
 		ownership := item.Ownership
 		if ownership != "mine" && ownership != "delegated" && ownership != "watching" {
 			ownership = "mine"
 		}
 
-		// Post-AI quality filter: drop low-value tracks that add noise.
+		// Post-AI quality filter: drop low-value tracks.
 		if shouldDropTrack(ownership, priority, item.Category, item.Blocking) {
 			p.logger.Printf("tracks: #%s — dropped low-value track (ownership=%s, priority=%s, category=%s): %.80s",
 				channelName, ownership, priority, item.Category, item.Text)
@@ -740,14 +425,12 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 			}
 		}
 
-		// Serialize JSON fields as strings, defaulting to "[]" to match schema defaults.
 		participants := jsonOrEmpty(item.Participants)
 		sourceRefs := jsonOrEmpty(item.SourceRefs)
 		tags := jsonOrEmpty(item.Tags)
 		decisionOptions := jsonOrEmpty(item.DecisionOptions)
 		subItems := jsonOrEmpty(item.SubItems)
 
-		// Validate category.
 		category := item.Category
 		if !validCategories[category] {
 			category = "task"
@@ -759,47 +442,41 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 			requesterUserID = item.Requester.UserID
 		}
 
-		// Extract entity fingerprint for dedup.
 		fp := extractFingerprint(item.Text, item.Context)
 		fpJSON := fingerprintJSON(fp)
 
+		channelIDsJSON := jsonStringArray([]string{channelID})
+
 		track := db.Track{
-			ChannelID:         channelID,
-			AssigneeUserID:    userID,
-			AssigneeRaw:       "@" + userName,
-			Text:              item.Text,
-			Context:           item.Context,
-			SourceMessageTS:   item.SourceMsgTS,
-			SourceChannelName: channelName,
-			Status:            "inbox",
-			Priority:          priority,
-			DueDate:           dueDate,
-			PeriodFrom:        from,
-			PeriodTo:          to,
-			Model:             p.cfg.Digest.Model,
-			InputTokens:       inputTokens,
-			OutputTokens:      outputTokens,
-			CostUSD:           costUSD,
-			Participants:      participants,
-			SourceRefs:        sourceRefs,
-			RequesterName:     requesterName,
-			RequesterUserID:   requesterUserID,
-			Category:          category,
-			Blocking:          item.Blocking,
-			Tags:              tags,
-			DecisionSummary:   item.DecisionSummary,
-			DecisionOptions:   decisionOptions,
-			RelatedDigestIDs:  relatedDigestIDs,
-			SubItems:          subItems,
-			PromptVersion:     promptVersion,
-			Ownership:         ownership,
-			BallOn:            item.BallOn,
-			OwnerUserID:       item.OwnerUserID,
-			Fingerprint:       fpJSON,
+			AssigneeUserID:   userID,
+			Text:             item.Text,
+			Context:          item.Context,
+			Category:         category,
+			Ownership:        ownership,
+			BallOn:           item.BallOn,
+			OwnerUserID:      item.OwnerUserID,
+			RequesterName:    requesterName,
+			RequesterUserID:  requesterUserID,
+			Blocking:         item.Blocking,
+			DecisionSummary:  item.DecisionSummary,
+			DecisionOptions:  decisionOptions,
+			SubItems:         subItems,
+			Participants:     participants,
+			SourceRefs:       sourceRefs,
+			Tags:             tags,
+			ChannelIDs:       channelIDsJSON,
+			RelatedDigestIDs: relatedDigestIDs,
+			Priority:         priority,
+			DueDate:          dueDate,
+			Fingerprint:      fpJSON,
+			Model:            p.cfg.Digest.Model,
+			InputTokens:      inputTokens,
+			OutputTokens:     outputTokens,
+			CostUSD:          costUSD,
+			PromptVersion:    promptVersion,
 		}
 
 		// If AI identified this as an update to an existing track, update it.
-		// M2: validate that existing_id belongs to the current user before updating.
 		if item.ExistingID != nil && *item.ExistingID > 0 {
 			if owner, err := p.db.GetTrackAssignee(*item.ExistingID); err != nil || owner != userID {
 				p.logger.Printf("tracks: ignoring existing_id %d (owner mismatch or not found)", *item.ExistingID)
@@ -812,53 +489,18 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 			} else {
 				stored++
 			}
-
-			// Handle status_hint: if AI detected that the track is done, mark it.
-			if item.StatusHint == "done" {
-				if err := p.db.SetTrackHasUpdates(*item.ExistingID, true); err != nil {
-					p.logger.Printf("tracks: warning: failed to set has_updates for track %d: %v", *item.ExistingID, err)
-				}
-				if err := p.db.UpdateTrackStatus(*item.ExistingID, "done"); err != nil {
-					p.logger.Printf("tracks: warning: failed to mark track %d as done: %v", *item.ExistingID, err)
-				} else {
-					p.logger.Printf("tracks: track #%d auto-completed based on channel activity", *item.ExistingID)
-				}
-			}
 			continue
 		}
 
-		// Dedup layer 1: exact source_message_ts match against resolved tracks.
-		if track.SourceMessageTS != "" {
-			if resolved, err := p.db.HasResolvedTrackForMessage(channelID, userID, track.SourceMessageTS); err != nil {
-				p.logger.Printf("tracks: warning: resolved check failed: %v", err)
-			} else if resolved {
-				p.logger.Printf("tracks: skipping track from %s — already resolved (same message)", track.SourceMessageTS)
-				continue
-			}
-		}
-
-		// Dedup layer 2: fingerprint entity match against resolved tracks.
-		// If a resolved track shares entities (ticket IDs, user_ids, etc.):
-		//   - done → reopen to inbox (user completed it but topic resurfaced)
-		//   - dismissed → append activity only (user explicitly rejected it)
+		// Dedup: fingerprint match against existing tracks.
 		if len(fp) > 0 {
-			if resolvedID, resolvedStatus, found, err := p.db.FindResolvedTrackByFingerprint(channelID, userID, fp); err != nil {
-				p.logger.Printf("tracks: warning: fingerprint dedup check failed: %v", err)
-			} else if found {
-				if resolvedStatus == "done" {
-					if err := p.db.ReopenTrack(resolvedID, item.Context); err != nil {
-						p.logger.Printf("tracks: warning: failed to reopen track %d: %v", resolvedID, err)
-					} else {
-						p.logger.Printf("tracks: reopened done track #%d — new activity with matching entities %v", resolvedID, fp)
-						stored++
-					}
+			if matches, err := p.db.FindTracksByFingerprint(userID, fp); err == nil && len(matches) > 0 {
+				// Update the first matching track instead of creating duplicate.
+				if _, err := p.db.UpdateTrackFromExtraction(matches[0].ID, track); err != nil {
+					p.logger.Printf("tracks: warning: failed to update fingerprint-matched track %d: %v", matches[0].ID, err)
 				} else {
-					// dismissed — record activity but don't reopen
-					if err := p.db.AppendTrackActivity(resolvedID, item.Context); err != nil {
-						p.logger.Printf("tracks: warning: failed to append activity to track %d: %v", resolvedID, err)
-					} else {
-						p.logger.Printf("tracks: appended activity to dismissed track #%d — entities %v", resolvedID, fp)
-					}
+					p.logger.Printf("tracks: merged into existing track #%d via fingerprint %v", matches[0].ID, fp)
+					stored++
 				}
 				continue
 			}
@@ -869,61 +511,207 @@ func (p *Pipeline) processChannel(ctx context.Context, userID, userName, channel
 			p.logger.Printf("tracks: error storing track: %v", err)
 			continue
 		}
+		_ = trackID
 		stored++
-
-		// Link track to chain if AI specified chain_id.
-		if item.ChainID != nil && *item.ChainID > 0 && trackID > 0 {
-			ref := db.ChainRef{
-				ChainID:   *item.ChainID,
-				RefType:   "track",
-				TrackID:   int(trackID),
-				ChannelID: channelID,
-				Timestamp: to,
-			}
-			if err := p.db.InsertChainRef(ref); err != nil {
-				p.logger.Printf("tracks: chain ref error for track %d → chain %d: %v", trackID, *item.ChainID, err)
-			} else {
-				_ = p.db.AddChannelToChain(*item.ChainID, channelID)
-			}
-		}
 	}
 
 	if stored > 0 {
 		p.logger.Printf("tracks: #%s → %d tracks", channelName, stored)
 	}
-	return stored, nil
+	return stored
 }
 
-// getMessagesByChannel returns messages grouped by channel (excluding DMs).
-func (p *Pipeline) getMessagesByChannel(from, to float64) (map[string][]db.Message, error) {
-	const msgLimit = 50000
-	msgs, err := p.db.GetMessages(db.MessageOpts{
-		FromUnix:   from,
-		ToUnix:     to,
-		Limit:      msgLimit,
-		ExcludeDMs: true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("getting messages: %w", err)
+// --- batch tracks extraction ---
+
+// batchChannelResult is the per-channel result from a batch tracks LLM call.
+type batchChannelResult struct {
+	ChannelID string   `json:"channel_id"`
+	Items     []aiItem `json:"items"`
+}
+
+// groupDigestBatches groups digest entries into batches not exceeding maxChannels and maxTopics.
+func groupDigestBatches(entries []digestEntry, maxChannels, maxTopics int) [][]digestEntry {
+	if len(entries) == 0 {
+		return nil
 	}
-	if len(msgs) >= msgLimit {
-		p.logger.Printf("tracks: warning: message limit (%d) reached, some messages may be skipped", msgLimit)
+	if maxChannels <= 0 {
+		return [][]digestEntry{entries}
 	}
 
-	byChannel := make(map[string][]db.Message)
-	for _, m := range msgs {
-		if m.Text == "" || m.IsDeleted {
-			continue
+	var batches [][]digestEntry
+	var current []digestEntry
+	currentTopics := 0
+
+	for _, e := range entries {
+		if len(current) > 0 && (len(current) >= maxChannels || (maxTopics > 0 && currentTopics+e.topicCount > maxTopics)) {
+			batches = append(batches, current)
+			current = nil
+			currentTopics = 0
 		}
-		byChannel[m.ChannelID] = append(byChannel[m.ChannelID], m)
+		current = append(current, e)
+		currentTopics += e.topicCount
 	}
-	return byChannel, nil
+	if len(current) > 0 {
+		batches = append(batches, current)
+	}
+	return batches
 }
 
-// formatExistingItems loads active/inbox tracks for a channel and formats them
-// as a prompt section for AI deduplication.
+// parseBatchTracksResult parses the JSON array returned by a batch tracks LLM call.
+func parseBatchTracksResult(raw string) ([]batchChannelResult, error) {
+	cleaned := raw
+	if idx := strings.Index(raw, "```json"); idx >= 0 {
+		cleaned = raw[idx+7:]
+		if end := strings.Index(cleaned, "```"); end >= 0 {
+			cleaned = cleaned[:end]
+		}
+	} else if idx := strings.Index(raw, "```"); idx >= 0 {
+		cleaned = raw[idx+3:]
+		if end := strings.Index(cleaned, "```"); end >= 0 {
+			cleaned = cleaned[:end]
+		}
+	}
+
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Find JSON array boundaries
+	if start := strings.Index(cleaned, "["); start >= 0 {
+		if end := strings.LastIndex(cleaned, "]"); end > start {
+			cleaned = cleaned[start : end+1]
+		}
+	}
+
+	var results []batchChannelResult
+	if err := json.Unmarshal([]byte(cleaned), &results); err != nil {
+		return nil, fmt.Errorf("parsing batch tracks JSON: %w (raw: %.200s)", err, raw)
+	}
+
+	// Filter out entries with missing channel ID.
+	var filtered []batchChannelResult
+	for _, r := range results {
+		if r.ChannelID != "" && len(r.Items) > 0 {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered, nil
+}
+
+// generateBatchTracks processes multiple channels' digest data in a single LLM call.
+func (p *Pipeline) generateBatchTracks(ctx context.Context, entries []digestEntry,
+	userID, userName string, from, to float64) (int, error) {
+	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02")
+	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02")
+
+	// Build channel blocks from digest topics and collect exclusion set.
+	excludeSet := make(map[string]bool, len(entries))
+	var channelBlocks strings.Builder
+
+	for _, e := range entries {
+		excludeSet[e.channelID] = true
+
+		fmt.Fprintf(&channelBlocks, "--- #%s (%s) ---\n", e.channelName, e.channelID)
+		for _, d := range e.digests {
+			if d.Summary != "" {
+				fmt.Fprintf(&channelBlocks, "Digest summary: %s\n", sanitize(d.Summary))
+			}
+		}
+		for _, t := range e.topics {
+			fmt.Fprintf(&channelBlocks, "\nTopic: %s\n%s\n", sanitize(t.Title), sanitize(t.Summary))
+			if t.Decisions != "" && t.Decisions != "[]" {
+				fmt.Fprintf(&channelBlocks, "Decisions: %s\n", t.Decisions)
+			}
+			if t.ActionItems != "" && t.ActionItems != "[]" {
+				fmt.Fprintf(&channelBlocks, "Action items: %s\n", t.ActionItems)
+			}
+			if t.Situations != "" && t.Situations != "[]" {
+				fmt.Fprintf(&channelBlocks, "Situations: %s\n", t.Situations)
+			}
+			if t.KeyMessages != "" && t.KeyMessages != "[]" {
+				fmt.Fprintf(&channelBlocks, "Key messages: %s\n", t.KeyMessages)
+			}
+		}
+
+		// Append channel running summary for additional context.
+		if runningSummary := p.loadChannelRunningSummary(e.channelID); runningSummary != "" {
+			channelBlocks.WriteString(runningSummary)
+		}
+		channelBlocks.WriteString("\n")
+	}
+
+	// Single unified existing tracks section (no per-channel duplication).
+	crossChannelSection := p.formatCrossChannelItems(excludeSet, userID)
+	profileSection := p.formatProfileContext()
+	roleRules := p.formatRoleRules()
+
+	tmpl, promptVersion := p.getPrompt(prompts.TracksExtractBatch)
+	prompt := fmt.Sprintf(tmpl,
+		userName, userID, fromStr, toStr,
+		profileSection,
+		p.languageInstruction(),
+		roleRules,
+		"", // existing tracks per-channel removed — cross-channel section covers all
+		crossChannelSection,
+		channelBlocks.String(),
+	)
+
+	p.logger.Printf("tracks: batch prompt sizes: template=%d profile=%d roles=%d cross=%d channels=%d total=%d chars",
+		len(tmpl), len(profileSection), len(roleRules),
+		len(crossChannelSection), channelBlocks.Len(), len(prompt))
+
+	systemPrompt, userMessage := digest.SplitPromptAtData(prompt)
+	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "tracks.extract_batch"), systemPrompt, userMessage, "")
+	if err != nil {
+		return 0, fmt.Errorf("batch AI generation failed: %w", err)
+	}
+
+	if usage != nil {
+		p.totalInputTokens.Add(int64(usage.InputTokens))
+		p.totalOutputTokens.Add(int64(usage.OutputTokens))
+		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
+	}
+
+	results, err := parseBatchTracksResult(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parsing batch result: %w", err)
+	}
+
+	totalStored := 0
+	for _, cr := range results {
+		chName := p.channelName(cr.ChannelID)
+		stored := p.storeTrackItems(cr.Items, userID, cr.ChannelID, chName, usage, promptVersion, from, to)
+		totalStored += stored
+	}
+
+	return totalStored, nil
+}
+
+// FormatActiveTracksForPrompt formats active tracks for injection into rollup prompts.
+func (p *Pipeline) FormatActiveTracksForPrompt() (string, error) {
+	tracks, err := p.db.GetAllActiveTracks()
+	if err != nil {
+		return "", fmt.Errorf("loading tracks: %w", err)
+	}
+	if len(tracks) == 0 {
+		return "", nil
+	}
+
+	var sb strings.Builder
+	for _, t := range tracks {
+		sb.WriteString(fmt.Sprintf("- [track #%d, %s, %s] %s\n  Context: %s\n",
+			t.ID, t.Priority, t.Ownership, sanitize(t.Text), sanitize(truncate(t.Context, 200))))
+	}
+	return sb.String(), nil
+}
+
+// --- helpers: prompt sections ---
+
+// maxExistingTracksPerChannel is the maximum number of existing tracks shown per channel.
+const maxExistingTracksPerChannel = 15
+
+// formatExistingItems loads tracks for this channel and formats for AI dedup.
 func (p *Pipeline) formatExistingItems(channelID, userID string) string {
-	tracks, err := p.db.GetExistingTracksForChannel(channelID, userID)
+	tracks, err := p.db.GetTracks(db.TrackFilter{ChannelID: channelID})
 	if err != nil {
 		p.logger.Printf("tracks: warning: failed to load existing tracks for %s: %v", channelID, err)
 		return ""
@@ -932,96 +720,121 @@ func (p *Pipeline) formatExistingItems(channelID, userID string) string {
 		return ""
 	}
 
+	// Sort by updated_at DESC, limit to top N.
+	sort.Slice(tracks, func(i, j int) bool {
+		return tracks[i].UpdatedAt > tracks[j].UpdatedAt
+	})
+	totalCount := len(tracks)
+	if len(tracks) > maxExistingTracksPerChannel {
+		tracks = tracks[:maxExistingTracksPerChannel]
+	}
+
 	var sb strings.Builder
 	sb.WriteString("=== EXISTING TRACKS FOR THIS CHANNEL ===\n")
+	if totalCount > maxExistingTracksPerChannel {
+		fmt.Fprintf(&sb, "Showing %d of %d total.\n", maxExistingTracksPerChannel, totalCount)
+	}
 	for _, track := range tracks {
-		fmt.Fprintf(&sb, "#%d [%s] %q\n", track.ID, track.Status, sanitize(track.Text))
-		if track.DecisionSummary != "" {
-			fmt.Fprintf(&sb, "    decision: %q\n", sanitize(track.DecisionSummary))
+		tagsStr := ""
+		if track.Tags != "" && track.Tags != "[]" {
+			tagsStr = " tags:" + track.Tags
 		}
-		if track.Tags != "" {
-			fmt.Fprintf(&sb, "    tags: %s\n", track.Tags)
-		}
-		if track.RelatedDigestIDs != "" {
-			fmt.Fprintf(&sb, "    digests: %s\n", track.RelatedDigestIDs)
-		}
+		fmt.Fprintf(&sb, "#%d [%s] %q%s\n", track.ID, track.Ownership, sanitize(track.Text), tagsStr)
 		if track.Context != "" {
-			fmt.Fprintf(&sb, "    context: %s\n", sanitize(truncate(track.Context, 200)))
+			fmt.Fprintf(&sb, "    context: %s\n", sanitize(truncate(track.Context, 100)))
 		}
 	}
 	return sb.String()
 }
 
-// formatCrossChannelItems loads active/inbox tracks from OTHER channels
-// so the AI can detect cross-channel completion signals.
-func (p *Pipeline) formatCrossChannelItems(excludeChannelID, userID string) string {
-	tracks, err := p.db.GetExistingTracksExcludingChannel(excludeChannelID, userID)
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to load cross-channel tracks: %v", err)
+// maxCrossChannelTracks is the maximum number of cross-channel tracks included in prompts.
+const maxCrossChannelTracks = 20
+
+// priorityOrder returns sort order for track priority (lower = higher priority).
+func priorityOrder(p string) int {
+	switch p {
+	case "high":
+		return 0
+	case "medium":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// formatCrossChannelItems formats tracks from OTHER channels for cross-channel merge.
+// Uses cached allActiveTracksRef if available, otherwise loads from DB.
+// excludeChannelIDs is a set of channel IDs to exclude (all channels being processed).
+func (p *Pipeline) formatCrossChannelItems(excludeChannelIDs map[string]bool, userID string) string {
+	p.cacheMu.RLock()
+	allTracks := p.allActiveTracksRef
+	p.cacheMu.RUnlock()
+
+	// Fallback to DB if cache not populated (e.g. called outside RunForWindow).
+	if allTracks == nil {
+		var err error
+		allTracks, err = p.db.GetAllActiveTracks()
+		if err != nil {
+			p.logger.Printf("tracks: warning: failed to load cross-channel tracks: %v", err)
+			return ""
+		}
+	}
+
+	if len(allTracks) == 0 {
 		return ""
 	}
-	if len(tracks) == 0 {
+
+	var filtered []db.Track
+	for _, t := range allTracks {
+		excluded := false
+		for chID := range excludeChannelIDs {
+			if strings.Contains(t.ChannelIDs, chID) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) == 0 {
 		return ""
+	}
+
+	// Sort by priority (high first), then by ID desc (newest first).
+	sort.Slice(filtered, func(i, j int) bool {
+		pi, pj := priorityOrder(filtered[i].Priority), priorityOrder(filtered[j].Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		return filtered[i].ID > filtered[j].ID
+	})
+
+	totalCount := len(filtered)
+	if len(filtered) > maxCrossChannelTracks {
+		filtered = filtered[:maxCrossChannelTracks]
 	}
 
 	var sb strings.Builder
 	sb.WriteString("=== EXISTING TRACKS FROM OTHER CHANNELS ===\n")
-	sb.WriteString("If a message in this channel confirms completion of any of these tracks, return it with existing_id and status_hint.\n")
-	for _, track := range tracks {
-		chName := p.channelName(track.ChannelID)
-		fmt.Fprintf(&sb, "#%d [%s] #%s: %q\n", track.ID, track.Status, chName, sanitize(track.Text))
-		if track.Context != "" {
-			fmt.Fprintf(&sb, "    context: %s\n", sanitize(truncate(track.Context, 150)))
+	sb.WriteString("If a message relates to any of these tracks, set existing_id to merge (cross-channel).\n")
+	if totalCount > maxCrossChannelTracks {
+		fmt.Fprintf(&sb, "Showing top %d of %d.\n", maxCrossChannelTracks, totalCount)
+	}
+	for _, track := range filtered {
+		tagsStr := ""
+		if track.Tags != "" && track.Tags != "[]" {
+			tagsStr = " tags:" + track.Tags
 		}
+		fmt.Fprintf(&sb, "#%d [%s] %q%s\n", track.ID, track.Ownership, sanitize(track.Text), tagsStr)
 	}
 	return sb.String()
 }
 
-// formatResolvedSummary returns a compact section listing recently resolved tracks
-// so the AI avoids re-extracting them. Minimal context growth (~100-200 tokens).
-func (p *Pipeline) formatResolvedSummary(userID string) string {
-	since := time.Now().Add(-7 * 24 * time.Hour)
-	summary, err := p.db.GetResolvedTracksSummary(userID, since)
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to load resolved summary: %v", err)
-		return ""
-	}
-	if summary == "" {
-		return ""
-	}
-	return "=== RECENTLY RESOLVED TRACKS (do NOT re-extract these) ===\n" + summary + "\n"
-}
-
-// formatDigestDecisions loads recent decisions from related digests.
-func (p *Pipeline) formatDigestDecisions(channelID string, from, to float64) string {
-	decisions, err := p.db.GetDigestDecisionsForChannel(channelID, from, to)
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to load digest decisions for %s: %v", channelID, err)
-		return ""
-	}
-	if len(decisions) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("=== RECENT DECISIONS FROM DIGESTS ===\n")
-	for _, d := range decisions {
-		dateStr := time.Unix(int64(d.PeriodTo), 0).Local().Format("Jan 2")
-		fmt.Fprintf(&sb, "Digest #%d (%s, #%s):\n", d.DigestID, dateStr, sanitize(d.ChannelName))
-		fmt.Fprintf(&sb, "  - %s\n", sanitize(d.Decision))
-	}
-	return sb.String()
-}
-
-// loadChannelRunningSummary returns the channel's running summary as a prompt
-// section, or empty string if none exists or if too old (>30 days).
+// loadChannelRunningSummary loads a channel's running summary as a prompt section.
 func (p *Pipeline) loadChannelRunningSummary(channelID string) string {
 	result, err := p.db.GetLatestRunningSummaryWithAge(channelID, "channel")
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to load running summary for %s: %v", channelID, err)
-		return ""
-	}
-	if result == nil || result.Summary == "" {
+	if err != nil || result == nil || result.Summary == "" {
 		return ""
 	}
 	if result.AgeDays > 30 {
@@ -1038,110 +851,122 @@ func (p *Pipeline) loadChannelRunningSummary(channelID string) string {
 	return sb.String()
 }
 
-// Regex patterns for entity extraction.
-var (
-	reTicket  = regexp.MustCompile(`(?i)\b(CEX|FIAT|NOVA|DEV|INFRA|CONVERT|DVSP|BLINC)-\d+\b`)
-	reUserID  = regexp.MustCompile(`\bU[A-Z0-9]{8,}\b`)
-	reIP      = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	reCVE     = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d+\b`)
-	reMR      = regexp.MustCompile(`!(\d{4,})\b`)
-	reSlackTS = regexp.MustCompile(`\b\d{10}\.\d{6}\b`) // skip Slack timestamps — not entities
-)
+// formatProfileContext builds the profile context section for the AI prompt.
+func (p *Pipeline) formatProfileContext() string {
+	p.cacheMu.RLock()
+	profile := p.profile
+	p.cacheMu.RUnlock()
 
-// extractFingerprint extracts key entities from track text and context
-// for programmatic deduplication. Returns a deduplicated, sorted slice.
-func extractFingerprint(text, ctx string) []string {
-	combined := text + " " + ctx
-	seen := make(map[string]struct{})
-	var result []string
-
-	add := func(s string) {
-		upper := strings.ToUpper(s)
-		if _, ok := seen[upper]; !ok {
-			seen[upper] = struct{}{}
-			result = append(result, upper)
-		}
+	if profile == nil || profile.CustomPromptContext == "" {
+		return ""
 	}
 
-	for _, m := range reTicket.FindAllString(combined, -1) {
-		add(m)
-	}
-	for _, m := range reCVE.FindAllString(combined, -1) {
-		add(m)
-	}
-	for _, m := range reMR.FindAllString(combined, -1) {
-		add("MR" + m[1:]) // normalize "!6584" → "MR6584"
-	}
-	for _, m := range reUserID.FindAllString(combined, -1) {
-		add(m)
-	}
-	for _, m := range reIP.FindAllString(combined, -1) {
-		// Skip Slack-timestamp-like patterns (handled separately).
-		if !reSlackTS.MatchString(m) {
-			add(m)
-		}
-	}
-
-	sort.Strings(result)
-	return result
-}
-
-// fingerprintJSON returns the fingerprint as a JSON string.
-func fingerprintJSON(fp []string) string {
-	if len(fp) == 0 {
-		return "[]"
-	}
-	data, err := json.Marshal(fp)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// shouldDropTrack returns true if a track is low-value noise that should not be stored.
-// This is a post-AI safety net — ideally the prompt prevents these, but this catches stragglers.
-func shouldDropTrack(ownership, priority, category, blocking string) bool {
-	// Rule 1: watching + low → always drop (pure FYI, no action needed)
-	if ownership == "watching" && priority == "low" {
-		return true
-	}
-
-	// Rule 2: watching + medium + (follow_up or discussion) + no blocker → drop
-	// These are "keep an eye on X" items that clutter the inbox.
-	if ownership == "watching" && priority == "medium" {
-		if (category == "follow_up" || category == "discussion") && blocking == "" {
-			return true
-		}
-	}
-
-	return false
-}
-
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}
-
-func (p *Pipeline) formatMessages(msgs []db.Message) string {
 	var sb strings.Builder
-	for _, m := range msgs {
-		if m.Text == "" || m.IsDeleted {
-			continue
-		}
-		userName := p.userName(m.UserID)
-		ts := time.Unix(int64(m.TSUnix), 0).Local().Format("15:04")
-		text := sanitize(m.Text)
-		threadMarker := ""
-		if m.ThreadTS.Valid {
-			threadMarker = " [thread reply]"
-		}
-		fmt.Fprintf(&sb, "[%s] @%s (ts:%s): %s%s\n", ts, userName, m.TS, text, threadMarker)
+	sb.WriteString("=== USER PROFILE CONTEXT ===\n")
+	sb.WriteString(sanitize(profile.CustomPromptContext))
+	sb.WriteString("\n\nOWNERSHIP RULES (based on user profile):\n")
+	sb.WriteString("- If the track is a task/question/request directed at ME → ownership: \"mine\"\n")
+	sb.WriteString("- If the track involves one of MY REPORTS as the responsible person → ownership: \"delegated\", owner_user_id: report's user_id\n")
+	sb.WriteString("- If the track is a decision/discussion that affects my area but I'm not the actor → ownership: \"watching\"\n")
+	sb.WriteString("- If unsure → ownership: \"mine\" (better to surface than miss)\n")
+	sb.WriteString("\nBALL RULES:\n")
+	sb.WriteString("- ball_on = user_id of the person who needs to act NEXT\n")
+	sb.WriteString("- If I asked a question and am waiting for reply → ball_on: other person's user_id\n")
+	sb.WriteString("- If someone asked me something → ball_on: my user_id\n")
+
+	if profile.Reports != "" && profile.Reports != "[]" {
+		fmt.Fprintf(&sb, "\nMY REPORTS (user_ids): %s\n", sanitize(profile.Reports))
+		sb.WriteString("Tasks assigned to or owned by these people → ownership: \"delegated\", owner_user_id: their user_id\n")
 	}
+	if profile.Peers != "" && profile.Peers != "[]" {
+		fmt.Fprintf(&sb, "\nMY PEERS (user_ids): %s\n", sanitize(profile.Peers))
+	}
+	if profile.Manager != "" {
+		fmt.Fprintf(&sb, "\nMY MANAGER (user_id): %s\n", sanitize(profile.Manager))
+	}
+	if profile.StarredChannels != "" && profile.StarredChannels != "[]" {
+		fmt.Fprintf(&sb, "\nSTARRED CHANNELS: %s — create more tracks from these channels, lower threshold for relevance\n", sanitize(profile.StarredChannels))
+	}
+	if profile.StarredPeople != "" && profile.StarredPeople != "[]" {
+		fmt.Fprintf(&sb, "\nSTARRED PEOPLE: %s — messages from these people get higher priority\n", sanitize(profile.StarredPeople))
+	}
+
 	return sb.String()
 }
+
+// formatRoleRules generates role-specific extraction rules.
+func (p *Pipeline) formatRoleRules() string {
+	p.cacheMu.RLock()
+	profile := p.profile
+	p.cacheMu.RUnlock()
+
+	if profile == nil {
+		return ""
+	}
+
+	role := strings.ToLower(profile.Role)
+	if role == "" {
+		return ""
+	}
+
+	isManager := role == "top_management" || role == "direction_owner" || role == "middle_management" ||
+		strings.Contains(role, "manager") || strings.Contains(role, "director") ||
+		strings.Contains(role, "vp") || strings.Contains(role, "head") ||
+		strings.Contains(role, "cto") || strings.Contains(role, "ceo")
+
+	isLead := strings.Contains(role, "lead") || strings.Contains(role, "tl") ||
+		strings.Contains(role, "principal") || strings.Contains(role, "staff")
+
+	if !isManager && !isLead {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n=== ROLE-SPECIFIC RULES ===\n")
+
+	if isManager {
+		sb.WriteString("ALSO extract tracks for:\n")
+		sb.WriteString("- DECISIONS in your area requiring user's input/approval. Category: \"decision_needed\"\n")
+		sb.WriteString("- DELEGATED TASKS: tasks of reports that are BLOCKED, AT RISK, or OVERDUE. Category: \"task\"/\"follow_up\", ownership: \"delegated\"\n")
+		sb.WriteString("- BLOCKERS & ESCALATIONS: things blocking team requiring manager intervention. Category: \"follow_up\", priority: \"high\"\n")
+		sb.WriteString("- CROSS-TEAM COORDINATION: requests from other teams needing response. Category: \"follow_up\"/\"approval\"\n")
+		sb.WriteString("\nMaintain quality: \"watching\" only for high-priority items. Do NOT create tracks for routine updates or discussions that resolve without the user.\n")
+	} else if isLead {
+		sb.WriteString("ALSO extract tracks for:\n")
+		sb.WriteString("- TECHNICAL DECISIONS requiring user's input/review. Category: \"decision_needed\"\n")
+		sb.WriteString("- CROSS-TEAM DEPENDENCIES needing coordination. Category: \"follow_up\"\n")
+		sb.WriteString("\nOnly create watching tracks for high-priority cross-team decisions.\n")
+	}
+
+	return sb.String()
+}
+
+// --- helpers: prompt template ---
+
+func (p *Pipeline) getPrompt(id string) (string, int) {
+	role := ""
+	if p.profile != nil {
+		role = p.profile.Role
+	}
+	if p.promptStore != nil {
+		tmpl, version, err := p.promptStore.GetForRole(id, role)
+		if err == nil {
+			roleInstr := prompts.GetRoleInstruction(role)
+			if roleInstr != "" {
+				tmpl = roleInstr + "\n\n" + tmpl
+			}
+			return tmpl, version
+		}
+	}
+	tmpl := prompts.Defaults[id]
+	roleInstr := prompts.GetRoleInstruction(role)
+	if roleInstr != "" {
+		tmpl = roleInstr + "\n\n" + tmpl
+	}
+	return tmpl, 0
+}
+
+// --- helpers: caches ---
 
 func (p *Pipeline) loadCaches() {
 	channelNames := make(map[string]string)
@@ -1184,138 +1009,6 @@ func (p *Pipeline) loadCaches() {
 	p.cacheMu.Unlock()
 }
 
-// formatProfileContext builds the profile context section for the AI prompt.
-// Returns ownership rules based on the user's profile (reports, peers, role).
-func (p *Pipeline) formatProfileContext() string {
-	p.cacheMu.RLock()
-	profile := p.profile
-	p.cacheMu.RUnlock()
-
-	if profile == nil || profile.CustomPromptContext == "" {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("=== USER PROFILE CONTEXT ===\n")
-	sb.WriteString(sanitize(profile.CustomPromptContext))
-	sb.WriteString("\n\nOWNERSHIP RULES (based on user profile):\n")
-	sb.WriteString("- If the track is a task/question/request directed at ME → ownership: \"mine\"\n")
-	sb.WriteString("- If the track involves one of MY REPORTS as the responsible person → ownership: \"delegated\", owner_user_id: report's user_id\n")
-	sb.WriteString("- If the track is a decision/discussion that affects my area but I'm not the actor → ownership: \"watching\"\n")
-	sb.WriteString("- If unsure → ownership: \"mine\" (better to surface than miss)\n")
-	sb.WriteString("\nBALL RULES:\n")
-	sb.WriteString("- ball_on = user_id of the person who needs to act next\n")
-	sb.WriteString("- If I asked a question and am waiting for reply → ball_on: other person's user_id\n")
-	sb.WriteString("- If someone asked me something → ball_on: my user_id\n")
-
-	// Add specific report user_ids if available.
-	if profile.Reports != "" && profile.Reports != "[]" {
-		sb.WriteString(fmt.Sprintf("\nMY REPORTS (user_ids): %s\n", sanitize(profile.Reports)))
-		sb.WriteString("Tasks assigned to or owned by these people → ownership: \"delegated\", owner_user_id: their user_id\n")
-	}
-	if profile.Peers != "" && profile.Peers != "[]" {
-		sb.WriteString(fmt.Sprintf("\nMY PEERS (user_ids): %s\n", sanitize(profile.Peers)))
-	}
-	if profile.Manager != "" {
-		sb.WriteString(fmt.Sprintf("\nMY MANAGER (user_id): %s\n", sanitize(profile.Manager)))
-	}
-	if profile.StarredChannels != "" && profile.StarredChannels != "[]" {
-		sb.WriteString(fmt.Sprintf("\nSTARRED CHANNELS: %s — create more tracks from these channels, lower threshold for relevance\n", sanitize(profile.StarredChannels)))
-	}
-	if profile.StarredPeople != "" && profile.StarredPeople != "[]" {
-		sb.WriteString(fmt.Sprintf("\nSTARRED PEOPLE: %s — messages from these people get higher priority\n", sanitize(profile.StarredPeople)))
-	}
-
-	// Category weighting based on role.
-	if role := strings.ToLower(profile.Role); role != "" {
-		sb.WriteString("\nCATEGORY PRIORITY (based on role):\n")
-		switch {
-		case strings.Contains(role, "pm") || strings.Contains(role, "product manager"):
-			sb.WriteString("HIGH priority categories: decision_needed, approval\n")
-			sb.WriteString("NORMAL priority categories: info_request, follow_up\n")
-		case strings.Contains(role, "engineering manager") || strings.Contains(role, "em ") || role == "em":
-			sb.WriteString("HIGH priority categories: decision_needed, follow_up\n")
-			sb.WriteString("NORMAL priority categories: code_review, bug_fix\n")
-		case strings.Contains(role, "manager"):
-			sb.WriteString("HIGH priority categories: decision_needed, follow_up\n")
-			sb.WriteString("NORMAL priority categories: code_review, bug_fix\n")
-		case strings.Contains(role, "lead") || strings.Contains(role, "tl"):
-			sb.WriteString("HIGH priority categories: decision_needed, code_review\n")
-			sb.WriteString("NORMAL priority categories: approval, follow_up\n")
-		default: // IC / engineer / other
-			sb.WriteString("HIGH priority categories: code_review, bug_fix, task\n")
-			sb.WriteString("NORMAL priority categories: decision_needed\n")
-		}
-		sb.WriteString("When a track falls into a HIGH priority category, prefer priority: \"high\" or \"medium\" over \"low\".\n")
-	}
-
-	return sb.String()
-}
-
-// formatRoleRules generates role-specific extraction rules.
-// For manager roles, this broadens extraction criteria beyond "clear actionable requests"
-// to include strategic discussions, delegated tasks, and decisions in their area.
-// For IC roles, returns empty string (default strict rules apply).
-func (p *Pipeline) formatRoleRules() string {
-	p.cacheMu.RLock()
-	profile := p.profile
-	p.cacheMu.RUnlock()
-
-	if profile == nil {
-		return ""
-	}
-
-	role := strings.ToLower(profile.Role)
-	if role == "" {
-		return ""
-	}
-
-	isManager := role == "top_management" || role == "direction_owner" || role == "middle_management" ||
-		strings.Contains(role, "manager") || strings.Contains(role, "director") ||
-		strings.Contains(role, "vp") || strings.Contains(role, "head") ||
-		strings.Contains(role, "cto") || strings.Contains(role, "ceo")
-
-	isLead := strings.Contains(role, "lead") || strings.Contains(role, "tl") ||
-		strings.Contains(role, "principal") || strings.Contains(role, "staff")
-
-	if !isManager && !isLead {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("\n=== ROLE-SPECIFIC RULES (override strict extraction for this role) ===\n")
-	sb.WriteString("The rules above are designed for individual contributors. For YOUR role, EXPAND the extraction:\n\n")
-
-	if isManager {
-		sb.WriteString("ALSO extract tracks for:\n")
-		sb.WriteString("- DECISIONS in your area: discussions where a choice REQUIRES the user's input or approval. Category: \"decision_needed\"\n")
-		sb.WriteString("- DELEGATED TASKS: tasks assigned to reports that are BLOCKED, AT RISK, or OVERDUE — not routine work. Category: \"task\" or \"follow_up\", ownership: \"delegated\"\n")
-		sb.WriteString("- BLOCKERS & ESCALATIONS: things blocking team members that require manager intervention. Category: \"follow_up\", priority: \"high\"\n")
-		sb.WriteString("- CROSS-TEAM COORDINATION: requests from other teams that need the user's response. Category: \"follow_up\" or \"approval\"\n")
-		sb.WriteString("\nFor these manager-specific tracks, MAINTAIN QUALITY:\n")
-		sb.WriteString("- Use ownership \"delegated\" when a report is the responsible person AND the task is at risk or needs oversight\n")
-		sb.WriteString("- Use ownership \"watching\" ONLY for high-priority items: production incidents, blockers, deadline risks. Do NOT create watching tracks for routine status updates, minor bugs handled by others, or informational discussions\n")
-		sb.WriteString("- Do NOT create tracks for every discussion in your area. Ask: 'Does the user need to DO something about this, or will it resolve without them?' If it resolves without them — skip it.\n")
-		sb.WriteString("- Do NOT create separate tracks for individual alerts/incidents in monitoring channels — aggregate systemic issues only\n")
-	} else if isLead {
-		sb.WriteString("ALSO extract tracks for:\n")
-		sb.WriteString("- TECHNICAL DECISIONS: architectural choices that REQUIRE the user's input or review. Category: \"decision_needed\"\n")
-		sb.WriteString("- CROSS-TEAM DEPENDENCIES: technical blockers between teams that need the user's coordination. Category: \"follow_up\"\n")
-		sb.WriteString("\nFor these lead-specific tracks:\n")
-		sb.WriteString("- Only create watching tracks for high-priority cross-team decisions affecting the user's codebase\n")
-		sb.WriteString("- Do NOT create tracks for general tech discussions, code quality observations, or mentoring unless the user is explicitly asked\n")
-	}
-
-	return sb.String()
-}
-
-func (p *Pipeline) languageInstruction() string {
-	if lang := p.cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {
-		return fmt.Sprintf("IMPORTANT: Write ALL text values (text, context) in %s.", lang)
-	}
-	return "Write in the language most commonly used in the messages"
-}
-
 func (p *Pipeline) channelName(id string) string {
 	p.cacheMu.RLock()
 	name, ok := p.channelNames[id]
@@ -1342,31 +1035,119 @@ func (p *Pipeline) progress(done, total int, status string) {
 	}
 }
 
-// jsonOrEmpty returns the JSON string if it's valid and non-null, or "[]" as default.
+func (p *Pipeline) languageInstruction() string {
+	if lang := p.cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {
+		return fmt.Sprintf("IMPORTANT: Write ALL text values (text, context) in %s.", lang)
+	}
+	return "Write in the language most commonly used in the messages"
+}
+
+// --- helpers: fingerprint & dedup ---
+
+var (
+	reTicket  = regexp.MustCompile(`(?i)\b(CEX|FIAT|NOVA|DEV|INFRA|CONVERT|DVSP|BLINC)-\d+\b`)
+	reUserID  = regexp.MustCompile(`\bU[A-Z0-9]{8,}\b`)
+	reIP      = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	reCVE     = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d+\b`)
+	reMR      = regexp.MustCompile(`!(\d{4,})\b`)
+	reSlackTS = regexp.MustCompile(`\b\d{10}\.\d{6}\b`)
+)
+
+func extractFingerprint(text, ctx string) []string {
+	combined := text + " " + ctx
+	seen := make(map[string]struct{})
+	var result []string
+
+	add := func(s string) {
+		upper := strings.ToUpper(s)
+		if _, ok := seen[upper]; !ok {
+			seen[upper] = struct{}{}
+			result = append(result, upper)
+		}
+	}
+
+	for _, m := range reTicket.FindAllString(combined, -1) {
+		add(m)
+	}
+	for _, m := range reCVE.FindAllString(combined, -1) {
+		add(m)
+	}
+	for _, m := range reMR.FindAllString(combined, -1) {
+		add("MR" + m[1:])
+	}
+	for _, m := range reUserID.FindAllString(combined, -1) {
+		add(m)
+	}
+	for _, m := range reIP.FindAllString(combined, -1) {
+		if !reSlackTS.MatchString(m) {
+			add(m)
+		}
+	}
+
+	sort.Strings(result)
+	return result
+}
+
+func fingerprintJSON(fp []string) string {
+	if len(fp) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(fp)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func shouldDropTrack(ownership, priority, category, blocking string) bool {
+	if ownership == "watching" && priority == "low" {
+		return true
+	}
+	if ownership == "watching" && priority == "medium" {
+		if (category == "follow_up" || category == "discussion") && blocking == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// --- helpers: JSON & text ---
+
 func jsonOrEmpty(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "[]"
 	}
-	// Validate that the raw message is valid JSON before storing.
 	if !json.Valid(raw) {
 		return "[]"
 	}
 	return string(raw)
 }
 
+func jsonStringArray(arr []string) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	data, _ := json.Marshal(arr)
+	return string(data)
+}
+
+func truncate(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
+}
+
 func sanitize(text string) string {
-	// Strip newlines to prevent prompt structure injection via display names.
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\r", " ")
-	// Strip backticks to prevent markdown code fence injection.
 	text = strings.ReplaceAll(text, "```", "` ` `")
-	// Strip section markers that could alter prompt structure.
 	text = strings.ReplaceAll(text, "===", "= = =")
 	text = strings.ReplaceAll(text, "---", "- - -")
 	return text
 }
 
-// cleanJSON strips markdown fences and trims to the outermost JSON braces.
 func cleanJSON(raw string) string {
 	cleaned := raw
 	if idx := strings.Index(raw, "```json"); idx >= 0 {
@@ -1397,4 +1178,13 @@ func parseResult(raw string) (*aiResult, error) {
 		return nil, fmt.Errorf("parsing tracks JSON: %w (raw: %.200s)", err, raw)
 	}
 	return &result, nil
+}
+
+func validatePriority(p string) string {
+	switch p {
+	case "high", "medium", "low":
+		return p
+	default:
+		return "medium"
+	}
 }

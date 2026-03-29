@@ -23,9 +23,6 @@ func TestPrintProgressJSON_Success(t *testing.T) {
 		ChannelsTotal:   20,
 		ChannelsDone:    10,
 		MessagesFetched: 500,
-		ThreadsTotal:    30,
-		ThreadsDone:     15,
-		ThreadsFetched:  45,
 	}
 
 	printProgressJSON(buf, snap, nil)

@@ -96,11 +96,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	resultPath := filepath.Join(cfg.WorkspaceDir(), "last_sync.json")
 	if result, err := sync.ReadSyncResult(resultPath); err == nil {
 		dur := time.Duration(result.DurationSecs * float64(time.Second)).Round(time.Second)
-		status := fmt.Sprintf("%s, took %s — %s messages, %s threads",
+		status := fmt.Sprintf("%s, took %s — %s messages",
 			humanize.Time(result.FinishedAt),
 			dur,
 			humanize.Comma(int64(result.MessagesFetched)),
-			humanize.Comma(int64(result.ThreadsFetched)),
 		)
 		if result.Error != "" {
 			status += fmt.Sprintf(" (error: %s)", result.Error)

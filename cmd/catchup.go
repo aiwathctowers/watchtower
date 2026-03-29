@@ -133,7 +133,25 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 
 	renderer := ai.NewResponseRenderer(database, ws.Domain, ws.ID)
 
-	resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+	runID, _ := database.CreatePipelineRun("catchup", "cli", cfg.AI.Model)
+
+	resp, usage, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+
+	// Complete pipeline run regardless of outcome.
+	{
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+		if usage != nil {
+			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+		}
+		if runID > 0 {
+			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("ai query failed: %w", err)
 	}
@@ -167,7 +185,7 @@ func showDigestCatchup(out interface{ Write([]byte) (int, error) }, database *db
 		d := dailyDigests[0]
 		var buf strings.Builder
 		fmt.Fprintln(&buf, d.Summary)
-		printDigestDetails(&buf, d)
+		printDigestDetails(&buf, d, database)
 		fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
 		return true
 	}
@@ -188,13 +206,57 @@ func showDigestCatchup(out interface{ Write([]byte) (int, error) }, database *db
 			name = "#" + ch.Name
 		}
 		fmt.Fprintf(&buf, "**%s** (%d messages)\n%s\n\n", name, d.MessageCount, d.Summary)
-		printDigestDetails(&buf, d)
+		printDigestDetails(&buf, d, database)
 	}
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
 	return true
 }
 
-func printDigestDetails(out interface{ Write([]byte) (int, error) }, d db.Digest) {
+func printDigestDetails(out interface{ Write([]byte) (int, error) }, d db.Digest, database ...*db.DB) {
+	// Try topic-structured data first
+	var topics []db.DigestTopic
+	if len(database) > 0 && database[0] != nil {
+		topics, _ = database[0].GetDigestTopics(d.ID)
+	}
+	if len(topics) > 0 {
+		for _, t := range topics {
+			fmt.Fprintf(out, "\n**%s**\n", t.Title)
+			if t.Summary != "" {
+				fmt.Fprintf(out, "%s\n", t.Summary)
+			}
+
+			var decisions []struct {
+				Text string `json:"text"`
+				By   string `json:"by"`
+			}
+			if err := json.Unmarshal([]byte(t.Decisions), &decisions); err == nil && len(decisions) > 0 {
+				for _, dec := range decisions {
+					if dec.By != "" {
+						fmt.Fprintf(out, "- **Decision:** %s (by %s)\n", dec.Text, dec.By)
+					} else {
+						fmt.Fprintf(out, "- **Decision:** %s\n", dec.Text)
+					}
+				}
+			}
+
+			var actions []struct {
+				Text     string `json:"text"`
+				Assignee string `json:"assignee"`
+			}
+			if err := json.Unmarshal([]byte(t.ActionItems), &actions); err == nil && len(actions) > 0 {
+				for _, a := range actions {
+					assignee := ""
+					if a.Assignee != "" {
+						assignee = " -> " + a.Assignee
+					}
+					fmt.Fprintf(out, "- %s%s\n", a.Text, assignee)
+				}
+			}
+		}
+		return
+	}
+
+	// Fallback to old flat fields for legacy digests
 	var decisions []struct {
 		Text string `json:"text"`
 		By   string `json:"by"`

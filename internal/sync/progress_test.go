@@ -25,9 +25,6 @@ func TestSetPhase(t *testing.T) {
 	p.SetPhase(PhaseMessages)
 	assert.Equal(t, PhaseMessages, p.Phase())
 
-	p.SetPhase(PhaseThreads)
-	assert.Equal(t, PhaseThreads, p.Phase())
-
 	p.SetPhase(PhaseDone)
 	assert.Equal(t, PhaseDone, p.Phase())
 }
@@ -39,7 +36,6 @@ func TestPhaseString(t *testing.T) {
 	}{
 		{PhaseMetadata, "Metadata"},
 		{PhaseMessages, "Messages"},
-		{PhaseThreads, "Threads"},
 		{PhaseDone, "Done"},
 		{SyncPhase(99), "Unknown"},
 	}
@@ -76,20 +72,6 @@ func TestMessageProgress(t *testing.T) {
 	assert.Equal(t, 50, snap.MsgChannelsTotal)
 	assert.Equal(t, 2, snap.MsgChannelsDone)
 	assert.Equal(t, 300, snap.MessagesFetched)
-}
-
-func TestThreadProgress(t *testing.T) {
-	p := NewProgress()
-	p.SetPhase(PhaseThreads)
-
-	p.SetThreadsTotal(30)
-	p.IncThread(5)
-	p.IncThread(3)
-
-	snap := p.Snapshot()
-	assert.Equal(t, 30, snap.ThreadsTotal)
-	assert.Equal(t, 2, snap.ThreadsDone)
-	assert.Equal(t, 8, snap.ThreadsFetched)
 }
 
 func TestConcurrentAccess(t *testing.T) {
@@ -176,31 +158,6 @@ func TestRenderSnapshotMessagesPhase(t *testing.T) {
 	assert.NotContains(t, output, "Threads")
 }
 
-func TestRenderSnapshotThreadsPhase(t *testing.T) {
-	snap := Snapshot{
-		Phase:            PhaseThreads,
-		UsersTotal:       100,
-		UsersDone:        100,
-		ChannelsTotal:    50,
-		ChannelsDone:     50,
-		MsgChannelsTotal: 50,
-		MsgChannelsDone:  50,
-		MessagesFetched:  5000,
-		ThreadsTotal:     200,
-		ThreadsDone:      100,
-		ThreadsFetched:   800,
-		PhaseStartTime:   time.Now().Add(-10 * time.Second),
-	}
-	output := RenderSnapshot(snap, "test-ws")
-
-	// Messages should show done
-	assert.Contains(t, output, "5,000 msgs done")
-	// Threads should show progress
-	assert.Contains(t, output, "100/200 threads")
-	assert.Contains(t, output, "800 replies")
-	assert.Contains(t, output, "50%")
-}
-
 func TestRenderSnapshotDonePhase(t *testing.T) {
 	snap := Snapshot{
 		Phase:            PhaseDone,
@@ -212,16 +169,12 @@ func TestRenderSnapshotDonePhase(t *testing.T) {
 		MsgChannelsTotal: 50,
 		MsgChannelsDone:  50,
 		MessagesFetched:  5000,
-		ThreadsTotal:     200,
-		ThreadsDone:      200,
-		ThreadsFetched:   1600,
 	}
 	output := RenderSnapshot(snap, "test-ws")
 
 	// All phases should show done
 	assert.Contains(t, output, "done")
 	assert.Contains(t, output, "5,000 msgs done")
-	assert.Contains(t, output, "1,600 replies done")
 	// Should show "Synced" with elapsed time
 	assert.Contains(t, output, "Synced test-ws")
 	assert.Contains(t, output, "1m")

@@ -118,6 +118,10 @@ func runBriefingGenerate(cmd *cobra.Command, _ []string) error {
 		cfg.Digest.Model = config.DefaultDigestModel
 	}
 
+	if err := validateModel(cfg); err != nil {
+		return err
+	}
+
 	database, err := db.Open(cfg.DBPath())
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)

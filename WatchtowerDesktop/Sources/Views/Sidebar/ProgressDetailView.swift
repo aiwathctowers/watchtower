@@ -16,7 +16,6 @@ struct ProgressDetailContent: View {
             // Live progress (only when tasks are active)
             if !manager.tasks.isEmpty {
                 header(manager)
-                costSummary(manager)
 
                 ForEach(BackgroundTaskManager.TaskKind.allCases) { kind in
                     if let state = manager.tasks[kind] {
@@ -122,7 +121,10 @@ struct ProgressDetailContent: View {
 
             if run.inputTokens > 0 || run.outputTokens > 0 {
                 HStack(spacing: 16) {
-                    detailRow(label: "Input", value: formatTokens(run.inputTokens))
+                    detailRow(label: "Input (clean)", value: formatTokens(run.inputTokens))
+                    if run.totalApiTokens > 0 {
+                        detailRow(label: "Input (full)", value: formatTokens(run.totalApiTokens))
+                    }
                     detailRow(label: "Output", value: formatTokens(run.outputTokens))
                     if run.costUsd > 0 {
                         detailRow(label: "Cost", value: String(format: "$%.4f", run.costUsd))
@@ -236,48 +238,6 @@ struct ProgressDetailContent: View {
         }
     }
 
-    // MARK: - Cost Summary
-
-    private func costSummary(_ manager: BackgroundTaskManager) -> some View {
-        GroupBox("Session Cost") {
-            VStack(spacing: 8) {
-                HStack(spacing: 24) {
-                    costItem(
-                        label: "Input (clean)",
-                        value: formatTokens(manager.totalInputTokens),
-                        tooltip: "Estimated tokens from Watchtower prompts (~4 chars/token)"
-                    )
-                    costItem(
-                        label: "Input (full)",
-                        value: formatTokens(manager.totalApiTokens),
-                        tooltip: "Total input tokens processed by the API, including CLI overhead and caching"
-                    )
-                    costItem(
-                        label: "Output",
-                        value: formatTokens(manager.totalOutputTokens)
-                    )
-                    costItem(
-                        label: "Cost",
-                        value: String(format: "$%.4f", manager.totalCostUsd)
-                    )
-                }
-            }
-            .padding(4)
-        }
-    }
-
-    private func costItem(label: String, value: String, tooltip: String? = nil) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.headline)
-                .fontWeight(.bold)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .help(tooltip ?? "")
-    }
-
     // MARK: - Task Section
 
     private func isTaskExpanded(_ kind: BackgroundTaskManager.TaskKind) -> Bool {
@@ -370,25 +330,10 @@ struct ProgressDetailContent: View {
 
     private func stepHistorySection(_ history: [BackgroundTaskManager.StepRecord]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Step History")
+            Text("Steps")
                 .font(.caption)
                 .fontWeight(.medium)
                 .foregroundStyle(.secondary)
-
-            let taskInput = history.reduce(0) { $0 + $1.inputTokens }
-            let taskAPI = history.reduce(0) { $0 + $1.totalApiTokens }
-            let taskOutput = history.reduce(0) { $0 + $1.outputTokens }
-            let taskCost = history.reduce(0.0) { $0 + $1.costUsd }
-
-            HStack(spacing: 16) {
-                let apiLabel = taskAPI > 0 ? " / full \(formatTokens(taskAPI))" : ""
-                Text("clean \(formatTokens(taskInput))\(apiLabel) in, \(formatTokens(taskOutput)) out")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(String(format: "$%.4f", taskCost))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
 
             ForEach(history.reversed()) { record in
                 stepRow(record)

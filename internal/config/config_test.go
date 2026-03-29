@@ -61,6 +61,7 @@ func TestLoad_DefaultValues(t *testing.T) {
 
 	assert.Equal(t, DefaultAIModel, cfg.AI.Model)
 	assert.Equal(t, DefaultAIContextBudget, cfg.AI.ContextBudget)
+	assert.Equal(t, DefaultAIWorkers, cfg.AI.Workers)
 	assert.Equal(t, DefaultSyncWorkers, cfg.Sync.Workers)
 	assert.Equal(t, DefaultInitialHistDays, cfg.Sync.InitialHistoryDays)
 	assert.Equal(t, DefaultSyncThreads, cfg.Sync.SyncThreads)
@@ -182,6 +183,40 @@ func TestLoad_EnvVarOverride_AIModel(t *testing.T) {
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "claude-opus-4-6", cfg.AI.Model)
+}
+
+func TestLoad_EnvVarOverride_AIWorkers(t *testing.T) {
+	path := writeTestConfig(t, "")
+
+	t.Setenv("WATCHTOWER_AI_WORKERS", "12")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 12, cfg.AI.Workers)
+}
+
+func TestLoad_BackwardCompat_DigestWorkersToAIWorkers(t *testing.T) {
+	yaml := `
+digest:
+  workers: 8
+`
+	path := writeTestConfig(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 8, cfg.AI.Workers, "digest.workers should migrate to ai.workers")
+}
+
+func TestLoad_AIWorkersOverridesDigestWorkers(t *testing.T) {
+	yaml := `
+ai:
+  workers: 10
+digest:
+  workers: 8
+`
+	path := writeTestConfig(t, yaml)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 10, cfg.AI.Workers, "explicit ai.workers should take precedence")
 }
 
 func TestLoad_EnvVarOverride_Workers(t *testing.T) {

@@ -86,6 +86,12 @@ struct TrainingSettings: View {
                         Text(promptLabel(prompt.id))
                             .font(.subheadline)
                             .fontWeight(.medium)
+                        if let desc = sharedPromptDescriptions[prompt.id] {
+                            Text(desc)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
                         HStack(spacing: 6) {
                             Text("v\(prompt.version)")
                                 .font(.caption2)
@@ -326,17 +332,7 @@ struct TrainingSettings: View {
     }
 
     private func promptLabel(_ id: String) -> String {
-        let labels: [String: String] = [
-            "digest.channel": "Channel Digest",
-            "digest.daily": "Daily Rollup",
-            "digest.weekly": "Weekly Summary",
-            "digest.period": "Period Summary",
-            "tracks.extract": "Tracks Extract",
-            "tracks.update": "Tracks Update",
-            "analysis.user": "User Analysis",
-            "analysis.period": "Period Analysis"
-        ]
-        return labels[id] ?? id
+        sharedPromptLabels[id] ?? id
     }
 
     private func feedbackTypeLabel(_ type: String) -> String {
@@ -368,9 +364,20 @@ struct PromptDetailPane: View {
             // Header
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(prompt.id)
+                    Text(sharedPromptLabels[prompt.id] ?? prompt.id)
                         .font(.headline)
+                    if let desc = sharedPromptDescriptions[prompt.id] {
+                        Text(desc)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     HStack(spacing: 8) {
+                        Text(prompt.id)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.1), in: Capsule())
                         Text("Version \(prompt.version)")
                             .font(.caption)
                             .foregroundStyle(.secondary)

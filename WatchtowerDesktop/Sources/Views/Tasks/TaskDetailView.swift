@@ -1,0 +1,574 @@
+import SwiftUI
+
+struct TaskDetailView: View {
+    let task: TaskItem
+    let viewModel: TasksViewModel
+    var onClose: (() -> Void)?
+    @Environment(AppState.self) private var appState
+
+    @State private var editingText: String = ""
+    @State private var editingIntent: String = ""
+    @State private var editingBlocking: String = ""
+    @State private var editingBallOn: String = ""
+    @State private var hasDueDate: Bool = false
+    @State private var dueDate: Date = Date()
+    @State private var showSnoozePopover = false
+    @State private var snoozeCustomDate = Date()
+    @State private var newSubItemText: String = ""
+    @State private var editingSubItemIndex: Int? = nil
+    @State private var editingSubItemText: String = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                headerSection
+                intentSection
+                statusSection
+                dueDateSection
+                detailsSection
+                subItemsSection
+                metaSection
+                sourceSection
+                actionsSection
+            }
+            .padding()
+        }
+        .onAppear { syncState() }
+        .onChange(of: task.id) { syncState() }
+    }
+
+    private func syncState() {
+        editingText = task.text
+        editingIntent = task.intent
+        editingBlocking = task.blocking
+        editingBallOn = task.ballOn
+        hasDueDate = !task.dueDate.isEmpty
+        if let date = Self.dateFormatter.date(from: task.dueDate) {
+            dueDate = date
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                priorityMenu
+                ownershipMenu
+                Spacer()
+                if let onClose {
+                    Button { onClose() } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+
+            TextField("Task description", text: $editingText, axis: .vertical)
+                .font(.title3)
+                .fontWeight(.semibold)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+                .onSubmit { commitText() }
+                .onChange(of: editingText) { _, newValue in
+                    // Commit on focus loss is handled by onSubmit; also debounce-commit
+                }
+
+            HStack(spacing: 12) {
+                statusLabel
+                if let progress = task.subItemsProgress {
+                    Label(progress, systemImage: "checklist")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Intent
+
+    private var intentSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Intent")
+                .font(.headline)
+            TextField("Why this task matters...", text: $editingIntent)
+                .font(.callout)
+                .textFieldStyle(.plain)
+                .foregroundStyle(.secondary)
+                .onSubmit { commitIntent() }
+        }
+    }
+
+    // MARK: - Status
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Status")
+                .font(.headline)
+            HStack(spacing: 8) {
+                ForEach(
+                    ["todo", "in_progress", "blocked", "done"],
+                    id: \.self
+                ) { status in
+                    Button {
+                        viewModel.updateStatus(task, to: status)
+                    } label: {
+                        Text(statusDisplayName(status))
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                task.status == status
+                                    ? statusButtonColor(status).opacity(0.15)
+                                    : Color.clear,
+                                in: Capsule()
+                            )
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(
+                                        statusButtonColor(status).opacity(0.3),
+                                        lineWidth: 1
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: - Due Date
+
+    private var dueDateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Due Date")
+                .font(.headline)
+            HStack {
+                Toggle("", isOn: $hasDueDate)
+                    .labelsHidden()
+                    .onChange(of: hasDueDate) { _, newValue in
+                        if newValue {
+                            commitDueDate()
+                        } else {
+                            viewModel.updateDueDate(task, to: "")
+                        }
+                    }
+                if hasDueDate {
+                    DatePicker(
+                        "",
+                        selection: $dueDate,
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                    .onChange(of: dueDate) { _, _ in
+                        commitDueDate()
+                    }
+                    if task.isOverdue {
+                        Text("Overdue")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("No due date")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Details (blocking, ball_on)
+
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Blocking")
+                    .font(.headline)
+                TextField("What is this blocking?", text: $editingBlocking)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .onSubmit { commitBlocking() }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Ball On")
+                    .font(.headline)
+                TextField("Who has the ball?", text: $editingBallOn)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .onSubmit { commitBallOn() }
+            }
+        }
+    }
+
+    // MARK: - Sub Items
+
+    private var subItemsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Checklist")
+                .font(.headline)
+
+            let items = task.decodedSubItems
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(spacing: 8) {
+                    Button {
+                        viewModel.toggleSubItem(task, index: index)
+                    } label: {
+                        Image(systemName: item.done
+                            ? "checkmark.circle.fill"
+                            : "circle")
+                            .foregroundStyle(item.done ? .green : .secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    if editingSubItemIndex == index {
+                        TextField("Sub-item", text: $editingSubItemText)
+                            .font(.callout)
+                            .textFieldStyle(.plain)
+                            .onSubmit {
+                                viewModel.editSubItem(task, index: index, newText: editingSubItemText)
+                                editingSubItemIndex = nil
+                            }
+                    } else {
+                        Text(item.text)
+                            .font(.callout)
+                            .strikethrough(item.done)
+                            .foregroundStyle(
+                                item.done ? .secondary : .primary
+                            )
+                    }
+
+                    Spacer()
+                }
+                .contextMenu {
+                    Button("Edit") {
+                        editingSubItemIndex = index
+                        editingSubItemText = item.text
+                    }
+                    Button("Delete", role: .destructive) {
+                        viewModel.removeSubItem(task, index: index)
+                    }
+                }
+            }
+
+            // Add new sub-item
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .foregroundStyle(.secondary)
+                TextField("Add item...", text: $newSubItemText)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        viewModel.addSubItem(task, text: newSubItemText)
+                        newSubItemText = ""
+                    }
+            }
+        }
+    }
+
+    // MARK: - Meta
+
+    @ViewBuilder
+    private var metaSection: some View {
+        let tags = task.decodedTags
+        if !tags.isEmpty {
+            HStack(spacing: 4) {
+                Text("Tags:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            .blue.opacity(0.1),
+                            in: Capsule()
+                        )
+                }
+            }
+        }
+    }
+
+    // MARK: - Source
+
+    @ViewBuilder
+    private var sourceSection: some View {
+        if task.sourceType != "manual" {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Source")
+                    .font(.headline)
+                Button {
+                    navigateToSource()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: sourceIcon)
+                            .foregroundStyle(.blue)
+                        Text("\(task.sourceType.capitalized) #\(task.sourceID)")
+                            .font(.callout)
+                            .foregroundStyle(.blue)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private var actionsSection: some View {
+        HStack(spacing: 8) {
+            if task.isActive {
+                Button {
+                    viewModel.markDone(task)
+                } label: {
+                    Label("Done", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button {
+                    viewModel.dismiss(task)
+                } label: {
+                    Label("Dismiss", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    showSnoozePopover = true
+                } label: {
+                    Label("Snooze", systemImage: "moon")
+                }
+                .buttonStyle(.bordered)
+                .popover(isPresented: $showSnoozePopover) {
+                    snoozePopover
+                }
+            }
+
+            Spacer()
+
+            if let dbManager = appState.databaseManager {
+                FeedbackButtons(
+                    entityType: "task",
+                    entityID: String(task.id),
+                    dbManager: dbManager
+                )
+            }
+        }
+    }
+
+    // MARK: - Snooze Popover
+
+    private var snoozePopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Snooze until")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            Button("Tomorrow") {
+                snoozeFor(days: 1)
+            }
+            Button("In 3 days") {
+                snoozeFor(days: 3)
+            }
+            Button("In a week") {
+                snoozeFor(days: 7)
+            }
+
+            Divider()
+
+            DatePicker("Pick date", selection: $snoozeCustomDate, displayedComponents: .date)
+                .labelsHidden()
+
+            Button("Snooze to selected date") {
+                let dateStr = Self.dateFormatter.string(from: snoozeCustomDate)
+                viewModel.snooze(task, until: dateStr)
+                showSnoozePopover = false
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .frame(width: 220)
+    }
+
+    // MARK: - Priority & Ownership Menus
+
+    private var priorityMenu: some View {
+        Menu {
+            ForEach(["high", "medium", "low"], id: \.self) { p in
+                Button {
+                    viewModel.updatePriority(task, to: p)
+                } label: {
+                    HStack {
+                        Text(p.capitalized)
+                        if task.priority == p {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(priorityColor)
+                    .frame(width: 8, height: 8)
+                Text(task.priority.capitalized)
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(priorityColor.opacity(0.12), in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var ownershipMenu: some View {
+        Menu {
+            ForEach(["mine", "delegated", "watching"], id: \.self) { o in
+                Button {
+                    viewModel.updateOwnership(task, to: o)
+                } label: {
+                    HStack {
+                        Text(o.capitalized)
+                        if task.ownership == o {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(task.ownership.capitalized)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.secondary.opacity(0.1), in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    // MARK: - Helpers
+
+    private var statusLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: task.statusIcon)
+                .font(.caption)
+            Text(statusDisplayName(task.status))
+                .font(.caption)
+        }
+        .foregroundStyle(statusButtonColor(task.status))
+    }
+
+    private var priorityColor: Color {
+        switch task.priority {
+        case "high": return .red
+        case "medium": return .orange
+        case "low": return .blue
+        default: return .orange
+        }
+    }
+
+    private var sourceIcon: String {
+        switch task.sourceType {
+        case "track": return "binoculars"
+        case "digest": return "doc.text.magnifyingglass"
+        case "briefing": return "sun.max"
+        case "chat": return "bubble.left.and.bubble.right"
+        default: return "square.and.pencil"
+        }
+    }
+
+    private func statusDisplayName(_ status: String) -> String {
+        switch status {
+        case "todo": return "To Do"
+        case "in_progress": return "In Progress"
+        case "blocked": return "Blocked"
+        case "done": return "Done"
+        case "dismissed": return "Dismissed"
+        case "snoozed": return "Snoozed"
+        default: return status.capitalized
+        }
+    }
+
+    private func statusButtonColor(_ status: String) -> Color {
+        switch status {
+        case "todo": return .secondary
+        case "in_progress": return .blue
+        case "blocked": return .red
+        case "done": return .green
+        case "dismissed": return .gray
+        case "snoozed": return .purple
+        default: return .secondary
+        }
+    }
+
+    private func navigateToSource() {
+        switch task.sourceType {
+        case "track":
+            appState.selectedDestination = .tracks
+        case "digest":
+            if let id = Int(task.sourceID) {
+                appState.navigateToDigest(id)
+            }
+        case "briefing":
+            appState.selectedDestination = .briefings
+        default:
+            break
+        }
+    }
+
+    // MARK: - Commit Helpers
+
+    private func commitText() {
+        let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != task.text else { return }
+        viewModel.updateText(task, to: trimmed)
+    }
+
+    private func commitIntent() {
+        let trimmed = editingIntent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != task.intent else { return }
+        viewModel.updateIntent(task, to: trimmed)
+    }
+
+    private func commitDueDate() {
+        let dateStr = Self.dateFormatter.string(from: dueDate)
+        guard dateStr != task.dueDate else { return }
+        viewModel.updateDueDate(task, to: dateStr)
+    }
+
+    private func commitBlocking() {
+        let trimmed = editingBlocking.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != task.blocking else { return }
+        viewModel.updateBlocking(task, to: trimmed)
+    }
+
+    private func commitBallOn() {
+        let trimmed = editingBallOn.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != task.ballOn else { return }
+        viewModel.updateBallOn(task, to: trimmed)
+    }
+
+    private func snoozeFor(days: Int) {
+        let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()
+        let dateStr = Self.dateFormatter.string(from: date)
+        viewModel.snooze(task, until: dateStr)
+        showSnoozePopover = false
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt
+    }()
+}

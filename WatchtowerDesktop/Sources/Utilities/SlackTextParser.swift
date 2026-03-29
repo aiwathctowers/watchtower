@@ -11,6 +11,7 @@ enum SlackTextParser {
     // swiftformat:disable all
     private static let linkPattern = try? NSRegularExpression(pattern: #"<(https?://[^|>]+)\|([^>]+)>"#)
     private static let bareLinkPattern = try? NSRegularExpression(pattern: #"<(https?://[^>]+)>"#)
+    private static let userMentionWithNamePattern = try? NSRegularExpression(pattern: #"<@U[A-Z0-9]+\|([^>]+)>"#)
     private static let userMentionPattern = try? NSRegularExpression(pattern: #"<@(U[A-Z0-9]+)>"#)
     private static let channelMentionPattern = try? NSRegularExpression(pattern: #"<#C[A-Z0-9]+\|([^>]+)>"#)
     private static let specialMentionPattern = try? NSRegularExpression(pattern: #"<!(\w+)(\|[^>]+)?>"#)
@@ -70,7 +71,14 @@ enum SlackTextParser {
             )
         }
 
-        // User mentions: <@U123ABC> → @U123ABC
+        // User mentions with display name: <@U123ABC|Name> → @Name
+        if let pattern = userMentionWithNamePattern {
+            text = pattern.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
+            )
+        }
+
+        // User mentions without display name: <@U123ABC> → @U123ABC
         if let pattern = userMentionPattern {
             text = pattern.stringByReplacingMatches(
                 in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"

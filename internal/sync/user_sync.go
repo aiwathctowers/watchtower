@@ -14,7 +14,7 @@ const usersBulkThreshold = 50
 // syncUserProfiles fetches full profiles for users that appear in messages
 // but don't yet have complete records in the users table.
 func (o *Orchestrator) syncUserProfiles(ctx context.Context) error {
-	unknownIDs, err := o.db.GetUnknownUserIDs()
+	unknownIDs, err := o.db.GetIncompleteUserIDs()
 	if err != nil {
 		return fmt.Errorf("getting unknown user IDs: %w", err)
 	}
@@ -64,7 +64,7 @@ func (o *Orchestrator) fetchUserProfilesIndividually(ctx context.Context, userID
 			DisplayName: user.Profile.DisplayName,
 			RealName:    user.RealName,
 			Email:       user.Profile.Email,
-			IsBot:       user.IsBot,
+			IsBot:       user.IsBot || user.IsAppUser,
 			IsDeleted:   user.Deleted,
 			ProfileJSON: string(profileJSON),
 		}); err != nil {
@@ -106,7 +106,7 @@ func (o *Orchestrator) fetchAllUserProfiles(ctx context.Context) error {
 			DisplayName: u.Profile.DisplayName,
 			RealName:    u.RealName,
 			Email:       u.Profile.Email,
-			IsBot:       u.IsBot,
+			IsBot:       u.IsBot || u.IsAppUser,
 			IsDeleted:   false,
 			ProfileJSON: string(profileJSON),
 		}); err != nil {

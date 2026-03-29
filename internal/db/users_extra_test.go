@@ -17,6 +17,7 @@ func TestEnsureUser(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, u)
 	assert.Equal(t, "alice", u.Name)
+	assert.True(t, u.IsStub, "EnsureUser should create stub records")
 
 	// Re-ensure should not overwrite
 	err = db.EnsureUser("U1", "different-name")
@@ -25,32 +26,56 @@ func TestEnsureUser(t *testing.T) {
 	u, err = db.GetUserByID("U1")
 	require.NoError(t, err)
 	assert.Equal(t, "alice", u.Name)
+
+	// UpsertUser should clear the stub flag
+	require.NoError(t, db.UpsertUser(User{ID: "U1", Name: "alice", RealName: "Alice Smith", IsBot: true}))
+	u, err = db.GetUserByID("U1")
+	require.NoError(t, err)
+	assert.False(t, u.IsStub, "UpsertUser should clear stub flag")
+	assert.True(t, u.IsBot)
 }
 
-func TestGetUnknownUserIDs(t *testing.T) {
+func TestGetIncompleteUserIDs(t *testing.T) {
 	db := openTestDB(t)
 
-	// Insert a user
+	// Full user — should NOT appear
 	require.NoError(t, db.UpsertUser(User{ID: "U1", Name: "alice"}))
 
-	// Insert messages from known and unknown users
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: "1500000.000001", UserID: "U1", Text: "known", RawJSON: "{}"}))
+	// Messages from unknown users — should appear
 	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: "1500000.000002", UserID: "U_UNKNOWN", Text: "unknown", RawJSON: "{}"}))
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: "1500000.000003", UserID: "U_UNKNOWN2", Text: "unknown2", RawJSON: "{}"}))
 
-	ids, err := db.GetUnknownUserIDs()
+	// Stub user (created via EnsureUser) — should appear
+	require.NoError(t, db.EnsureUser("U_STUB", "stub-bot"))
+
+	ids, err := db.GetIncompleteUserIDs()
 	require.NoError(t, err)
 	assert.Len(t, ids, 2)
 	assert.Contains(t, ids, "U_UNKNOWN")
-	assert.Contains(t, ids, "U_UNKNOWN2")
+	assert.Contains(t, ids, "U_STUB")
 }
 
-func TestGetUnknownUserIDs_Empty(t *testing.T) {
+func TestGetIncompleteUserIDs_Empty(t *testing.T) {
 	db := openTestDB(t)
 
-	ids, err := db.GetUnknownUserIDs()
+	ids, err := db.GetIncompleteUserIDs()
 	require.NoError(t, err)
 	assert.Empty(t, ids)
+}
+
+func TestGetIncompleteUserIDs_StubBackfilled(t *testing.T) {
+	db := openTestDB(t)
+
+	// Create stub
+	require.NoError(t, db.EnsureUser("U1", "bot"))
+	ids, err := db.GetIncompleteUserIDs()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "U1")
+
+	// Backfill with full profile
+	require.NoError(t, db.UpsertUser(User{ID: "U1", Name: "bot", RealName: "Bot User", IsBot: true}))
+	ids, err = db.GetIncompleteUserIDs()
+	require.NoError(t, err)
+	assert.Empty(t, ids, "backfilled user should no longer be incomplete")
 }
 
 func TestGetUsersFilter(t *testing.T) {

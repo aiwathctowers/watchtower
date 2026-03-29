@@ -26,17 +26,19 @@ type BriefingResult struct {
 
 // AttentionItem is something requiring the user's immediate focus.
 type AttentionItem struct {
-	Text       string `json:"text"`
-	SourceType string `json:"source_type"` // track, chain, digest, people
-	SourceID   string `json:"source_id"`
-	Priority   string `json:"priority"` // high, medium
-	Reason     string `json:"reason"`
+	Text        string `json:"text"`
+	SourceType  string `json:"source_type"` // track, digest, people, task
+	SourceID    string `json:"source_id"`
+	Priority    string `json:"priority"` // high, medium
+	Reason      string `json:"reason"`
+	SuggestTask bool   `json:"suggest_task,omitempty"`
 }
 
 // YourDayItem is a track/task for the user's day.
 type YourDayItem struct {
 	Text      string `json:"text"`
 	TrackID   int    `json:"track_id,omitempty"`
+	TaskID    int    `json:"task_id,omitempty"`
 	DueDate   string `json:"due_date,omitempty"`
 	Priority  string `json:"priority"`
 	Status    string `json:"status"`
@@ -74,6 +76,18 @@ type Pipeline struct {
 	generator   digest.Generator
 	logger      *log.Logger
 	promptStore *prompts.Store
+
+	// Accumulated usage from the last Run call.
+	lastInputTokens    int
+	lastOutputTokens   int
+	lastCostUSD        float64
+	lastTotalAPITokens int
+}
+
+// AccumulatedUsage returns the token usage from the last Run call.
+// Returns (inputTokens, outputTokens, costUSD, totalAPITokens).
+func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
+	return p.lastInputTokens, p.lastOutputTokens, p.lastCostUSD, p.lastTotalAPITokens
 }
 
 // New creates a new briefing pipeline.
@@ -130,18 +144,19 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	}
 
 	// Gather data in parallel-friendly sections.
-	tracksCtx := p.gatherTracks(currentUserID)
-	chainsCtx := p.gatherChains()
+	tasksCtx, hasRealTasks := p.gatherTasks()
+	tracksCtx, hasRealTracks := p.gatherTracks()
+	inboxCtx, hasRealInbox := p.gatherInbox()
 	digestsCtx := p.gatherDigests(date)
 	dailyDigestCtx := p.gatherLatestDailyDigest()
 	peopleCardsCtx := p.gatherPeopleCards()
 	peopleSummaryCtx := p.gatherPeopleSummary()
 	profileCtx := formatUserProfile(profile)
 
-	// Check we have some data.
-	hasData := digestsCtx != "" || dailyDigestCtx != "" || tracksCtx != "" || chainsCtx != ""
+	// Check we have some data (suggestion text alone doesn't count).
+	hasData := digestsCtx != "" || dailyDigestCtx != "" || hasRealTracks || hasRealTasks || hasRealInbox
 	if !hasData {
-		p.logger.Println("briefing: no digests, tracks, or chains available, skipping")
+		p.logger.Println("briefing: no digests or tracks available, skipping")
 		return 0, nil
 	}
 
@@ -165,8 +180,9 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	systemPrompt := fmt.Sprintf(promptTmpl,
 		userName, date, role,
 		langDirective,
+		tasksCtx,
+		inboxCtx,
 		tracksCtx,
-		chainsCtx,
 		digestsCtx,
 		dailyDigestCtx,
 		peopleCardsCtx,
@@ -195,13 +211,18 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	teamPulseJSON, _ := json.Marshal(result.TeamPulse)
 	coachingJSON, _ := json.Marshal(result.Coaching)
 
-	var inTok, outTok int
+	var inTok, outTok, totalAPI int
 	var cost float64
 	if usage != nil {
 		inTok = usage.InputTokens
 		outTok = usage.OutputTokens
 		cost = usage.CostUSD
+		totalAPI = usage.TotalAPITokens
 	}
+	p.lastInputTokens = inTok
+	p.lastOutputTokens = outTok
+	p.lastCostUSD = cost
+	p.lastTotalAPITokens = totalAPI
 
 	briefing := db.Briefing{
 		WorkspaceID:   workspaceID,
@@ -251,67 +272,99 @@ func (p *Pipeline) getPrompt(id, role string) (string, int) {
 	return tmpl, 0
 }
 
-// gatherTracks loads active/inbox tracks for the user.
-func (p *Pipeline) gatherTracks(userID string) string {
-	tracks, err := p.db.GetTracks(db.TrackFilter{
-		AssigneeUserID: userID,
-		Limit:          30,
-	})
+// gatherTasks loads active tasks for the briefing.
+// Returns the formatted context string and whether real tasks were found.
+func (p *Pipeline) gatherTasks() (string, bool) {
+	tasks, err := p.db.GetTasksForBriefing()
 	if err != nil {
-		p.logger.Printf("briefing: error loading tracks: %v", err)
-		return ""
+		p.logger.Printf("briefing: error loading tasks: %v", err)
+		return "", false
 	}
 
-	var active []db.Track
-	for _, t := range tracks {
-		if t.Status == "inbox" || t.Status == "active" {
-			active = append(active, t)
-		}
-	}
-	if len(active) == 0 {
-		return ""
+	if len(tasks) == 0 {
+		return "(No active tasks.)\n", false
 	}
 
+	today := time.Now().Format("2006-01-02")
 	var sb strings.Builder
-	for _, t := range active {
-		sb.WriteString(fmt.Sprintf("- [id=%d %s/%s] %s", t.ID, t.Priority, t.Status, t.Text))
-		if t.SourceChannelName != "" {
-			sb.WriteString(fmt.Sprintf(" (#%s)", t.SourceChannelName))
+	for _, t := range tasks {
+		overdue := ""
+		if t.DueDate != "" && t.DueDate < today {
+			overdue = " OVERDUE"
+		}
+		sb.WriteString(fmt.Sprintf("- [task_id=%d %s%s] %s\n", t.ID, t.Priority, overdue, t.Text))
+		if t.Intent != "" {
+			sb.WriteString(fmt.Sprintf("  Why: %s\n", t.Intent))
+		}
+		if t.DueDate != "" {
+			sb.WriteString(fmt.Sprintf("  Due: %s\n", t.DueDate))
+		}
+		if t.Status != "todo" {
+			sb.WriteString(fmt.Sprintf("  Status: %s\n", t.Status))
 		}
 		if t.Blocking != "" {
-			sb.WriteString(fmt.Sprintf(" [BLOCKING: %s]", t.Blocking))
+			sb.WriteString(fmt.Sprintf("  Blocking: %s\n", t.Blocking))
 		}
-		if t.DueDate > 0 {
-			sb.WriteString(fmt.Sprintf(" [due: %s]", time.Unix(int64(t.DueDate), 0).Format("2006-01-02")))
-		}
-		sb.WriteString(fmt.Sprintf(" [ownership: %s]", t.Ownership))
-		sb.WriteString("\n")
 	}
-	return sb.String()
+	return sb.String(), true
 }
 
-// gatherChains loads active chains from the last 14 days.
-func (p *Pipeline) gatherChains() string {
-	chains, err := p.db.GetActiveChains(14)
+// gatherTracks loads active tracks.
+// Returns the formatted context string and whether real tracks were found.
+func (p *Pipeline) gatherTracks() (string, bool) {
+	tracks, err := p.db.GetTracks(db.TrackFilter{Limit: 30})
 	if err != nil {
-		p.logger.Printf("briefing: error loading chains: %v", err)
-		return ""
-	}
-	if len(chains) == 0 {
-		return ""
+		p.logger.Printf("briefing: error loading tracks: %v", err)
+		return "", false
 	}
 
-	staleCutoff := float64(time.Now().AddDate(0, 0, -3).Unix())
-	var sb strings.Builder
-	for _, c := range chains {
-		staleTag := ""
-		if c.LastSeen < staleCutoff {
-			staleTag = " [STALE]"
-		}
-		sb.WriteString(fmt.Sprintf("- [id=%d] %s: %s (items: %d)%s\n",
-			c.ID, c.Title, c.Summary, c.ItemCount, staleTag))
+	if len(tracks) == 0 {
+		return "(No active tracks yet.)\n", false
 	}
-	return sb.String()
+
+	var sb strings.Builder
+	for _, t := range tracks {
+		sb.WriteString(fmt.Sprintf("- [id=%d %s %s] %s\n", t.ID, t.Priority, t.Ownership, t.Text))
+		if t.Context != "" {
+			ctx := t.Context
+			if len(ctx) > 200 {
+				ctx = ctx[:200] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("  Context: %s\n", ctx))
+		}
+		if t.Participants != "" && t.Participants != "[]" {
+			sb.WriteString(fmt.Sprintf("  Participants: %s\n", t.Participants))
+		}
+	}
+	return sb.String(), true
+}
+
+// gatherInbox loads pending inbox items for the briefing.
+// Returns the formatted context string and whether real items were found.
+func (p *Pipeline) gatherInbox() (string, bool) {
+	items, err := p.db.GetInboxItemsForBriefing()
+	if err != nil {
+		p.logger.Printf("briefing: error loading inbox: %v", err)
+		return "", false
+	}
+
+	if len(items) == 0 {
+		return "(No pending inbox items.)\n", false
+	}
+
+	var sb strings.Builder
+	for _, item := range items {
+		typeLabel := "@mention"
+		if item.TriggerType == "dm" {
+			typeLabel = "DM"
+		}
+		sb.WriteString(fmt.Sprintf("- [inbox_id=%d %s %s] from %s: %s\n",
+			item.ID, item.Priority, typeLabel, item.SenderUserID, item.Snippet))
+		if item.AIReason != "" {
+			sb.WriteString(fmt.Sprintf("  Reason: %s\n", item.AIReason))
+		}
+	}
+	return sb.String(), true
 }
 
 // gatherDigests loads channel digests for the last 24 hours.
@@ -339,13 +392,69 @@ func (p *Pipeline) gatherDigests(date string) string {
 		return ""
 	}
 
+	// Filter out digests from muted channels.
+	mutedIDs, mutedErr := p.db.GetMutedChannelIDs()
+	if mutedErr != nil {
+		p.logger.Printf("briefing: warning: failed to load muted channels: %v", mutedErr)
+	} else if len(mutedIDs) > 0 {
+		muted := make(map[string]bool, len(mutedIDs))
+		for _, id := range mutedIDs {
+			muted[id] = true
+		}
+		var filtered []db.Digest
+		for _, d := range digests {
+			if !muted[d.ChannelID] {
+				filtered = append(filtered, d)
+			}
+		}
+		if skipped := len(digests) - len(filtered); skipped > 0 {
+			p.logger.Printf("briefing: skipped %d digest(s) from muted channels", skipped)
+		}
+		digests = filtered
+		if len(digests) == 0 {
+			return ""
+		}
+	}
+
+	// Batch-load topics for all digests.
+	digestIDs := make([]int, len(digests))
+	for i, d := range digests {
+		digestIDs[i] = d.ID
+	}
+	allTopics, err := p.db.GetDigestTopicsByDigestIDs(digestIDs)
+	if err != nil {
+		p.logger.Printf("briefing: error loading digest topics: %v", err)
+		allTopics = nil
+	}
+	topicsByDigest := make(map[int][]db.DigestTopic)
+	for _, t := range allTopics {
+		topicsByDigest[t.DigestID] = append(topicsByDigest[t.DigestID], t)
+	}
+
 	var sb strings.Builder
 	for _, d := range digests {
 		channelName := d.ChannelID
 		sb.WriteString(fmt.Sprintf("--- [digest_id=%d] #%s (msgs: %d) ---\n", d.ID, channelName, d.MessageCount))
-		sb.WriteString(d.Summary + "\n")
-		if d.Decisions != "" && d.Decisions != "[]" {
-			sb.WriteString("Decisions: " + d.Decisions + "\n")
+
+		topics := topicsByDigest[d.ID]
+		if len(topics) > 0 {
+			// Topic-structured format.
+			for _, t := range topics {
+				sb.WriteString(fmt.Sprintf("  Topic: %s\n", t.Title))
+				sb.WriteString(fmt.Sprintf("    %s\n", t.Summary))
+				if t.Decisions != "" && t.Decisions != "[]" {
+					sb.WriteString(fmt.Sprintf("    Decisions: %s\n", t.Decisions))
+				}
+				if t.ActionItems != "" && t.ActionItems != "[]" {
+					sb.WriteString(fmt.Sprintf("    Action items: %s\n", t.ActionItems))
+				}
+			}
+		} else {
+			// Fallback to old flat format.
+			sb.WriteString(d.Summary + "\n")
+			if d.Decisions != "" && d.Decisions != "[]" {
+				sb.WriteString("Decisions: " + d.Decisions + "\n")
+			}
 		}
 		sb.WriteString("\n")
 	}

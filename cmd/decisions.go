@@ -69,11 +69,6 @@ func runDecisions(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, d := range digests {
-		var decisions []decision
-		if err := json.Unmarshal([]byte(d.Decisions), &decisions); err != nil || len(decisions) == 0 {
-			continue
-		}
-
 		channelName := d.ChannelID
 		if d.ChannelID != "" {
 			if ch, err := database.GetChannelByID(d.ChannelID); err == nil && ch != nil {
@@ -81,6 +76,31 @@ func runDecisions(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			channelName = "(cross-channel)"
+		}
+
+		// Try topic-structured data first
+		topics, _ := database.GetDigestTopics(d.ID)
+		if len(topics) > 0 {
+			for _, t := range topics {
+				var decisions []decision
+				if err := json.Unmarshal([]byte(t.Decisions), &decisions); err != nil || len(decisions) == 0 {
+					continue
+				}
+				for _, dec := range decisions {
+					allDecisions = append(allDecisions, struct {
+						decision
+						channelName string
+						digestType  string
+					}{dec, channelName, d.Type})
+				}
+			}
+			continue
+		}
+
+		// Fallback to old flat decisions for legacy digests
+		var decisions []decision
+		if err := json.Unmarshal([]byte(d.Decisions), &decisions); err != nil || len(decisions) == 0 {
+			continue
 		}
 
 		for _, dec := range decisions {

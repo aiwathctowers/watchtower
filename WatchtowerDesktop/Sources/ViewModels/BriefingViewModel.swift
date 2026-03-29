@@ -9,6 +9,10 @@ final class BriefingViewModel {
     var errorMessage: String?
     var unreadCount: Int = 0
 
+    /// True while `briefing generate` CLI process is running.
+    var isGenerating = false
+    var generateError: String?
+
     private(set) var hasMore = true
     private var offset = 0
     var isLoadingMore = false
@@ -98,6 +102,50 @@ final class BriefingViewModel {
             }
         } catch {
             return nil
+        }
+    }
+
+    // MARK: - Generate
+
+    func generateBriefing() {
+        guard let cliPath = Constants.findCLIPath() else {
+            generateError = "watchtower binary not found"
+            return
+        }
+
+        isGenerating = true
+        generateError = nil
+
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = ["briefing", "generate"]
+            process.environment = Constants.resolvedEnvironment()
+
+            let stderr = Pipe()
+            process.standardOutput = Pipe()
+            process.standardError = stderr
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                let errStr = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                await MainActor.run { [weak self] in
+                    self?.isGenerating = false
+                    if process.terminationStatus != 0 {
+                        self?.generateError = errStr.isEmpty ? "Generation failed" : errStr
+                    }
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.isGenerating = false
+                    self?.generateError = error.localizedDescription
+                }
+            }
         }
     }
 }

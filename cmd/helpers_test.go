@@ -74,90 +74,6 @@ func TestFormatBadges(t *testing.T) {
 	assert.Equal(t, "[verbose] [driver]", formatBadges("verbose", "driver"))
 }
 
-func TestDayOfWeek(t *testing.T) {
-	assert.Equal(t, time.Sunday, dayOfWeek("sunday"))
-	assert.Equal(t, time.Monday, dayOfWeek("monday"))
-	assert.Equal(t, time.Tuesday, dayOfWeek("tuesday"))
-	assert.Equal(t, time.Wednesday, dayOfWeek("wednesday"))
-	assert.Equal(t, time.Thursday, dayOfWeek("thursday"))
-	assert.Equal(t, time.Friday, dayOfWeek("friday"))
-	assert.Equal(t, time.Saturday, dayOfWeek("saturday"))
-	assert.Equal(t, time.Monday, dayOfWeek("invalid")) // fallback
-}
-
-func TestParseTrackID(t *testing.T) {
-	id, err := parseTrackID("42")
-	require.NoError(t, err)
-	assert.Equal(t, 42, id)
-
-	id, err = parseTrackID("1")
-	require.NoError(t, err)
-	assert.Equal(t, 1, id)
-
-	_, err = parseTrackID("0")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "positive integer")
-
-	_, err = parseTrackID("-5")
-	assert.Error(t, err)
-
-	_, err = parseTrackID("abc")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid track ID")
-}
-
-func TestParseSnoozeUntil(t *testing.T) {
-	// --hours
-	result, err := parseSnoozeUntil("", 4)
-	require.NoError(t, err)
-	assert.WithinDuration(t, time.Now().Add(4*time.Hour), result, 5*time.Second)
-
-	// --until tomorrow
-	result, err = parseSnoozeUntil("tomorrow", 0)
-	require.NoError(t, err)
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	expected := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 9, 0, 0, 0, tomorrow.Location())
-	assert.Equal(t, expected, result)
-
-	// --until next-week
-	result, err = parseSnoozeUntil("next-week", 0)
-	require.NoError(t, err)
-	assert.Equal(t, time.Monday, result.Weekday())
-	assert.Equal(t, 9, result.Hour())
-
-	// weekday names
-	for _, day := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
-		result, err = parseSnoozeUntil(day, 0)
-		require.NoError(t, err)
-		assert.Equal(t, 9, result.Hour())
-		assert.True(t, result.After(time.Now()))
-	}
-
-	// YYYY-MM-DD in the future
-	future := time.Now().AddDate(0, 0, 30)
-	dateStr := future.Format("2006-01-02")
-	result, err = parseSnoozeUntil(dateStr, 0)
-	require.NoError(t, err)
-	assert.Equal(t, 9, result.Hour())
-
-	// Errors
-	_, err = parseSnoozeUntil("tomorrow", 4)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not both")
-
-	_, err = parseSnoozeUntil("", 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "specify")
-
-	_, err = parseSnoozeUntil("2020-01-01", 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "in the past")
-
-	_, err = parseSnoozeUntil("garbage", 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --until")
-}
-
 func TestPrintJSONList(t *testing.T) {
 	buf := new(bytes.Buffer)
 	printJSONList(buf, "  Items: ", `["a","b","c"]`)
@@ -256,18 +172,6 @@ func TestBuildDigestContext_PrefersDaily(t *testing.T) {
 	assert.Contains(t, result, "Topics: api, deploy")
 	// Should NOT contain channel summary since daily takes priority
 	assert.NotContains(t, result, "channel summary")
-}
-
-func TestChannelNameFromDB(t *testing.T) {
-	tmpDir := t.TempDir()
-	database, err := db.Open(tmpDir + "/test.db")
-	require.NoError(t, err)
-	defer database.Close()
-
-	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C001", Name: "general", Type: "public"}))
-
-	assert.Equal(t, "general", channelNameFromDB(database, "C001"))
-	assert.Equal(t, "C999", channelNameFromDB(database, "C999")) // fallback to ID
 }
 
 func TestMaskValueEdgeCases(t *testing.T) {

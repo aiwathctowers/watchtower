@@ -12,19 +12,23 @@ import (
 
 // Prompt IDs — the three main prompts targeted for feedback & tuning.
 const (
-	DigestChannel  = "digest.channel"
-	DigestDaily    = "digest.daily"
-	DigestWeekly   = "digest.weekly"
-	DigestPeriod   = "digest.period"
-	TracksExtract  = "tracks.extract"
-	TracksUpdate   = "tracks.update"
-	AnalysisUser   = "analysis.user"
-	AnalysisPeriod = "analysis.period"
-	GuideUser      = "guide.user"
-	GuidePeriod    = "guide.period"
-	PeopleReduce   = "people.reduce"
-	PeopleTeam     = "people.team"
-	BriefingDaily  = "briefing.daily"
+	DigestChannel      = "digest.channel"
+	DigestDaily        = "digest.daily"
+	DigestWeekly       = "digest.weekly"
+	DigestPeriod       = "digest.period"
+	TracksExtract      = "tracks.extract"
+	TracksUpdate       = "tracks.update"
+	AnalysisUser       = "analysis.user"
+	AnalysisPeriod     = "analysis.period"
+	GuideUser          = "guide.user"
+	GuidePeriod        = "guide.period"
+	PeopleReduce       = "people.reduce"
+	PeopleTeam         = "people.team"
+	BriefingDaily      = "briefing.daily"
+	InboxPrioritize    = "inbox.prioritize"
+	DigestChannelBatch = "digest.channel_batch"
+	TracksExtractBatch = "tracks.extract_batch"
+	PeopleBatch        = "people.batch"
 )
 
 // Store loads, caches, and persists prompt templates.
@@ -53,17 +57,35 @@ func (s *Store) Seed() error {
 		if err != nil {
 			return fmt.Errorf("checking prompt %q: %w", id, err)
 		}
-		if existing != nil {
-			continue // already seeded or customized
+		defaultVer := DefaultVersions[id]
+		if defaultVer == 0 {
+			defaultVer = 1
 		}
-		if err := s.db.UpsertPrompt(db.Prompt{
-			ID:       id,
-			Template: tmpl,
-			Version:  1,
-		}); err != nil {
-			return fmt.Errorf("seeding prompt %q: %w", id, err)
+		if existing == nil {
+			// New prompt — seed it.
+			if err := s.db.UpsertPrompt(db.Prompt{
+				ID:       id,
+				Template: tmpl,
+				Version:  defaultVer,
+			}); err != nil {
+				return fmt.Errorf("seeding prompt %q: %w", id, err)
+			}
+			s.logger.Debug("seeded default prompt", "id", id)
+			continue
 		}
-		s.logger.Debug("seeded default prompt", "id", id)
+		// Auto-upgrade: if the default version is higher and the user hasn't
+		// customized the template (i.e., it still matches a previous default),
+		// update it to the new default.
+		if existing.Version < defaultVer {
+			if err := s.db.UpsertPrompt(db.Prompt{
+				ID:       id,
+				Template: tmpl,
+				Version:  defaultVer,
+			}); err != nil {
+				return fmt.Errorf("upgrading prompt %q to v%d: %w", id, defaultVer, err)
+			}
+			s.logger.Debug("upgraded prompt to new default", "id", id, "from", existing.Version, "to", defaultVer)
+		}
 	}
 	s.seeded = true
 	return nil

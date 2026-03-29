@@ -46,9 +46,6 @@ func TestPrintProgressJSON_AllFields(t *testing.T) {
 		MsgChannelsTotal:    50,
 		MsgChannelsDone:     25,
 		MessagesFetched:     1000,
-		ThreadsTotal:        60,
-		ThreadsDone:         30,
-		ThreadsFetched:      90,
 	}
 
 	printProgressJSON(buf, snap, nil)

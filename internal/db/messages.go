@@ -61,12 +61,12 @@ func (db *DB) UpsertMessageBatch(tx *sql.Tx, msgs []Message) (int, error) {
 		ON CONFLICT(channel_id, ts) DO UPDATE SET
 			user_id = excluded.user_id,
 			text = excluded.text,
-			thread_ts = excluded.thread_ts,
-			reply_count = excluded.reply_count,
-			is_edited = excluded.is_edited,
+			thread_ts = COALESCE(NULLIF(excluded.thread_ts, ''), messages.thread_ts),
+			reply_count = MAX(messages.reply_count, excluded.reply_count),
+			is_edited = MAX(messages.is_edited, excluded.is_edited),
 			is_deleted = excluded.is_deleted,
-			subtype = excluded.subtype,
-			permalink = excluded.permalink,
+			subtype = COALESCE(NULLIF(excluded.subtype, ''), messages.subtype),
+			permalink = COALESCE(NULLIF(excluded.permalink, ''), messages.permalink),
 			raw_json = excluded.raw_json`)
 	if err != nil {
 		return 0, fmt.Errorf("preparing statement: %w", err)
@@ -300,6 +300,7 @@ func (db *DB) GetThreadReplies(channelID, threadTS string) ([]Message, error) {
 // that likely need thread reply syncing, limited to at most `limit` rows.
 // NOTE: For large databases, consider adding an index on (channel_id, thread_ts)
 // to optimize this query's JOIN + subquery.
+// GetAllThreadParents returns messages with reply_count > 0 that don't have all replies synced.
 func (db *DB) GetAllThreadParents(limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 1000
@@ -324,45 +325,6 @@ func (db *DB) GetAllThreadParents(limit int) ([]Message, error) {
 	defer rows.Close()
 
 	return scanMessages(rows)
-}
-
-// OrphanThread represents a reply whose parent message is missing from the DB.
-type OrphanThread struct {
-	ChannelID string
-	ThreadTS  string // ts of the missing parent message
-}
-
-// GetOrphanThreadParents finds replies (messages with thread_ts set) whose parent
-// message is not in the DB. This happens when a reply falls within the sync window
-// but its parent thread was started before the window. Returns distinct (channel_id,
-// thread_ts) pairs, limited to the given count.
-func (db *DB) GetOrphanThreadParents(limit int) ([]OrphanThread, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := db.Query(`
-		SELECT DISTINCT r.channel_id, r.thread_ts
-		FROM messages r
-		LEFT JOIN messages p ON p.channel_id = r.channel_id AND p.ts = r.thread_ts
-		WHERE r.thread_ts IS NOT NULL
-		  AND r.thread_ts != r.ts
-		  AND p.ts IS NULL
-		ORDER BY r.ts_unix DESC
-		LIMIT ?`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("querying orphan thread parents: %w", err)
-	}
-	defer rows.Close()
-
-	var result []OrphanThread
-	for rows.Next() {
-		var o OrphanThread
-		if err := rows.Scan(&o.ChannelID, &o.ThreadTS); err != nil {
-			return nil, fmt.Errorf("scanning orphan thread: %w", err)
-		}
-		result = append(result, o)
-	}
-	return result, rows.Err()
 }
 
 // GetMessageNear finds the message in a channel closest to the given Unix

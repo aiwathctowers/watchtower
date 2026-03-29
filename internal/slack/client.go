@@ -311,7 +311,7 @@ func (c *Client) SearchMessages(ctx context.Context, query string, page int) (*S
 		var err error
 		result, err = c.api.SearchMessagesContext(ctx, query, slack.SearchParameters{
 			Sort:          "timestamp",
-			SortDirection: "desc",
+			SortDirection: "asc",
 			Count:         100,
 			Page:          page,
 		})

@@ -175,6 +175,17 @@ struct GeneralSettings: View {
                 prompt: Text("claude-sonnet-4-6")
             )
 
+            TextField(
+                "Workers",
+                value: Binding(
+                    get: { config.aiWorkers },
+                    set: { config.aiWorkers = $0 }
+                ),
+                format: .number,
+                prompt: Text("5")
+            )
+            .help("Max parallel LLM calls across all pipelines")
+
             HStack {
                 TextField(
                     "Claude CLI Path",

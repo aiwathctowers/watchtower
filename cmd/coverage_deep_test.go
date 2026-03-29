@@ -207,117 +207,6 @@ func TestPrintDigestDetails_InvalidJSON(t *testing.T) {
 	assert.Empty(t, buf.String())
 }
 
-// --- parseTrackID ---
-
-func TestParseTrackID_Valid(t *testing.T) {
-	id, err := parseTrackID("42")
-	require.NoError(t, err)
-	assert.Equal(t, 42, id)
-}
-
-func TestParseTrackID_NotANumber(t *testing.T) {
-	_, err := parseTrackID("abc")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid track ID")
-}
-
-func TestParseTrackID_Zero(t *testing.T) {
-	_, err := parseTrackID("0")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "positive integer")
-}
-
-func TestParseTrackID_Negative(t *testing.T) {
-	_, err := parseTrackID("-5")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "positive integer")
-}
-
-// --- parseSnoozeUntil ---
-
-func TestParseSnoozeUntil_Tomorrow(t *testing.T) {
-	result, err := parseSnoozeUntil("tomorrow", 0)
-	require.NoError(t, err)
-	assert.True(t, result.After(time.Now()))
-	assert.Equal(t, 9, result.Hour())
-}
-
-func TestParseSnoozeUntil_NextWeek(t *testing.T) {
-	result, err := parseSnoozeUntil("next-week", 0)
-	require.NoError(t, err)
-	assert.True(t, result.After(time.Now()))
-	assert.Equal(t, time.Monday, result.Weekday())
-}
-
-func TestParseSnoozeUntil_WeekdayNames(t *testing.T) {
-	for _, day := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
-		result, err := parseSnoozeUntil(day, 0)
-		require.NoError(t, err, "day=%s", day)
-		assert.True(t, result.After(time.Now()), "day=%s should be in the future", day)
-		assert.Equal(t, 9, result.Hour(), "day=%s", day)
-	}
-}
-
-func TestParseSnoozeUntil_FutureDate(t *testing.T) {
-	futureDate := time.Now().AddDate(0, 0, 30).Format("2006-01-02")
-	result, err := parseSnoozeUntil(futureDate, 0)
-	require.NoError(t, err)
-	assert.True(t, result.After(time.Now()))
-}
-
-func TestParseSnoozeUntil_PastDate(t *testing.T) {
-	pastDate := time.Now().AddDate(0, 0, -10).Format("2006-01-02")
-	_, err := parseSnoozeUntil(pastDate, 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "in the past")
-}
-
-func TestParseSnoozeUntil_InvalidDate(t *testing.T) {
-	_, err := parseSnoozeUntil("not-a-date", 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --until value")
-}
-
-func TestParseSnoozeUntil_BothFlags(t *testing.T) {
-	_, err := parseSnoozeUntil("tomorrow", 4)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not both")
-}
-
-func TestParseSnoozeUntil_NoFlags(t *testing.T) {
-	_, err := parseSnoozeUntil("", 0)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "specify --until")
-}
-
-func TestParseSnoozeUntil_HoursOnly(t *testing.T) {
-	result, err := parseSnoozeUntil("", 4)
-	require.NoError(t, err)
-	expected := time.Now().Add(4 * time.Hour)
-	assert.InDelta(t, expected.Unix(), result.Unix(), 2)
-}
-
-// --- dayOfWeek ---
-
-func TestDayOfWeek_AllDays(t *testing.T) {
-	days := map[string]time.Weekday{
-		"sunday":    time.Sunday,
-		"monday":    time.Monday,
-		"tuesday":   time.Tuesday,
-		"wednesday": time.Wednesday,
-		"thursday":  time.Thursday,
-		"friday":    time.Friday,
-		"saturday":  time.Saturday,
-	}
-	for name, expected := range days {
-		assert.Equal(t, expected, dayOfWeek(name), "day=%s", name)
-	}
-}
-
-func TestDayOfWeek_UnknownFallback(t *testing.T) {
-	assert.Equal(t, time.Monday, dayOfWeek("bogus"))
-}
-
 // --- maskValue ---
 
 func TestMaskValue_Long(t *testing.T) {
@@ -403,18 +292,6 @@ func TestRunDecisions_DaysClampedToSeven(t *testing.T) {
 
 // --- runTracks validation ---
 
-func TestRunTracks_InvalidStatus(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	tracksFlagStatus = "invalid_status"
-	defer func() { tracksFlagStatus = "" }()
-
-	err := tracksCmd.RunE(tracksCmd, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --status")
-}
-
 func TestRunTracks_InvalidPriority(t *testing.T) {
 	cleanup := setupTracksTestEnv(t)
 	defer cleanup()
@@ -425,18 +302,6 @@ func TestRunTracks_InvalidPriority(t *testing.T) {
 	err := tracksCmd.RunE(tracksCmd, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --priority")
-}
-
-func TestRunTracks_InvalidOwnership(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	tracksFlagOwnership = "invalid_ownership"
-	defer func() { tracksFlagOwnership = "" }()
-
-	err := tracksCmd.RunE(tracksCmd, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid --ownership")
 }
 
 func TestRunTracks_ChannelNotFound(t *testing.T) {
@@ -451,14 +316,12 @@ func TestRunTracks_ChannelNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestRunTracks_StatusAll(t *testing.T) {
+func TestRunTracks_Empty(t *testing.T) {
 	cleanup := setupTracksTestEnv(t)
 	defer cleanup()
 
 	buf := new(bytes.Buffer)
 	tracksCmd.SetOut(buf)
-	tracksFlagStatus = "all"
-	defer func() { tracksFlagStatus = "" }()
 
 	err := tracksCmd.RunE(tracksCmd, nil)
 	require.NoError(t, err)
@@ -477,39 +340,31 @@ func TestPrintTracks_AllFields(t *testing.T) {
 
 	items := []db.Track{
 		{
-			ID:              1,
-			Text:            "Review PR #123",
-			Status:          "active",
-			Priority:        "high",
-			Category:        "code_review",
-			ChannelID:       "C001",
-			RequesterName:   "alice",
-			Tags:            `["urgent","frontend"]`,
-			Context:         "PR is blocking deployment",
-			Blocking:        "production deploy",
-			DecisionSummary: "Need approval for new API",
-			DueDate:         float64(time.Now().Add(24 * time.Hour).Unix()),
-			HasUpdates:      true,
-			Ownership:       "delegated",
-			CreatedAt:       time.Now().Add(-2 * time.Hour).Format("2006-01-02T15:04:05Z"),
+			ID:         1,
+			Text:       "API Redesign Discussion",
+			Context:    "Under review",
+			Priority:   "high",
+			Ownership:  "mine",
+			Category:   "code_review",
+			ChannelIDs: `["C001"]`,
+			Tags:       `["urgent","frontend"]`,
+			HasUpdates: true,
+			UpdatedAt:  time.Now().Add(-2 * time.Hour).Format("2006-01-02T15:04:05Z"),
 		},
 		{
-			ID:                2,
-			Text:              "Investigate memory leak",
-			Status:            "snoozed",
-			Priority:          "low",
-			Category:          "bug_fix",
-			SourceChannelName: "backend",
-			SnoozeUntil:       float64(time.Now().Add(48 * time.Hour).Unix()),
-			Ownership:         "watching",
-			CreatedAt:         time.Now().Add(-5 * time.Hour).Format("2006-01-02T15:04:05Z"),
+			ID:        2,
+			Text:      "Memory Leak Investigation",
+			Priority:  "low",
+			Ownership: "watching",
+			Category:  "bug_fix",
+			Tags:      `[]`,
 		},
 		{
-			ID:       3,
-			Text:     "Unknown priority item",
-			Status:   "done",
-			Priority: "unknown",
-			Category: "discussion",
+			ID:        3,
+			Text:      "Unknown priority item",
+			Priority:  "medium",
+			Ownership: "mine",
+			Category:  "task",
 		},
 	}
 
@@ -517,26 +372,11 @@ func TestPrintTracks_AllFields(t *testing.T) {
 	printTracks(&buf, items, database)
 	output := buf.String()
 
-	// Item 1 fields
 	assert.Contains(t, output, "#1")
-	assert.Contains(t, output, "Review PR #123")
-	assert.Contains(t, output, "#general")
-	assert.Contains(t, output, "from: alice")
-	assert.Contains(t, output, "blocking")
-	assert.Contains(t, output, "Blocking: production deploy")
-	assert.Contains(t, output, "Decision: Need approval")
-	assert.Contains(t, output, "due:")
-
-	// Item 2 fields
+	assert.Contains(t, output, "API Redesign Discussion")
 	assert.Contains(t, output, "#2")
-	assert.Contains(t, output, "memory leak")
-	assert.Contains(t, output, "[snoozed]")
-	assert.Contains(t, output, "snoozed until")
-	assert.Contains(t, output, "#backend")
-
-	// Item 3 fields
+	assert.Contains(t, output, "Memory Leak Investigation")
 	assert.Contains(t, output, "#3")
-	assert.Contains(t, output, "[done]")
 }
 
 // --- configShow edge cases ---
@@ -624,31 +464,6 @@ func TestRunPromptsRollback_ValidVersionNotFound(t *testing.T) {
 
 	err := promptsRollbackCmd.RunE(promptsRollbackCmd, []string{"digest.channel", "0"})
 	assert.Error(t, err)
-}
-
-// --- tracksAccept ---
-
-func TestRunTracksAccept_RequiresConfig(t *testing.T) {
-	oldFlagConfig := flagConfig
-	flagConfig = "/nonexistent/config.yaml"
-	defer func() { flagConfig = oldFlagConfig }()
-
-	err := tracksAcceptCmd.RunE(tracksAcceptCmd, []string{"1"})
-	assert.Error(t, err)
-}
-
-// --- tracksDone / tracksDismiss ---
-
-func TestRunTracksDismiss_InvalidID(t *testing.T) {
-	err := tracksDismissCmd.RunE(tracksDismissCmd, []string{"xyz"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid track ID")
-}
-
-func TestRunTracksSnooze_InvalidID(t *testing.T) {
-	err := tracksSnoozeCmd.RunE(tracksSnoozeCmd, []string{"abc"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid track ID")
 }
 
 // --- digestStats all-time cost ---

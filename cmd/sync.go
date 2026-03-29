@@ -17,12 +17,12 @@ import (
 
 	"encoding/json"
 	"watchtower/internal/briefing"
-	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
+	"watchtower/internal/inbox"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -42,6 +42,7 @@ var (
 	syncFlagSkipDMs      bool
 	syncFlagDays         int
 	syncFlagProgressJSON bool
+	syncFlagNoPipelines  bool
 )
 
 var syncCmd = &cobra.Command{
@@ -69,6 +70,7 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncFlagSkipDMs, "skip-dms", false, "skip syncing DMs and group DMs")
 	syncCmd.Flags().BoolVar(&syncFlagProgressJSON, "progress-json", false, "output progress as JSON lines to stdout")
 	syncCmd.Flags().IntVar(&syncFlagDays, "days", 0, "override initial_history_days for this run")
+	syncCmd.Flags().BoolVar(&syncFlagNoPipelines, "no-pipelines", false, "sync messages only, skip digest/tracks/people/briefing pipelines")
 }
 
 func runSyncStopCmd(cmd *cobra.Command, args []string) error {
@@ -264,15 +266,17 @@ func runSync(cmd *cobra.Command, args []string) error {
 		if cfg.Digest.Enabled {
 			gen, cleanupPool := cliPooledGenerator(cfg, logger)
 			defer cleanupPool()
+			tracksPipe := tracks.New(database, cfg, gen, logger)
 			pipe := digest.New(database, cfg, gen, logger)
-			chainsPipe := chains.New(database, cfg, gen, logger)
-			pipe.ChainLinker = chainsPipe
+			pipe.TrackLinker = tracksPipe
 			d.SetDigestPipeline(pipe)
-			d.SetChainsPipeline(chainsPipe)
-			d.SetTracksPipeline(tracks.New(database, cfg, gen, logger))
+			d.SetTracksPipeline(tracksPipe)
 			d.SetPeoplePipeline(guide.New(database, cfg, gen, logger))
 			if cfg.Briefing.Enabled {
 				d.SetBriefingPipeline(briefing.New(database, cfg, gen, logger))
+			}
+			if cfg.Inbox.Enabled {
+				d.SetInboxPipeline(inbox.New(database, cfg, gen, logger))
 			}
 		}
 		return d.Run(ctx)
@@ -303,9 +307,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("sync failed: %w", syncErr)
 		}
 		elapsed := time.Since(snap.StartTime).Round(time.Second)
-		fmt.Fprintf(out, "Sync complete in %s: %d messages, %d threads synced.\n",
-			elapsed, snap.MessagesFetched, snap.ThreadsFetched)
-		runPostSyncPipelines(ctx, database, cfg, logger)
+		fmt.Fprintf(out, "Sync complete in %s: %d messages synced.\n",
+			elapsed, snap.MessagesFetched)
+		if !syncFlagNoPipelines {
+			runPostSyncPipelines(ctx, database, cfg, logger)
+		}
 		return nil
 	}
 
@@ -341,7 +347,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			// Skip post-sync pipelines in --progress-json mode: the desktop app
 			// runs them independently via BackgroundTaskManager after onboarding.
-			if !syncFlagProgressJSON {
+			if !syncFlagProgressJSON && !syncFlagNoPipelines {
 				runPostSyncPipelines(ctx, database, cfg, logger)
 			}
 			return nil
@@ -387,14 +393,12 @@ type progressJSON struct {
 	DiscoveryTotalPages int     `json:"discovery_total_pages"`
 	DiscoveryChannels   int     `json:"discovery_channels"`
 	DiscoveryUsers      int     `json:"discovery_users"`
+	SearchAfter         string  `json:"search_after,omitempty"`
 	UserProfilesTotal   int     `json:"user_profiles_total"`
 	UserProfilesDone    int     `json:"user_profiles_done"`
 	MsgChannelsTotal    int     `json:"msg_channels_total"`
 	MsgChannelsDone     int     `json:"msg_channels_done"`
 	MessagesFetched     int     `json:"messages_fetched"`
-	ThreadsTotal        int     `json:"threads_total"`
-	ThreadsDone         int     `json:"threads_done"`
-	ThreadsFetched      int     `json:"threads_fetched"`
 	Error               string  `json:"error,omitempty"`
 }
 
@@ -404,16 +408,15 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 	}
 
 	out := os.Stdout
-	var chainCtxForTracks string
 	gen, cleanup := cliPooledGenerator(cfg, logger)
 	defer cleanup()
 
-	// Digests (with chains linked between channel digests and rollups)
+	// Digests (with tracks linked between channel digests and rollups)
 	fmt.Fprintln(out)
 	digestSpinner := ui.NewSpinner(out, "Generating digests...")
 	pipe := digest.New(database, cfg, gen, logger)
-	chainsPipe := chains.New(database, cfg, gen, logger)
-	pipe.ChainLinker = chainsPipe
+	tracksPipe := tracks.New(database, cfg, gen, logger)
+	pipe.TrackLinker = tracksPipe
 	pipe.OnProgress = func(done, total int, status string) {
 		digestSpinner.UpdateProgress(done, total, status)
 	}
@@ -429,11 +432,6 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		}
 	} else {
 		digestSpinner.Stop("No new digests needed")
-	}
-
-	// Inject chain context into tracks pipeline for chain-aware extraction.
-	if chainCtx, err := chainsPipe.FormatActiveChainsForPrompt(ctx); err == nil && chainCtx != "" {
-		chainCtxForTracks = chainCtx
 	}
 
 	// People cards (REDUCE phase: reads signals from channel digests)
@@ -452,22 +450,6 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 			peopleSpinner.Stop("No new people cards needed")
 		}
 	}
-
-	// Tracks (depends on digests + chains for context)
-	trackSpinner := ui.NewSpinner(out, "Extracting tracks...")
-	trackPipe := tracks.New(database, cfg, gen, logger)
-	trackPipe.ChainContext = chainCtxForTracks
-	trackPipe.OnProgress = func(done, total int, status string) {
-		trackSpinner.UpdateProgress(done, total, status)
-	}
-	an, err := trackPipe.Run(ctx)
-	if err != nil {
-		trackSpinner.Stop(fmt.Sprintf("Tracks error: %v", err))
-	} else if an > 0 {
-		trackSpinner.Stop(fmt.Sprintf("Extracted %d track(s)", an))
-	} else {
-		trackSpinner.Stop("No new tracks")
-	}
 }
 
 func printProgressJSON(w io.Writer, snap sync.Snapshot, syncErr error) {
@@ -482,14 +464,12 @@ func printProgressJSON(w io.Writer, snap sync.Snapshot, syncErr error) {
 		DiscoveryTotalPages: snap.DiscoveryTotalPages,
 		DiscoveryChannels:   snap.DiscoveryChannels,
 		DiscoveryUsers:      snap.DiscoveryUsers,
+		SearchAfter:         snap.SearchAfter,
 		UserProfilesTotal:   snap.UserProfilesTotal,
 		UserProfilesDone:    snap.UserProfilesDone,
 		MsgChannelsTotal:    snap.MsgChannelsTotal,
 		MsgChannelsDone:     snap.MsgChannelsDone,
 		MessagesFetched:     snap.MessagesFetched,
-		ThreadsTotal:        snap.ThreadsTotal,
-		ThreadsDone:         snap.ThreadsDone,
-		ThreadsFetched:      snap.ThreadsFetched,
 	}
 	if syncErr != nil {
 		p.Error = syncErr.Error()

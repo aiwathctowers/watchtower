@@ -313,30 +313,66 @@ func (db *DB) GetSituationsForUser(userID string, from, to float64) ([]ChannelSi
 	}
 
 	// Use digest_participants to efficiently find digests involving this user
-	rows, err := db.Query(`SELECT d.channel_id, d.period_from, d.period_to, d.situations
+	rows, err := db.Query(`SELECT d.id, d.channel_id, d.period_from, d.period_to, d.situations
 		FROM digests d
 		INNER JOIN digest_participants dp ON dp.digest_id = d.id
 		WHERE dp.user_id = ?
 		  AND d.type = 'channel'
 		  AND d.period_from >= ?
-		  AND d.period_to <= ?
-		  AND d.situations != '[]'`, userID, from, to)
+		  AND d.period_to <= ?`, userID, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("querying situations for user: %w", err)
 	}
 	defer rows.Close()
 
-	var result []ChannelSituations
+	type digestRow struct {
+		id             int
+		channelID      string
+		pFrom, pTo     float64
+		situationsJSON string
+	}
+	var digestRows []digestRow
+	var digestIDs []int
 	for rows.Next() {
-		var channelID, situationsJSON string
-		var pFrom, pTo float64
-		if err := rows.Scan(&channelID, &pFrom, &pTo, &situationsJSON); err != nil {
+		var r digestRow
+		if err := rows.Scan(&r.id, &r.channelID, &r.pFrom, &r.pTo, &r.situationsJSON); err != nil {
 			return nil, fmt.Errorf("scanning situations row: %w", err)
 		}
+		digestRows = append(digestRows, r)
+		digestIDs = append(digestIDs, r.id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
+	// Load topics for all digests in one batch query
+	topicsByDigest := make(map[int][]DigestTopic)
+	if len(digestIDs) > 0 {
+		topics, topicErr := db.GetDigestTopicsByDigestIDs(digestIDs)
+		if topicErr == nil {
+			for _, t := range topics {
+				topicsByDigest[t.DigestID] = append(topicsByDigest[t.DigestID], t)
+			}
+		}
+	}
+
+	var result []ChannelSituations
+	for _, r := range digestRows {
+		// Prefer situations from digest_topics; fall back to d.Situations for old data
 		var allSituations []Situation
-		if err := json.Unmarshal([]byte(situationsJSON), &allSituations); err != nil {
-			continue
+		if topics, ok := topicsByDigest[r.id]; ok && len(topics) > 0 {
+			for _, t := range topics {
+				if t.Situations == "" || t.Situations == "[]" {
+					continue
+				}
+				var topicSits []Situation
+				if err := json.Unmarshal([]byte(t.Situations), &topicSits); err == nil {
+					allSituations = append(allSituations, topicSits...)
+				}
+			}
+		} else if r.situationsJSON != "" && r.situationsJSON != "[]" {
+			// Fallback: read from legacy d.situations column
+			_ = json.Unmarshal([]byte(r.situationsJSON), &allSituations)
 		}
 
 		// Filter situations where this user is a participant
@@ -351,20 +387,20 @@ func (db *DB) GetSituationsForUser(userID string, from, to float64) ([]ChannelSi
 		}
 
 		if len(userSituations) > 0 {
-			chName := channelID
-			if name, ok := channelNames[channelID]; ok {
+			chName := r.channelID
+			if name, ok := channelNames[r.channelID]; ok {
 				chName = name
 			}
 			result = append(result, ChannelSituations{
-				ChannelID:   channelID,
+				ChannelID:   r.channelID,
 				ChannelName: chName,
-				PeriodFrom:  pFrom,
-				PeriodTo:    pTo,
+				PeriodFrom:  r.pFrom,
+				PeriodTo:    r.pTo,
 				Situations:  userSituations,
 			})
 		}
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // GetSituationsForWindow returns all situations from all channel digests
@@ -382,32 +418,72 @@ func (db *DB) GetSituationsForWindow(from, to float64) (map[string][]ChannelSitu
 		}
 	}
 
-	rows, err := db.Query(`SELECT channel_id, period_from, period_to, situations
+	rows, err := db.Query(`SELECT id, channel_id, period_from, period_to, situations
 		FROM digests
 		WHERE type = 'channel'
 		  AND period_from >= ?
-		  AND period_to <= ?
-		  AND situations != '[]'`, from, to)
+		  AND period_to <= ?`, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("querying situations for window: %w", err)
 	}
 	defer rows.Close()
 
-	result := make(map[string][]ChannelSituations)
+	type digestRow struct {
+		id             int
+		channelID      string
+		pFrom, pTo     float64
+		situationsJSON string
+	}
+	var digestRows []digestRow
+	var digestIDs []int
 	for rows.Next() {
-		var channelID, situationsJSON string
-		var pFrom, pTo float64
-		if err := rows.Scan(&channelID, &pFrom, &pTo, &situationsJSON); err != nil {
+		var r digestRow
+		if err := rows.Scan(&r.id, &r.channelID, &r.pFrom, &r.pTo, &r.situationsJSON); err != nil {
 			return nil, fmt.Errorf("scanning situations row: %w", err)
 		}
+		digestRows = append(digestRows, r)
+		digestIDs = append(digestIDs, r.id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
+	// Load topics for all digests in one batch query
+	topicsByDigest := make(map[int][]DigestTopic)
+	if len(digestIDs) > 0 {
+		topics, topicErr := db.GetDigestTopicsByDigestIDs(digestIDs)
+		if topicErr == nil {
+			for _, t := range topics {
+				topicsByDigest[t.DigestID] = append(topicsByDigest[t.DigestID], t)
+			}
+		}
+	}
+
+	result := make(map[string][]ChannelSituations)
+	for _, r := range digestRows {
+		// Prefer situations from digest_topics; fall back to d.Situations for old data
 		var allSituations []Situation
-		if err := json.Unmarshal([]byte(situationsJSON), &allSituations); err != nil {
+		if topics, ok := topicsByDigest[r.id]; ok && len(topics) > 0 {
+			for _, t := range topics {
+				if t.Situations == "" || t.Situations == "[]" {
+					continue
+				}
+				var topicSits []Situation
+				if err := json.Unmarshal([]byte(t.Situations), &topicSits); err == nil {
+					allSituations = append(allSituations, topicSits...)
+				}
+			}
+		} else if r.situationsJSON != "" && r.situationsJSON != "[]" {
+			// Fallback: read from legacy d.situations column
+			_ = json.Unmarshal([]byte(r.situationsJSON), &allSituations)
+		}
+
+		if len(allSituations) == 0 {
 			continue
 		}
 
-		chName := channelID
-		if name, ok := channelNames[channelID]; ok {
+		chName := r.channelID
+		if name, ok := channelNames[r.channelID]; ok {
 			chName = name
 		}
 
@@ -418,16 +494,16 @@ func (db *DB) GetSituationsForWindow(from, to float64) (map[string][]ChannelSitu
 					continue
 				}
 				result[p.UserID] = append(result[p.UserID], ChannelSituations{
-					ChannelID:   channelID,
+					ChannelID:   r.channelID,
 					ChannelName: chName,
-					PeriodFrom:  pFrom,
-					PeriodTo:    pTo,
+					PeriodFrom:  r.pFrom,
+					PeriodTo:    r.pTo,
 					Situations:  []Situation{s},
 				})
 			}
 		}
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // UpsertPeopleCardSummary inserts or replaces a people card summary.

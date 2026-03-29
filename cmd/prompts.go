@@ -212,9 +212,19 @@ func runTune(cmd *cobra.Command, args []string) error {
 
 	gen := cliGenerator(cfg)
 
-	// Wrap digest.Generator as prompts.TextGenerator
+	// Track accumulated usage across all tune calls.
+	var totalInTok, totalOutTok, totalAPITok int
+	var totalCost float64
+
+	// Wrap digest.Generator as prompts.TextGenerator, capturing usage.
 	tuneGen := prompts.GenerateFunc(func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-		raw, _, _, err := gen.Generate(ctx, systemPrompt, userMessage, "")
+		raw, usage, _, err := gen.Generate(ctx, systemPrompt, userMessage, "")
+		if usage != nil {
+			totalInTok += usage.InputTokens
+			totalOutTok += usage.OutputTokens
+			totalCost += usage.CostUSD
+			totalAPITok += usage.TotalAPITokens
+		}
 		return raw, err
 	})
 
@@ -222,6 +232,21 @@ func runTune(cmd *cobra.Command, args []string) error {
 	tuner := prompts.NewTuner(store, database, tuneGen)
 
 	out := cmd.OutOrStdout()
+
+	model := cfg.Digest.Model
+	runID, _ := database.CreatePipelineRun("tune", "cli", model)
+	var tuneErr error
+	itemsFound := 0
+
+	defer func() {
+		errMsg := ""
+		if tuneErr != nil {
+			errMsg = tuneErr.Error()
+		}
+		if runID > 0 {
+			_ = database.CompletePipelineRun(runID, itemsFound, totalInTok, totalOutTok, totalCost, totalAPITok, nil, nil, errMsg)
+		}
+	}()
 
 	// Determine which prompts to tune
 	var targetIDs []string
@@ -247,6 +272,8 @@ func runTune(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		itemsFound++
+
 		fmt.Fprintf(out, "\nSuggested changes for %s (v%d → v%d):\n", id, result.CurrentVersion, result.CurrentVersion+1)
 		fmt.Fprintf(out, "  Explanation: %s\n", result.Explanation)
 		for _, change := range result.Changes {
@@ -256,7 +283,8 @@ func runTune(cmd *cobra.Command, args []string) error {
 
 		if tuneFlagApply {
 			if err := tuner.Apply(result); err != nil {
-				return fmt.Errorf("applying tune for %s: %w", id, err)
+				tuneErr = fmt.Errorf("applying tune for %s: %w", id, err)
+				return tuneErr
 			}
 			fmt.Fprintf(out, "  Applied! New version saved.\n\n")
 		} else {
@@ -273,6 +301,8 @@ func runTune(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			fmt.Fprintf(out, "  Skipped: %v\n\n", err)
 		} else {
+			itemsFound++
+
 			fmt.Fprintf(out, "\nSuggested importance criteria changes for %s (v%d → v%d):\n",
 				result.PromptID, result.CurrentVersion, result.CurrentVersion+1)
 			fmt.Fprintf(out, "  Explanation: %s\n", result.Explanation)
@@ -283,7 +313,8 @@ func runTune(cmd *cobra.Command, args []string) error {
 
 			if tuneFlagApply {
 				if err := tuner.ApplyImportance(result); err != nil {
-					return fmt.Errorf("applying importance tune: %w", err)
+					tuneErr = fmt.Errorf("applying importance tune: %w", err)
+					return tuneErr
 				}
 				fmt.Fprintf(out, "  Applied! Importance criteria updated, corrections cleared.\n\n")
 			} else {

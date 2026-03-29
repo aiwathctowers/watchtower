@@ -330,17 +330,6 @@ func TestRunDigest_DaysNegativeClamp(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// --- chains generate requires config ---
-
-func TestRunChainsGenerate_RequiresConfig2(t *testing.T) {
-	oldFlagConfig := flagConfig
-	flagConfig = "/nonexistent/config.yaml"
-	defer func() { flagConfig = oldFlagConfig }()
-
-	err := chainsGenerateCmd.RunE(chainsGenerateCmd, nil)
-	assert.Error(t, err)
-}
-
 // --- runDecisions edge cases ---
 
 func TestRunDecisions_InvalidJSONSkipsGracefully(t *testing.T) {
@@ -501,86 +490,19 @@ func TestRunDigestSummary_NoConfig(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- chains detail with digest ref and decision text lookup ---
+// --- runTracks with multiple priorities ---
 
-func TestShowChainDetail_WithDigestRef(t *testing.T) {
-	cleanup := setupWatchTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-
-	// Create a real digest so the ref can resolve
-	digestID, err := database.UpsertDigest(db.Digest{
-		ChannelID:    "C001",
-		PeriodFrom:   now - 3600,
-		PeriodTo:     now,
-		Type:         "channel",
-		Summary:      "Discussion about API design",
-		Topics:       `["api"]`,
-		Decisions:    `[{"text":"Use REST","by":"alice","importance":"high"}]`,
-		ActionItems:  `[]`,
-		MessageCount: 10,
-		Model:        "haiku",
-	})
-	require.NoError(t, err)
-
-	chainID, err := database.CreateChain(db.Chain{
-		Title:      "API Design Chain",
-		Slug:       "api-design-chain",
-		Status:     "active",
-		ChannelIDs: `["C001"]`,
-		FirstSeen:  now - 86400,
-		LastSeen:   now,
-		ItemCount:  1,
-	})
-	require.NoError(t, err)
-
-	err = database.InsertChainRef(db.ChainRef{
-		ChainID:     int(chainID),
-		RefType:     "decision",
-		DigestID:    int(digestID),
-		DecisionIdx: 0,
-		ChannelID:   "C001",
-		Timestamp:   now,
-	})
-	require.NoError(t, err)
-
-	buf := new(bytes.Buffer)
-	err = showChainDetail(database, buf, int(chainID))
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "API Design Chain")
-	assert.Contains(t, output, "Timeline")
-	assert.Contains(t, output, "Use REST")
-
-	database.Close()
-}
-
-// --- runTracks with all statuses ---
-
-func TestRunTracks_AllStatusesIncluded(t *testing.T) {
+func TestRunTracks_MultiplePriorities(t *testing.T) {
 	cleanup := setupTracksTestEnv(t)
 	defer cleanup()
 
 	database, err := openDBFromConfig()
 	require.NoError(t, err)
 
-	now := float64(time.Now().Unix())
-	for _, status := range []string{"inbox", "active", "done", "dismissed", "snoozed"} {
+	for _, prio := range []string{"high", "medium", "low"} {
 		_, err = database.UpsertTrack(db.Track{
-			ChannelID:      "C001",
-			AssigneeUserID: "U001",
-			Text:           "Track status: " + status,
-			Status:         status,
-			Priority:       "medium",
-			PeriodFrom:     now - 86400,
-			PeriodTo:       now,
-			Model:          "haiku",
-			Ownership:      "mine",
+			Text:     "Track priority: " + prio,
+			Priority: prio,
 		})
 		require.NoError(t, err)
 	}
@@ -588,111 +510,18 @@ func TestRunTracks_AllStatusesIncluded(t *testing.T) {
 
 	buf := new(bytes.Buffer)
 	tracksCmd.SetOut(buf)
-	tracksFlagStatus = "all"
 	tracksFlagPriority = ""
-	tracksFlagChannel = ""
 	tracksFlagOwnership = ""
-	defer func() { tracksFlagStatus = "" }()
+	tracksFlagChannel = ""
+	tracksFlagUpdates = false
 
 	err = tracksCmd.RunE(tracksCmd, nil)
 	require.NoError(t, err)
 
 	output := buf.String()
-	assert.Contains(t, output, "Track status: inbox")
-	assert.Contains(t, output, "Track status: done")
-}
-
-// --- runTracks with snoozed status ---
-
-func TestRunTracks_SnoozedOnlyFilter(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	_, err = database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U001",
-		Text:           "Snoozed task",
-		Status:         "snoozed",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		SnoozeUntil:    float64(time.Now().Add(24 * time.Hour).Unix()),
-		Ownership:      "mine",
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksCmd.SetOut(buf)
-	tracksFlagStatus = "snoozed"
-	tracksFlagPriority = ""
-	tracksFlagChannel = ""
-	tracksFlagOwnership = ""
-	defer func() { tracksFlagStatus = "" }()
-
-	err = tracksCmd.RunE(tracksCmd, nil)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Snoozed task")
-}
-
-// --- runTracksAccept nonexistent track ---
-
-func TestRunTracksAccept_NonexistentTrack(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	err := tracksAcceptCmd.RunE(tracksAcceptCmd, []string{"99999"})
-	assert.Error(t, err)
-}
-
-// --- runTracksDone invalid ID ---
-
-func TestRunTracksDone_NonNumericID(t *testing.T) {
-	err := tracksDoneCmd.RunE(tracksDoneCmd, []string{"xyz"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid track ID")
-}
-
-// --- runTracksSnooze for track owned by different user ---
-
-func TestRunTracksSnooze_DifferentUserTrack(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	id, err := database.UpsertTrack(db.Track{
-		ChannelID:      "C001",
-		AssigneeUserID: "U002", // different user
-		Text:           "Other user track",
-		Status:         "inbox",
-		Priority:       "medium",
-		PeriodFrom:     now - 86400,
-		PeriodTo:       now,
-		Model:          "haiku",
-		Ownership:      "mine",
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	tracksSnoozeFlagUntil = "tomorrow"
-	tracksSnoozeFlagHours = 0
-	defer func() { tracksSnoozeFlagUntil = ""; tracksSnoozeFlagHours = 0 }()
-
-	idStr := fmt.Sprintf("%d", id)
-	err = tracksSnoozeCmd.RunE(tracksSnoozeCmd, []string{idStr})
-	// Should error because the track belongs to a different user
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "different user")
+	assert.Contains(t, output, "Track priority: high")
+	assert.Contains(t, output, "Track priority: medium")
+	assert.Contains(t, output, "Track priority: low")
 }
 
 // --- runStatus with last sync result ---

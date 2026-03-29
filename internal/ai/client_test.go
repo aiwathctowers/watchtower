@@ -80,23 +80,27 @@ func TestBuildArgs_WithSessionID(t *testing.T) {
 }
 
 func TestQuerySync_Success(t *testing.T) {
-	mockPath := writeMockClaude(t, `echo "Hello from Claude"`)
+	mockPath := writeMockClaude(t, `printf '{"type":"result","result":"Hello from Claude","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.001}'`)
 
 	c := NewClient("test-model", "", "")
 	c.claudeCmd = mockPath
 
-	result, err := c.QuerySync(context.Background(), "system", "hello", "")
+	result, usage, err := c.QuerySync(context.Background(), "system", "hello", "")
 	require.NoError(t, err)
 	assert.Equal(t, "Hello from Claude", result)
+	require.NotNil(t, usage)
+	assert.Equal(t, 10, usage.InputTokens)
+	assert.Equal(t, 5, usage.OutputTokens)
+	assert.InDelta(t, 0.001, usage.CostUSD, 0.0001)
 }
 
 func TestQuerySync_TrimsTrailingNewlines(t *testing.T) {
-	mockPath := writeMockClaude(t, `printf "response\n\n"`)
+	mockPath := writeMockClaude(t, `printf '{"type":"result","result":"response\\n\\n","usage":{"input_tokens":1,"output_tokens":1}}'`)
 
 	c := NewClient("test-model", "", "")
 	c.claudeCmd = mockPath
 
-	result, err := c.QuerySync(context.Background(), "system", "hello", "")
+	result, _, err := c.QuerySync(context.Background(), "system", "hello", "")
 	require.NoError(t, err)
 	assert.Equal(t, "response", result)
 }
@@ -107,7 +111,7 @@ func TestQuerySync_ExitError(t *testing.T) {
 	c := NewClient("test-model", "", "")
 	c.claudeCmd = mockPath
 
-	_, err := c.QuerySync(context.Background(), "system", "hello", "")
+	_, _, err := c.QuerySync(context.Background(), "system", "hello", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "claude CLI failed")
 	assert.Contains(t, err.Error(), "something went wrong")
@@ -122,7 +126,7 @@ func TestQuerySync_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := c.QuerySync(ctx, "system", "hello", "")
+	_, _, err := c.QuerySync(ctx, "system", "hello", "")
 	require.Error(t, err)
 }
 

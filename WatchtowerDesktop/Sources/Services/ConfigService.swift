@@ -15,6 +15,7 @@ final class ConfigService {
     var digestMinMessages: Int?
     var digestLanguage: String?
     var aiModel: String?
+    var aiWorkers: Int?
     var analysisLegacyMode: Bool = false
     var briefingHour: Int = 8
     var claudePath: String?
@@ -66,6 +67,7 @@ final class ConfigService {
 
             if let ai = yaml["ai"] as? [String: Any] {
                 aiModel = ai["model"] as? String
+                aiWorkers = ai["workers"] as? Int
             }
 
             claudePath = yaml["claude_path"] as? String
@@ -105,6 +107,7 @@ final class ConfigService {
         // AI section
         var ai = (yaml["ai"] as? [String: Any]) ?? [:]
         if let val = aiModel, !val.isEmpty { ai["model"] = val } else { ai.removeValue(forKey: "model") }
+        if let val = aiWorkers { ai["workers"] = val } else { ai.removeValue(forKey: "workers") }
         if !ai.isEmpty { yaml["ai"] = ai } else { yaml.removeValue(forKey: "ai") }
 
         // Claude path override

@@ -332,13 +332,16 @@ func TestIntegrationEndToEnd(t *testing.T) {
 	mockResponseText := "Here's what happened in #general:\n\nAlice deployed v2.3 to production. Bob monitored the dashboards and confirmed everything was stable. Carol praised the team."
 
 	mockPath := filepath.Join(t.TempDir(), "claude")
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\n", strings.ReplaceAll(mockResponseText, "'", "'\\''"))
+	escapedResp := strings.ReplaceAll(mockResponseText, `"`, `\"`)
+	escapedResp = strings.ReplaceAll(escapedResp, "\n", `\n`)
+	jsonResp := fmt.Sprintf(`{"type":"result","result":"%s","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.01}`, escapedResp)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\n", strings.ReplaceAll(jsonResp, "'", "'\\''"))
 	require.NoError(t, os.WriteFile(mockPath, []byte(script), 0o755))
 
 	client := NewClient("claude-sonnet-4-6", "", "")
 	client.claudeCmd = mockPath
 
-	response, err := client.QuerySync(context.Background(), systemPrompt, userMessage, "")
+	response, _, err := client.QuerySync(context.Background(), systemPrompt, userMessage, "")
 	require.NoError(t, err)
 	assert.Contains(t, response, "v2.3")
 	assert.Contains(t, response, "Alice")

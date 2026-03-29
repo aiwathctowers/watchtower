@@ -15,13 +15,18 @@ final class TrackChatViewModel {
     private var sessionID: String?
     private let claudeService: any ClaudeServiceProtocol
     private let dbManager: DatabaseManager
-    private var item: Track
+    private var track: Track
     private weak var viewModel: TracksViewModel?
     private var streamTask: Task<Void, Never>?
     private var observationTask: Task<Void, Never>?
 
-    init(item: Track, viewModel: TracksViewModel, dbManager: DatabaseManager, claudeService: (any ClaudeServiceProtocol)? = nil) {
-        self.item = item
+    init(
+        track: Track,
+        viewModel: TracksViewModel,
+        dbManager: DatabaseManager,
+        claudeService: (any ClaudeServiceProtocol)? = nil
+    ) {
+        self.track = track
         self.viewModel = viewModel
         self.dbManager = dbManager
         self.claudeService = claudeService ?? ClaudeService()
@@ -32,25 +37,27 @@ final class TrackChatViewModel {
 
     private func loadOrCreateConversation() {
         do {
-            // Try read-only first to avoid unnecessary write locks.
             if let existing = try dbManager.dbPool.read({ db in
-                try ChatConversationQueries.fetchByContext(db, type: "track", id: String(item.id))
+                try ChatConversationQueries.fetchByContext(
+                    db, type: "track", id: String(track.id)
+                )
             }) {
                 let records = try dbManager.dbPool.read { db in
-                    try ChatMessageQueries.fetchByConversation(db, conversationID: existing.id)
+                    try ChatMessageQueries.fetchByConversation(
+                        db, conversationID: existing.id
+                    )
                 }
                 conversationID = existing.id
                 sessionID = existing.sessionID
                 messages = records.map { $0.toChatMessage() }
                 return
             }
-            // No existing conversation — create one.
             let conv = try dbManager.dbPool.write { db in
                 try ChatConversationQueries.create(
                     db,
-                    title: "Track: \(String(item.text.prefix(60)))",
+                    title: "Track: \(String(track.text.prefix(60)))",
                     contextType: "track",
-                    contextID: String(item.id)
+                    contextID: String(track.id)
                 )
             }
             conversationID = conv.id
@@ -61,8 +68,6 @@ final class TrackChatViewModel {
         }
     }
 
-    /// Observe chat_messages for this conversation so background-persisted
-    /// responses (from a stream that outlived a previous ViewModel) appear automatically.
     private func startMessageObservation() {
         guard let convID = conversationID else { return }
         let dbPool = dbManager.dbPool
@@ -89,98 +94,143 @@ final class TrackChatViewModel {
         streamTask?.cancel()
         inputText = ""
 
-        messages.append(ChatMessage(id: UUID(), role: .user, text: text, timestamp: Date(), isStreaming: false))
+        messages.append(ChatMessage(
+            id: UUID(),
+            role: .user,
+            text: text,
+            timestamp: Date(),
+            isStreaming: false
+        ))
 
         if let convID = conversationID {
             persistMessage(conversationID: convID, role: "user", text: text)
         }
 
-        messages.append(ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true))
+        messages.append(ChatMessage(
+            id: UUID(),
+            role: .assistant,
+            text: "",
+            timestamp: Date(),
+            isStreaming: true
+        ))
         isStreaming = true
 
         let currentSessionID = sessionID
         let dbPath = dbManager.dbPool.path
         let dbPool = dbManager.dbPool
-        let capturedItem = item
+        let capturedTrack = track
         let capturedClaudeService = claudeService
-
         let capturedConvID = conversationID
         let capturedDBManager = dbManager
 
         streamTask = Task { [weak self] in
-            let systemPrompt: String? = currentSessionID == nil
-                ? Self.buildSystemPrompt(item: capturedItem, dbPool: dbPool)
-                : nil
-
-            // Run the stream — even if self is deallocated, we capture what we need
-            // to persist the response.
-            var fullText = ""
-            var newSessionID: String?
-            do {
-                let stream = capturedClaudeService.stream(
-                    prompt: text,
-                    systemPrompt: systemPrompt,
-                    sessionID: currentSessionID,
-                    dbPath: dbPath,
-                    extraAllowedTools: ["Bash(watchtower*)"]
-                )
-                var sawTurnComplete = false
-                for try await event in stream {
-                    switch event {
-                    case .text(let chunk):
-                        if sawTurnComplete {
-                            fullText = chunk
-                            sawTurnComplete = false
-                        } else {
-                            fullText += chunk
-                        }
-                        self?.updateLastMessage(fullText)
-                    case .turnComplete(let text):
-                        fullText = text
-                        sawTurnComplete = true
-                        self?.updateLastMessage(fullText)
-                    case .sessionID(let sid):
-                        newSessionID = sid
-                        self?.handleSessionID(sid)
-                    case .done:
-                        break
-                    }
-                }
-            } catch {
-                if !Task.isCancelled {
-                    self?.errorMessage = error.localizedDescription
-                }
-            }
-
-            // Always persist the response, even if self is gone
-            if !fullText.isEmpty, let convID = capturedConvID {
-                Self.persistResponse(dbManager: capturedDBManager, conversationID: convID, text: fullText)
-            }
-            if let sid = newSessionID, let convID = capturedConvID {
-                Self.persistSession(dbManager: capturedDBManager, conversationID: convID, sessionID: sid)
-            }
-
-            // Update UI if self is still alive
-            self?.finishStream()
+            await self?.executeStream(
+                text: text,
+                currentSessionID: currentSessionID,
+                track: capturedTrack,
+                dbPool: dbPool,
+                dbPath: dbPath,
+                claudeService: capturedClaudeService,
+                dbManager: capturedDBManager,
+                conversationID: capturedConvID
+            )
         }
     }
 
-    // MARK: - Persistence helpers (nonisolated for use from Task)
+    // MARK: - Stream execution
 
-    nonisolated private static func persistResponse(dbManager: DatabaseManager, conversationID: Int64, text: String) {
+    private func executeStream(
+        text: String,
+        currentSessionID: String?,
+        track: Track,
+        dbPool: DatabasePool,
+        dbPath: String,
+        claudeService: any ClaudeServiceProtocol,
+        dbManager: DatabaseManager,
+        conversationID: Int64?
+    ) async {
+        let systemPrompt: String? = currentSessionID == nil
+            ? Self.buildSystemPrompt(track: track, dbPool: dbPool)
+            : nil
+
+        var fullText = ""
+        var newSessionID: String?
+        do {
+            let stream = claudeService.stream(
+                prompt: text,
+                systemPrompt: systemPrompt,
+                sessionID: currentSessionID,
+                dbPath: dbPath,
+                extraAllowedTools: ["Bash(watchtower*)"]
+            )
+            var sawTurnComplete = false
+            for try await event in stream {
+                switch event {
+                case .text(let chunk):
+                    if sawTurnComplete {
+                        fullText = chunk
+                        sawTurnComplete = false
+                    } else {
+                        fullText += chunk
+                    }
+                    updateLastMessage(fullText)
+                case .turnComplete(let text):
+                    fullText = text
+                    sawTurnComplete = true
+                    updateLastMessage(fullText)
+                case .sessionID(let sid):
+                    newSessionID = sid
+                    handleSessionID(sid)
+                case .done:
+                    break
+                }
+            }
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+
+        if !fullText.isEmpty, let convID = conversationID {
+            Self.persistResponse(
+                dbManager: dbManager,
+                conversationID: convID,
+                text: fullText
+            )
+        }
+        if let sid = newSessionID, let convID = conversationID {
+            Self.persistSession(
+                dbManager: dbManager,
+                conversationID: convID,
+                sessionID: sid
+            )
+        }
+
+        finishStream()
+    }
+
+    // MARK: - Persistence helpers
+
+    nonisolated private static func persistResponse(
+        dbManager: DatabaseManager, conversationID: Int64, text: String
+    ) {
         _ = try? dbManager.dbPool.write { db in
-            try ChatMessageQueries.insert(db, conversationID: conversationID, role: "assistant", text: text)
+            try ChatMessageQueries.insert(
+                db, conversationID: conversationID, role: "assistant", text: text
+            )
             try ChatConversationQueries.touch(db, id: conversationID)
         }
     }
 
-    nonisolated private static func persistSession(dbManager: DatabaseManager, conversationID: Int64, sessionID: String) {
+    nonisolated private static func persistSession(
+        dbManager: DatabaseManager, conversationID: Int64, sessionID: String
+    ) {
         _ = try? dbManager.dbPool.write { db in
-            try ChatConversationQueries.updateSessionID(db, id: conversationID, sessionID: sessionID)
+            try ChatConversationQueries.updateSessionID(
+                db, id: conversationID, sessionID: sessionID
+            )
         }
     }
-
-    // MARK: - Stream helpers (safe to call with weak self)
 
     private func updateLastMessage(_ text: String) {
         if let idx = messages.indices.last {
@@ -200,7 +250,7 @@ final class TrackChatViewModel {
             messages[idx].isStreaming = false
         }
         isStreaming = false
-        reloadItem()
+        reloadTrack()
         viewModel?.load()
     }
 
@@ -219,36 +269,36 @@ final class TrackChatViewModel {
 
     private func persistMessage(conversationID: Int64, role: String, text: String) {
         _ = try? dbManager.dbPool.write { db in
-            try ChatMessageQueries.insert(db, conversationID: conversationID, role: role, text: text)
+            try ChatMessageQueries.insert(
+                db, conversationID: conversationID, role: role, text: text
+            )
         }
     }
 
-    private func touchConversation(_ id: Int64) {
-        _ = try? dbManager.dbPool.write { db in
-            try ChatConversationQueries.touch(db, id: id)
-        }
-    }
-
-    private func reloadItem() {
+    private func reloadTrack() {
         do {
             if let updated = try dbManager.dbPool.read({ db in
-                try TrackQueries.fetchByID(db, id: item.id)
+                try TrackQueries.fetchByID(db, id: track.id)
             }) {
-                item = updated
+                track = updated
             }
-        } catch {
-            // Non-fatal: keep stale item
-        }
+        } catch {}
     }
 
     private func persistSessionID(conversationID: Int64, sessionID: String) {
         _ = try? dbManager.dbPool.write { db in
-            try ChatConversationQueries.updateSessionID(db, id: conversationID, sessionID: sessionID)
+            try ChatConversationQueries.updateSessionID(
+                db, id: conversationID, sessionID: sessionID
+            )
         }
     }
 
-    nonisolated static func buildSystemPrompt(item: Track, dbPool: DatabasePool) -> String {
-        let schema = (try? dbPool.read { db in try ChatViewModel.fetchSchema(db) }) ?? ""
+    nonisolated static func buildSystemPrompt(
+        track: Track, dbPool: DatabasePool
+    ) -> String {
+        let schema = (try? dbPool.read { db in
+            try ChatViewModel.fetchSchema(db)
+        }) ?? ""
         let dbPath = dbPool.path
 
         let ws: Workspace? = try? dbPool.read { db in
@@ -256,47 +306,39 @@ final class TrackChatViewModel {
         }
         let teamID = ws?.id ?? "unknown"
 
+        let channelIDs = track.decodedChannelIDs
+        let channelList = channelIDs.isEmpty ? "none" : channelIDs.joined(separator: ", ")
+
         return """
-        You are Watchtower, an AI assistant helping the user manage a specific track from their Slack workspace.
+        You are Watchtower, an AI assistant helping the user understand a specific track \
+        from their Slack workspace.
 
         === CURRENT TRACK ===
-        ID: \(item.id)
-        Text: \(item.text)
-        Status: \(item.status)
-        Priority: \(item.priority)
-        Channel: #\(item.sourceChannelName) (\(item.channelID))
-        Context: \(item.context)
-        Due date: \(item.dueDateFormatted ?? "none")
-        Created: \(item.createdAt)
+        ID: \(track.id)
+        Text: \(track.text)
+        Context: \(track.context)
+        Category: \(track.category)
+        Ownership: \(track.ownership)
+        Priority: \(track.priority)
+        Requester: \(track.requesterName)
+        Blocking: \(track.blocking)
+        Channels: \(channelList)
+        Created: \(track.createdAt)
+        Updated: \(track.updatedAt)
 
         === CAPABILITIES ===
         You can query the database to find related messages, threads, and people involved.
-        You can also UPDATE this track by running CLI commands via Bash:
-
-        - Accept (inbox→active): watchtower tracks accept \(item.id)
-        - Mark done:              watchtower tracks done \(item.id)
-        - Dismiss:                watchtower tracks dismiss \(item.id)
-        - Snooze:                 watchtower tracks snooze \(item.id) --until tomorrow
-
-        When the user asks to change the status, run the appropriate command.
 
         === DATABASE ===
         Database: \(dbPath)
         \(schema)
 
         === QUERY TIPS ===
-        - Find the original message:
-          SELECT m.text, u.display_name FROM messages m
+        - Find messages in track channels:
+          SELECT m.text, u.display_name, m.ts FROM messages m
           JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = '\(item.channelID.replacingOccurrences(of: "'", with: "''"))'
-          AND m.ts = '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))'
-        - Find thread context:
-          SELECT m.text, u.display_name FROM messages m
-          JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id = '\(item.channelID.replacingOccurrences(of: "'", with: "''"))'
-          AND m.thread_ts = '\(item.sourceMessageTS.replacingOccurrences(of: "'", with: "''"))'
-          ORDER BY m.ts_unix ASC
-        - Find who else discussed this: Look for messages in the same channel around the same time
+          WHERE m.channel_id IN ('\(channelIDs.joined(separator: "','"))')
+          ORDER BY m.ts_unix DESC LIMIT 20
         - Deep link format: slack://channel?team=\(teamID)&id={channel_id}&message={ts}
 
         === RESPONSE STYLE ===
@@ -315,7 +357,6 @@ struct TrackChatSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 Text("Chat")
                     .font(.caption)
@@ -333,11 +374,10 @@ struct TrackChatSection: View {
 
             Divider()
 
-            // Messages
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if chatVM.messages.isEmpty {
-                        Text("Ask about this track, who's involved, related discussions, or ask to update it.")
+                        Text("Ask about this track, who's involved, or related discussions.")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .padding()
@@ -352,23 +392,21 @@ struct TrackChatSection: View {
 
             Divider()
 
-            // Input
             HStack(spacing: 8) {
                 TextField("Ask about this track...", text: $chatVM.inputText)
                     .textFieldStyle(.plain)
                     .font(.subheadline)
-                    .onSubmit {
-                        chatVM.send()
-                    }
+                    .onSubmit { chatVM.send() }
 
-                Button {
-                    chatVM.send()
-                } label: {
+                Button { chatVM.send() } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title3)
                 }
                 .buttonStyle(.borderless)
-                .disabled(chatVM.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chatVM.isStreaming)
+                .disabled(
+                    chatVM.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || chatVM.isStreaming
+                )
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -393,7 +431,10 @@ struct TrackChatSection: View {
                     .font(.subheadline)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+                    .background(
+                        Color.accentColor.opacity(0.15),
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
             }
         case .assistant:
             HStack {
@@ -413,7 +454,10 @@ struct TrackChatSection: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                .background(
+                    Color.secondary.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10)
+                )
                 Spacer()
             }
         case .system:

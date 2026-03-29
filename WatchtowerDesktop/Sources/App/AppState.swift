@@ -27,17 +27,17 @@ final class AppState {
     private(set) var chatViewModel: ChatViewModel?
     private(set) var chatHistoryViewModel: ChatHistoryViewModel?
 
-    /// Tracks status filter (nil = inbox+active).
-    var trackStatusFilter: String?
-
-    /// Tracks ownership filter (nil = all ownerships).
-    var trackOwnershipFilter: String?
-
     /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
     var analysisLegacyMode: Bool = false
 
+    /// Whether the user has completed onboarding (profile exists and onboarding_done == true).
+    var profileComplete: Bool = true
+
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
+
+    /// Set to navigate to a specific task from anywhere in the app.
+    var pendingTaskID: Int?
 
     /// Watches for new digests and sends notifications.
     private(set) var digestWatcher: DigestWatcher?
@@ -45,7 +45,7 @@ final class AppState {
     /// Manages app updates from GitHub Releases.
     let updateService = UpdateService()
 
-    /// Manages background pipeline tasks (digests, tracks) started after onboarding sync.
+    /// Manages background pipeline tasks (digests, people) started after onboarding sync.
     let backgroundTaskManager = BackgroundTaskManager()
 
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
@@ -53,9 +53,9 @@ final class AppState {
         guard let db = databaseManager, chatViewModel == nil else { return }
         let cvm = ChatViewModel(claudeService: ClaudeService(), dbManager: db)
         let hvm = ChatHistoryViewModel(dbManager: db)
-        hvm.load(completion: { [weak self, weak cvm, weak hvm] in
+        hvm.load { [weak self, weak cvm, weak hvm] in
             self?.maybeCreateWelcomeChat(chatVM: cvm, historyVM: hvm)
-        })
+        }
 
         cvm.onConversationUpdated = { [weak hvm] convID, title, sessionID in
             guard let hvm else { return }
@@ -79,17 +79,24 @@ final class AppState {
         }
         guard let profile, profile.onboardingDone else { return }
 
+        let language = ConfigService().digestLanguage ?? "English"
+
         // Create conversation and send welcome message
         guard let conv = historyVM.createConversation() else { return }
         chatVM.newChat()
         chatVM.bind(to: conv)
         historyVM.updateTitle(conv.id, title: "Welcome")
-        chatVM.sendWelcomeMessage(profile: profile)
+        chatVM.sendWelcomeMessage(profile: profile, language: language)
     }
 
     func navigateToDigest(_ digestID: Int) {
         pendingDigestID = digestID
-        selectedDestination = .chains
+        selectedDestination = .digests
+    }
+
+    func navigateToTask(_ taskID: Int) {
+        pendingTaskID = taskID
+        selectedDestination = .tasks
     }
 
     private var isInitializing = false
@@ -98,6 +105,13 @@ final class AppState {
         guard !isInitializing else { return }
         isInitializing = true
         isLoading = true
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.backgroundTaskManager.terminateProcessesSync()
+        }
         Task {
             do {
                 let manager = try await Task.detached {
@@ -118,6 +132,7 @@ final class AppState {
                     }
                 }
                 needsOnboarding = onboarding.currentStep != .complete
+                profileComplete = !needsOnboarding
                 analysisLegacyMode = ConfigService().analysisLegacyMode
                 isLoading = false
                 loadCustomEmoji(from: manager)
@@ -161,6 +176,7 @@ final class AppState {
     func completeOnboarding() {
         onboarding.markComplete()
         needsOnboarding = false
+        profileComplete = true
     }
 
     /// Re-triggers the onboarding flow (from Settings).
@@ -168,6 +184,7 @@ final class AppState {
     func startOnboarding() {
         onboarding.reset(to: .chat)
         needsOnboarding = true
+        profileComplete = false
         UserDefaults.standard.removeObject(forKey: Constants.pipelinesCompletedKey)
     }
 

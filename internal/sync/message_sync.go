@@ -413,6 +413,24 @@ func (o *Orchestrator) upsertMessagePage(channelID string, messages []goslack.Me
 		return 0, fmt.Errorf("upserting messages: %w", err)
 	}
 
+	// Extract and persist reactions from Slack messages.
+	var reactions []db.Reaction
+	for _, msg := range messages {
+		for _, r := range msg.Reactions {
+			for _, uid := range r.Users {
+				reactions = append(reactions, db.Reaction{
+					ChannelID: channelID,
+					MessageTS: msg.Timestamp,
+					UserID:    uid,
+					Emoji:     r.Name,
+				})
+			}
+		}
+	}
+	if err := o.db.UpsertReactionBatch(tx, reactions); err != nil {
+		return 0, fmt.Errorf("upserting reactions: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing transaction: %w", err)
 	}

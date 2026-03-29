@@ -3,6 +3,9 @@ import SwiftUI
 struct BriefingDetailView: View {
     let briefing: Briefing
     @Environment(AppState.self) private var appState
+    @State private var showCreateTask = false
+    @State private var taskPrefillText = ""
+    @State private var taskPrefillIntent = ""
 
     var body: some View {
         ScrollView {
@@ -15,6 +18,14 @@ struct BriefingDetailView: View {
                 coachingSection
             }
             .padding()
+        }
+        .sheet(isPresented: $showCreateTask) {
+            CreateTaskSheet(
+                prefillText: taskPrefillText,
+                prefillIntent: taskPrefillIntent,
+                prefillSourceType: "briefing",
+                prefillSourceID: String(briefing.id)
+            )
         }
     }
 
@@ -62,6 +73,7 @@ struct BriefingDetailView: View {
         }
     }
 
+    @ViewBuilder
     private func attentionCard(_ item: AttentionItem) -> some View {
         Button {
             navigateToSource(type: item.sourceType, id: item.sourceID)
@@ -104,6 +116,24 @@ struct BriefingDetailView: View {
             )
         }
         .buttonStyle(.plain)
+
+        if item.suggestTask == true {
+            HStack {
+                Spacer()
+                Button {
+                    taskPrefillText = item.text
+                    taskPrefillIntent = item.reason ?? ""
+                    showCreateTask = true
+                } label: {
+                    Label("Create task", systemImage: "plus.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.trailing, 4)
+            .padding(.top, 2)
+        }
     }
 
     // MARK: - Your Day
@@ -111,12 +141,22 @@ struct BriefingDetailView: View {
     @ViewBuilder
     private var yourDaySection: some View {
         let items = briefing.parsedYourDay
-        if !items.isEmpty {
-            sectionView(
-                title: "Your Day",
-                icon: "calendar",
-                iconColor: .green
-            ) {
+        sectionView(
+            title: "Your Day",
+            icon: "calendar",
+            iconColor: .green
+        ) {
+            if items.isEmpty {
+                Text("No tracks yet. Tracks are auto-generated from digests.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.green.opacity(0.04),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+            } else {
                 ForEach(items) { item in
                     yourDayCard(item)
                 }
@@ -126,7 +166,9 @@ struct BriefingDetailView: View {
 
     private func yourDayCard(_ item: YourDayItem) -> some View {
         Button {
-            if let trackID = item.trackID {
+            if let taskID = item.taskID {
+                appState.navigateToTask(taskID)
+            } else if let trackID = item.trackID {
                 navigateToSource(type: "track", id: String(trackID))
             }
         } label: {
@@ -160,7 +202,7 @@ struct BriefingDetailView: View {
 
                 Spacer()
 
-                if item.trackID != nil {
+                if item.trackID != nil || item.taskID != nil {
                     Image(systemName: "chevron.right")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -345,6 +387,20 @@ struct BriefingDetailView: View {
                                     )
                             }
                         }
+
+                        Spacer()
+
+                        Button {
+                            taskPrefillText = item.text
+                            taskPrefillIntent = item.category ?? ""
+                            showCreateTask = true
+                        } label: {
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add Task")
                     }
                 }
             }
@@ -362,13 +418,11 @@ struct BriefingDetailView: View {
         switch type {
         case "track":
             appState.selectedDestination = .tracks
-        case "chain":
-            appState.selectedDestination = .chains
         case "digest":
             if let id, let intID = Int(id) {
                 appState.navigateToDigest(intID)
             } else {
-                appState.selectedDestination = .chains
+                appState.selectedDestination = .digests
             }
         case "people":
             appState.selectedDestination = .people
@@ -414,7 +468,6 @@ struct BriefingDetailView: View {
         let (icon, label): (String, String) = {
             switch type {
             case "track": return ("checklist", "Track")
-            case "chain": return ("link.circle", "Chain")
             case "digest": return ("newspaper", "Digest")
             case "people": return ("person.2", "Person")
             default: return ("questionmark.circle", type)
@@ -428,7 +481,6 @@ struct BriefingDetailView: View {
     private func statusBadge(_ status: String) -> some View {
         let color: Color = {
             switch status {
-            case "inbox": return .blue
             case "active": return .green
             case "done": return .gray
             default: return .secondary

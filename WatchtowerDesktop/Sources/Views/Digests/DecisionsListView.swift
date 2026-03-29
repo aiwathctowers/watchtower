@@ -68,7 +68,11 @@ struct DecisionsListView: View {
         let isSelected = selectedEntryID == entry.id && !isSelectMode
         let bgColor: Color = isSelected
             ? Color.accentColor.opacity(0.15)
-            : isChecked ? Color.accentColor.opacity(0.08) : Color.clear
+            : isChecked
+                ? Color.accentColor.opacity(0.08)
+                : !entry.isRead
+                    ? Color.blue.opacity(0.06)
+                    : Color.clear
 
         return HStack(spacing: 0) {
             if isSelectMode {
@@ -110,15 +114,6 @@ struct DecisionsListView: View {
     private func decisionRow(_ entry: DecisionEntry) -> some View {
         let expanded = expandedEntryIDs.contains(entry.id)
         return HStack(alignment: .top, spacing: 0) {
-            // Unread indicator
-            if !entry.isRead {
-                Circle()
-                    .fill(.blue)
-                    .frame(width: 8, height: 8)
-                    .padding(.top, 6)
-                    .padding(.trailing, 4)
-            }
-
             // Left importance bar
             RoundedRectangle(cornerRadius: 2)
                 .fill(importanceColor(entry.effectiveImportance))

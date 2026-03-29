@@ -104,8 +104,6 @@ final class DatabaseManager: Sendable {
             try db.execute(sql: "DELETE FROM tracks")
             try db.execute(sql: "DELETE FROM communication_guides")
             try db.execute(sql: "DELETE FROM people_cards")
-            try db.execute(sql: "DELETE FROM chains")
-            try db.execute(sql: "DELETE FROM chain_refs")
 
             // AI-generated summary tables
             try db.execute(sql: "DELETE FROM guide_summaries")
@@ -113,6 +111,11 @@ final class DatabaseManager: Sendable {
 
             // Briefings
             try db.execute(sql: "DELETE FROM briefings")
+
+            // Tasks & Inbox
+            try db.execute(sql: "DELETE FROM tasks")
+            try db.execute(sql: "DELETE FROM inbox_items")
+            try db.execute(sql: "UPDATE workspace SET inbox_last_processed_ts = 0")
 
             // Pipeline run history
             try db.execute(sql: "DELETE FROM pipeline_steps")
@@ -122,7 +125,6 @@ final class DatabaseManager: Sendable {
             try db.execute(sql: "DELETE FROM feedback")
             try db.execute(sql: "DELETE FROM decision_importance_corrections")
             try db.execute(sql: "DELETE FROM decision_reads")
-            try db.execute(sql: "DELETE FROM track_history")
             try db.execute(sql: "DELETE FROM user_interactions")
         }
     }

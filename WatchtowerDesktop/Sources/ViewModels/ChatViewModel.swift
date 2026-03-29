@@ -425,31 +425,35 @@ final class ChatViewModel {
         how to use the app, or what something means — answer based on this guide.
 
         Watchtower is a macOS desktop app that syncs a Slack workspace to a local SQLite database
-        and uses AI to generate insights: digests, tracks, discussion chains, and people analytics.
+        and uses AI to generate insights: daily briefings, inbox, digests, tracks, and people analytics.
 
         TABS:
         - AI Chat: chat with Claude about workspace data, multi-turn with session memory
-        - Tracks: personal action items extracted from Slack (statuses: inbox/active/done/dismissed/snoozed;
-          ownership: mine/delegated/watching; priority: high/medium/low; categories: code_review, decision_needed, task, etc.)
-        - Chains: cross-channel discussion threads linked by AI (active/resolved/stale)
+        - Briefings: personalized daily overview — needs attention, your day, what happened, team pulse, coaching
+        - Inbox: messages awaiting your response — @mentions and DMs auto-detected after each sync, AI-prioritized (high/medium/low), auto-resolved when you reply. Statuses: pending, resolved, dismissed, snoozed. Actions: resolve, dismiss, snooze, create task, open in Slack
+        - Tasks: personal action items with priority, ownership, due dates, sub-items. Sources: track, briefing, digest, inbox, manual, chat
+        - Tracks: auto-generated narrative summaries of ongoing initiatives from digests (priority: high/medium/low; narrative, timeline, participants, key messages)
         - Digests: AI summaries of channel activity (channel/daily/weekly), with topics, decisions, running context
         - Decisions: flat list of all decisions across digests, with importance ratings
         - People: team member profiles from AI analysis — communication style, decision role, accomplishments, red flags, activity hours
+        - Statistics: channel analytics, bot traffic %, recommendations (mute/leave/favorite), mute channels for AI
         - Search: full-text search across all synced Slack messages
         - Usage: token consumption and costs by date, model, feature; live pipeline progress
         - Training: prompt editor, feedback stats, quality score, tuning controls
 
-        SETTINGS: sync interval, workers, history depth, digest model/language, Claude CLI path,
+        SETTINGS: sync interval, workers, history depth, digest model/language, briefing hour, Claude CLI path,
         profile (role, team, manager, reports, peers), notifications, daemon control, logs, data management.
 
         BACKGROUND PROCESSES: daemon syncs Slack periodically, then runs pipelines:
-        digest → tracks → people → chains (automatic after each sync).
+        inbox (detect + AI prioritize) → channel digests → tracks → rollup digests → people → briefing (automatic after each sync).
+        Also auto-unsnoozes tasks and inbox items past their snooze date.
 
         KEY CONCEPTS:
         - Running context: AI maintains per-channel memory (active topics, decisions, open questions)
         - Situations: extracted interaction patterns used to build people cards
         - Feedback loop: thumbs up/down + importance corrections improve AI via prompt tuning
         - Starred items: prioritize specific channels and people in analysis
+        - Muted channels: excluded from AI processing to reduce noise and token costs
 
         When answering about the app, be specific and accurate. Do not invent features that don't exist.
         """
@@ -458,10 +462,10 @@ final class ChatViewModel {
     // MARK: - Welcome Message
 
     /// Send a welcome message in a new chat, using the user's profile for personalization.
-    func sendWelcomeMessage(profile: UserProfile) {
+    func sendWelcomeMessage(profile: UserProfile, language: String = "English") {
         guard !isStreaming else { return }
 
-        let welcomePrompt = Self.buildWelcomePrompt(profile: profile)
+        let welcomePrompt = Self.buildWelcomePrompt(profile: profile, language: language)
 
         messages.append(ChatMessage(id: UUID(), role: .assistant, text: "", timestamp: Date(), isStreaming: true))
         isStreaming = true
@@ -528,29 +532,42 @@ final class ChatViewModel {
         }
     }
 
-    nonisolated private static func buildWelcomePrompt(profile: UserProfile) -> String {
+    nonisolated private static func buildWelcomePrompt(profile: UserProfile, language: String) -> String {
         var parts: [String] = []
-        parts.append("This is a NEW conversation. The user just opened the app for the first time after onboarding.")
-        parts.append("Introduce yourself briefly as Watchtower assistant and offer to help.")
+        parts.append("IMPORTANT: You MUST respond entirely in \(language).")
+        parts.append("""
+            This is the user's FIRST time opening Watchtower after onboarding. \
+            Write a welcome message that serves as a quick tour of the app. \
+            Structure it as a friendly, concise guide to what Watchtower does and how to use it.
+
+            Cover these features in order, briefly (1-2 sentences each):
+            1. **Briefings** — personalized daily morning overview combining all insights (needs attention, your day, what happened, team pulse, coaching)
+            2. **Inbox** — messages awaiting your response (@mentions and DMs), auto-detected and AI-prioritized
+            3. **Tasks** — personal action items you create from tracks, briefings, digests, or inbox items
+            4. **Chat** (this tab!) — ask questions about your workspace, activity, decisions, people
+            5. **Tracks** — auto-generated narratives about ongoing initiatives across channels
+            6. **Digests** — AI summaries of channel activity, decisions, and trends
+            7. **People** — team member profiles with communication style, activity patterns
+            8. **Statistics** — channel analytics, digest coverage, recommendations to mute noisy channels
+
+            Then mention:
+            - The background daemon syncs Slack data automatically and runs AI pipelines after each sync
+            - They can rate AI quality with thumbs up/down to improve results over time
+            - Settings (⌘,) let them configure sync frequency, language, notifications, etc.
+
+            End with a friendly invitation to ask anything or explore the tabs on the left.
+            """)
 
         if !profile.role.isEmpty {
-            parts.append("User's role: \(profile.role)")
-        }
-        if !profile.team.isEmpty {
-            parts.append("User's team: \(profile.team)")
+            parts.append("User's role: \(profile.role). Tailor examples to this role.")
         }
         if !profile.painPoints.isEmpty, profile.painPoints != "[]" {
-            parts.append("User's pain points from onboarding: \(profile.painPoints)")
-        }
-        if !profile.customPromptContext.isEmpty {
-            parts.append("User's profile context: \(profile.customPromptContext)")
+            parts.append("User's pain points: \(profile.painPoints). Mention which features address these.")
         }
 
         parts.append("""
-            Based on the user's role and pain points, suggest 2-3 specific things you can help with RIGHT NOW.
-            For example: reviewing today's activity, checking for pending decisions, summarizing what their team discussed.
-            Keep it short (3-5 sentences), friendly, and actionable. Match the user's language if their profile gives hints.
-            Do NOT ask the user to type anything specific — just offer help naturally.
+            Format: use **bold** for feature names, keep total length under 400 words. \
+            Be warm but not cheesy. No emojis unless the language culturally expects them.
             """)
 
         return parts.joined(separator: "\n")

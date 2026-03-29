@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"watchtower/internal/chains"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
+	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
 
 	"github.com/dustin/go-humanize"
@@ -24,6 +24,7 @@ var (
 	digestFlagDays            int
 	digestGenFlagSince        int
 	digestGenFlagProgressJSON bool
+	digestGenFlagChannelsOnly bool
 )
 
 var digestCmd = &cobra.Command{
@@ -78,6 +79,7 @@ func init() {
 	digestCmd.Flags().IntVar(&digestFlagDays, "days", 1, "number of days to show")
 	digestGenerateCmd.Flags().IntVar(&digestGenFlagSince, "since", 1, "generate digests for the last N days")
 	digestGenerateCmd.Flags().BoolVar(&digestGenFlagProgressJSON, "progress-json", false, "output progress as JSON lines")
+	digestGenerateCmd.Flags().BoolVar(&digestGenFlagChannelsOnly, "channels-only", false, "generate channel digests only (no tracks/rollups)")
 	digestStatsCmd.Flags().IntVar(&digestStatsFlagDays, "days", 7, "number of days to look back")
 	digestSummaryCmd.Flags().StringVar(&digestSummaryFlagFrom, "from", "", "start date (YYYY-MM-DD)")
 	digestSummaryCmd.Flags().StringVar(&digestSummaryFlagTo, "to", "", "end date (YYYY-MM-DD), default: today")
@@ -176,13 +178,65 @@ func printDigest(w io.Writer, d db.Digest, database *db.DB) {
 	// Summary
 	fmt.Fprintf(w, "%s\n\n", d.Summary)
 
-	// Topics
-	var topics []string
-	if err := json.Unmarshal([]byte(d.Topics), &topics); err == nil && len(topics) > 0 {
-		fmt.Fprintf(w, "**Topics:** %s\n\n", joinTopics(topics))
+	// Try topic-structured data first
+	topics, _ := database.GetDigestTopics(d.ID)
+	if len(topics) > 0 {
+		printDigestTopics(w, topics)
+	} else {
+		// Fallback to old flat fields for legacy digests
+		printDigestLegacy(w, d)
 	}
 
-	// Decisions
+	fmt.Fprintln(w, "---")
+}
+
+// printDigestTopics renders structured topics with nested decisions and action items.
+func printDigestTopics(w io.Writer, topics []db.DigestTopic) {
+	for _, t := range topics {
+		fmt.Fprintf(w, "### %s\n\n", t.Title)
+		if t.Summary != "" {
+			fmt.Fprintf(w, "%s\n\n", t.Summary)
+		}
+
+		var decisions []struct {
+			Text string `json:"text"`
+			By   string `json:"by"`
+		}
+		if err := json.Unmarshal([]byte(t.Decisions), &decisions); err == nil && len(decisions) > 0 {
+			for _, dec := range decisions {
+				if dec.By != "" {
+					fmt.Fprintf(w, "- **Decision:** %s (by %s)\n", dec.Text, dec.By)
+				} else {
+					fmt.Fprintf(w, "- **Decision:** %s\n", dec.Text)
+				}
+			}
+		}
+
+		var actions []struct {
+			Text     string `json:"text"`
+			Assignee string `json:"assignee"`
+			Status   string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(t.ActionItems), &actions); err == nil && len(actions) > 0 {
+			for _, a := range actions {
+				assignee := ""
+				if a.Assignee != "" {
+					assignee = " -> " + a.Assignee
+				}
+				fmt.Fprintf(w, "- [%s] %s%s\n", a.Status, a.Text, assignee)
+			}
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// printDigestLegacy renders old-style flat digest fields (topics as string array, flat decisions/actions).
+func printDigestLegacy(w io.Writer, d db.Digest) {
+	var topicNames []string
+	if err := json.Unmarshal([]byte(d.Topics), &topicNames); err == nil && len(topicNames) > 0 {
+		fmt.Fprintf(w, "**Topics:** %s\n\n", joinTopics(topicNames))
+	}
+
 	var decisions []struct {
 		Text string `json:"text"`
 		By   string `json:"by"`
@@ -200,7 +254,6 @@ func printDigest(w io.Writer, d db.Digest, database *db.DB) {
 		fmt.Fprintln(w)
 	}
 
-	// Action items
 	var actions []struct {
 		Text     string `json:"text"`
 		Assignee string `json:"assignee"`
@@ -218,8 +271,6 @@ func printDigest(w io.Writer, d db.Digest, database *db.DB) {
 		}
 		fmt.Fprintln(w)
 	}
-
-	fmt.Fprintln(w, "---")
 }
 
 func runDigestGenerate(cmd *cobra.Command, args []string) error {
@@ -238,6 +289,10 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	cfg.Digest.Enabled = true
 	if cfg.Digest.Model == "" {
 		cfg.Digest.Model = config.DefaultDigestModel
+	}
+
+	if err := validateModel(cfg); err != nil {
+		return err
 	}
 
 	database, err := db.Open(cfg.DBPath())
@@ -261,7 +316,9 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	gen, savePool := cliPooledGenerator(cfg, logger)
 	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
-	pipe.ChainLinker = chains.New(database, cfg, gen, logger)
+	if !digestGenFlagChannelsOnly {
+		pipe.TrackLinker = tracks.New(database, cfg, gen, logger)
+	}
 
 	// Only set SinceOverride when --since was explicitly passed.
 	// Without it, Run() uses isFirstRun() → runInitialDayByDay() for full history.
@@ -293,7 +350,7 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 		}
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
 
-		runID, _ := database.CreatePipelineRun("digests", "cli")
+		runID, _ := database.CreatePipelineRun("digests", "cli", cfg.Digest.Model)
 
 		pipe.OnProgress = func(done, total int, status string) {
 			inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
@@ -329,26 +386,29 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 				})
 			}
 		}
-		n, usage, err := pipe.Run(cmd.Context())
+		var n int
+		var usage *digest.Usage
+		var err error
+		if digestGenFlagChannelsOnly {
+			n, usage, err = pipe.RunChannelDigestsOnly(cmd.Context())
+		} else {
+			n, usage, err = pipe.Run(cmd.Context())
+		}
 
 		// Auto-mark digests as read based on Slack read cursors
 		// (important for onboarding where digest generate runs standalone).
-		if markDigests, _, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
+		if markDigests, markTracks, markErr := database.AutoMarkReadFromSlack(); markErr != nil {
 			logger.Printf("warning: auto-mark read failed: %v", markErr)
-		} else if markDigests > 0 {
-			logger.Printf("auto-marked %d digests as read (based on Slack read state)", markDigests)
+		} else if markDigests > 0 || markTracks > 0 {
+			logger.Printf("auto-marked %d digests, %d tracks as read (based on Slack read state)", markDigests, markTracks)
 		}
 
-		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n}
+		inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
+		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
 		if pipe.LastStepMessageCount > 0 {
 			final.MessageCount = pipe.LastStepMessageCount
 			final.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
 			final.PeriodTo = pipe.LastStepPeriodTo.Format(time.RFC3339)
-		}
-		if usage != nil {
-			final.InputTokens = usage.InputTokens
-			final.OutputTokens = usage.OutputTokens
-			final.CostUSD = usage.CostUSD
 		}
 		if err != nil {
 			final.Error = err.Error()
@@ -363,7 +423,7 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			}
 			inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
 			if usage != nil {
-				inTok, outTok, cost = usage.InputTokens, usage.OutputTokens, usage.CostUSD
+				inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
 			}
 			_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
 		}
@@ -372,9 +432,15 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 
 	spinner := ui.NewSpinner(out, fmt.Sprintf("Generating digests for the last %d day(s) using %s...", days, cfg.Digest.Model))
 
-	runID, _ := database.CreatePipelineRun("digests", "cli")
+	runID, _ := database.CreatePipelineRun("digests", "cli", cfg.Digest.Model)
 
-	n, usage, err := pipe.Run(cmd.Context())
+	var n int
+	var usage *digest.Usage
+	if digestGenFlagChannelsOnly {
+		n, usage, err = pipe.RunChannelDigestsOnly(cmd.Context())
+	} else {
+		n, usage, err = pipe.Run(cmd.Context())
+	}
 	if err != nil {
 		spinner.Stop("failed")
 		if runID > 0 {
@@ -392,11 +458,11 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 
 	// Complete run in DB
 	if runID > 0 {
-		inTok, outTok, cost := 0, 0, 0.0
+		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
 		if usage != nil {
-			inTok, outTok, cost = usage.InputTokens, usage.OutputTokens, usage.CostUSD
+			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
 		}
-		_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, 0, nil, nil, "")
+		_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, "")
 	}
 
 	if n == 0 {
@@ -559,7 +625,27 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 	defer savePool()
 	pipe := digest.New(database, cfg, gen, logger)
 
+	runID, _ := database.CreatePipelineRun("digest-summary", "cli", cfg.Digest.Model)
+
 	result, usage, err := pipe.RunPeriodSummary(cmd.Context(), from, to)
+
+	// Complete pipeline run regardless of outcome.
+	{
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+		if usage != nil {
+			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+		}
+		fromUnix := float64(from.Unix())
+		toUnix := float64(to.Unix())
+		if runID > 0 {
+			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, cost, totalAPI, &fromUnix, &toUnix, errMsg)
+		}
+	}
+
 	if err != nil {
 		return err
 	}
@@ -569,27 +655,19 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(&buf, "## Summary: %s to %s\n\n", from.Format("2006-01-02"), to.Format("2006-01-02"))
 	fmt.Fprintf(&buf, "%s\n\n", result.Summary)
 
-	if len(result.Topics) > 0 {
-		fmt.Fprintf(&buf, "**Topics:** %s\n\n", joinTopics(result.Topics))
-	}
-
-	if len(result.Decisions) > 0 {
-		fmt.Fprintln(&buf, "**Decisions:**")
-		fmt.Fprintln(&buf)
-		for _, dec := range result.Decisions {
+	for _, t := range result.Topics {
+		fmt.Fprintf(&buf, "### %s\n\n", t.Title)
+		if t.Summary != "" {
+			fmt.Fprintf(&buf, "%s\n\n", t.Summary)
+		}
+		for _, dec := range t.Decisions {
 			if dec.By != "" {
-				fmt.Fprintf(&buf, "- %s (by %s)\n", dec.Text, dec.By)
+				fmt.Fprintf(&buf, "- **Decision:** %s (by %s)\n", dec.Text, dec.By)
 			} else {
-				fmt.Fprintf(&buf, "- %s\n", dec.Text)
+				fmt.Fprintf(&buf, "- **Decision:** %s\n", dec.Text)
 			}
 		}
-		fmt.Fprintln(&buf)
-	}
-
-	if len(result.ActionItems) > 0 {
-		fmt.Fprintln(&buf, "**Action Items:**")
-		fmt.Fprintln(&buf)
-		for _, a := range result.ActionItems {
+		for _, a := range t.ActionItems {
 			assignee := ""
 			if a.Assignee != "" {
 				assignee = " -> " + a.Assignee

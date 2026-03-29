@@ -14,9 +14,6 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// maxDiscoveryPages limits pagination to avoid excessive API calls.
-const maxDiscoveryPages = 200
-
 // searchChannelType maps a search result CtxChannel to our type string.
 func searchChannelType(ch slack.CtxChannel) string {
 	if ch.IsMPIM {
@@ -46,32 +43,39 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 		return fmt.Errorf("getting search_last_date: %w", err)
 	}
 
+	// Always cap at initial_history_days window
+	earliest := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+
 	var searchAfter string
 	if lastDate != "" {
 		// Parse and subtract 2 days for overlap to account for Slack search indexing delays
 		t, err := time.Parse("2006-01-02", lastDate)
 		if err != nil {
 			o.logger.Printf("warning: invalid search_last_date %q, using default", lastDate)
-			searchAfter = time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+			searchAfter = earliest
 		} else {
-			searchAfter = t.AddDate(0, 0, -2).Format("2006-01-02")
+			candidate := t.AddDate(0, 0, -2).Format("2006-01-02")
+			// Take the more recent of (search_last_date - 2 days) and (now - initial_history_days)
+			if candidate > earliest {
+				searchAfter = candidate
+			} else {
+				searchAfter = earliest
+			}
 		}
 	} else {
-		searchAfter = time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+		searchAfter = earliest
 	}
 
 	query := fmt.Sprintf("after:%s", searchAfter)
+	o.progress.SetSearchAfter(searchAfter)
 	o.logger.Printf("search sync: query=%q", query)
 
 	seenChannels := make(map[string]bool)
 	seenUsers := make(map[string]bool)
 	totalMessages := 0
 	page := 1
-	completedAllPages := false
 
-	var oldestFetchedTS string // track oldest message timestamp across all pages
-
-	for page <= maxDiscoveryPages {
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -82,7 +86,6 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 		if err != nil {
 			if isNonFatalError(err) {
 				o.logger.Printf("search sync: non-fatal error on page %d, stopping early: %v", page, err)
-				// Don't set completedAllPages — watermark stays unchanged.
 				break
 			}
 			return fmt.Errorf("search sync (page %d): %w", page, err)
@@ -95,11 +98,6 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 		// Convert search messages to db.Message and collect channel/user info
 		dbMsgs := make([]db.Message, 0, len(result.Messages))
 		for _, msg := range result.Messages {
-			// Track the oldest message timestamp (results are sorted newest-first)
-			if oldestFetchedTS == "" || msg.Timestamp < oldestFetchedTS {
-				oldestFetchedTS = msg.Timestamp
-			}
-
 			// Ensure channel
 			if msg.Channel.ID != "" && !seenChannels[msg.Channel.ID] {
 				seenChannels[msg.Channel.ID] = true
@@ -131,19 +129,24 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 				}
 			}
 
-			// Convert SearchMessage to db.Message
+			// Convert SearchMessage to db.Message.
+			// search.messages doesn't return thread_ts or reply_count,
+			// but permalink contains thread_ts for threaded replies:
+			//   ...p1234567890123456?thread_ts=1234567890.123456
 			rawJSON, err := json.Marshal(msg)
 			if err != nil {
 				o.logger.Printf("warning: failed to marshal search message %s: %v", msg.Timestamp, err)
 				rawJSON = []byte("{}")
 			}
 
+			threadTS := extractThreadTSFromPermalink(msg.Permalink)
+
 			dbMsgs = append(dbMsgs, db.Message{
 				ChannelID:  msg.Channel.ID,
 				TS:         msg.Timestamp,
 				UserID:     msg.User,
 				Text:       msg.Text,
-				ThreadTS:   sql.NullString{},
+				ThreadTS:   threadTS,
 				ReplyCount: 0,
 				IsEdited:   false,
 				IsDeleted:  false,
@@ -168,39 +171,15 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 			page, result.Pages, len(seenChannels), len(seenUsers), totalMessages)
 
 		if page >= result.Pages {
-			completedAllPages = true
 			break
 		}
 		page++
 	}
 
-	// Log a warning when we hit the page limit without fetching everything
-	if !completedAllPages && page > maxDiscoveryPages {
-		o.logger.Printf("WARNING: search sync hit page limit (%d pages, %d messages fetched). "+
-			"Some older messages in the search window may have been missed. "+
-			"Consider running 'watchtower sync --full' to catch up.", maxDiscoveryPages, totalMessages)
-	}
-
-	// Advance the watermark based on what we fetched.
-	if completedAllPages {
-		// All pages fetched — safe to set watermark to today.
-		today := time.Now().Format("2006-01-02")
-		if err := o.db.SetSearchLastDate(today); err != nil {
-			return fmt.Errorf("saving search_last_date: %w", err)
-		}
-	} else if oldestFetchedTS != "" && page > maxDiscoveryPages {
-		// Hit the page limit — advance watermark to the oldest message we DID fetch.
-		// This prevents the next sync from re-scanning the same pages endlessly
-		// while messages beyond the page limit remain unreachable.
-		// The 2-day overlap on next sync provides a safety buffer.
-		ts, parseErr := parseSlackTS(oldestFetchedTS)
-		if parseErr == nil {
-			oldestDate := ts.Format("2006-01-02")
-			if err := o.db.SetSearchLastDate(oldestDate); err != nil {
-				return fmt.Errorf("saving search_last_date: %w", err)
-			}
-			o.logger.Printf("search sync: advanced watermark to %s (oldest fetched message)", oldestDate)
-		}
+	// Advance the watermark to today.
+	today := time.Now().Format("2006-01-02")
+	if err := o.db.SetSearchLastDate(today); err != nil {
+		return fmt.Errorf("saving search_last_date: %w", err)
 	}
 
 	// Populate discoveredChannelIDs so the full-sync fallback can skip inactive channels.
@@ -213,6 +192,25 @@ func (o *Orchestrator) syncViaSearch(ctx context.Context) error {
 	o.logger.Printf("search sync complete: %d channels, %d users, %d messages from %d pages (query=%q, initial_history_days=%d)",
 		len(seenChannels), len(seenUsers), totalMessages, page, query, days)
 	return nil
+}
+
+// extractThreadTSFromPermalink parses thread_ts from a Slack permalink URL.
+// Permalink format: https://...slack.com/archives/C.../p1234?thread_ts=1234567890.123456
+func extractThreadTSFromPermalink(permalink string) sql.NullString {
+	const marker = "thread_ts="
+	idx := strings.Index(permalink, marker)
+	if idx < 0 {
+		return sql.NullString{}
+	}
+	ts := permalink[idx+len(marker):]
+	// Trim any trailing query params
+	if ampIdx := strings.IndexByte(ts, '&'); ampIdx >= 0 {
+		ts = ts[:ampIdx]
+	}
+	if ts == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: ts, Valid: true}
 }
 
 // parseSlackTS parses a Slack message timestamp ("1234567890.123456") into a time.Time.

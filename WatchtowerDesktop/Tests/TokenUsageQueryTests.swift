@@ -12,15 +12,16 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(summary.totalOutputTokens, 0)
         XCTAssertEqual(summary.totalCost, 0)
         XCTAssertEqual(summary.totalCalls, 0)
+        XCTAssertEqual(summary.totalApiTokens, 0)
     }
 
     func testFetchUsageFromDigests() throws {
         let db = try TestDatabase.create()
         try db.write { db in
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C001', 100, 200, 'channel', 'Test', 10, 'haiku', 1000, 500, 0.01)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'cli', 'haiku', 'done', 1000, 500, 0.01, 3000)
                 """)
         }
         let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
@@ -28,20 +29,21 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(summary.totalOutputTokens, 500)
         XCTAssertEqual(summary.totalCost, 0.01, accuracy: 0.001)
         XCTAssertEqual(summary.totalCalls, 1)
+        XCTAssertEqual(summary.totalApiTokens, 3000)
     }
 
     func testFetchUsageAggregatesMultipleSources() throws {
         let db = try TestDatabase.create()
         try db.write { db in
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C001', 100, 200, 'channel', 'Test', 10, 'haiku', 1000, 500, 0.01)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'cli', 'haiku', 'done', 1000, 500, 0.01, 2000)
                 """)
             try db.execute(sql: """
-                INSERT INTO user_analyses (user_id, period_from, period_to, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('U001', 100, 200, 'sonnet', 2000, 1000, 0.05)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('people', 'cli', 'sonnet', 'done', 2000, 1000, 0.05, 5000)
                 """)
         }
         let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
@@ -49,25 +51,26 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(summary.totalOutputTokens, 1500)
         XCTAssertEqual(summary.totalCost, 0.06, accuracy: 0.001)
         XCTAssertEqual(summary.totalCalls, 2)
+        XCTAssertEqual(summary.totalApiTokens, 7000)
     }
 
     func testByModelGrouping() throws {
         let db = try TestDatabase.create()
         try db.write { db in
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C001', 100, 200, 'channel', 'T1', 10, 'haiku', 1000, 500, 0.01)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'daemon', 'haiku', 'done', 1000, 500, 0.01, 2000)
                 """)
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C002', 100, 200, 'channel', 'T2', 10, 'haiku', 500, 250, 0.005)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'daemon', 'haiku', 'done', 500, 250, 0.005, 1000)
                 """)
             try db.execute(sql: """
-                INSERT INTO user_analyses (user_id, period_from, period_to, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('U001', 100, 200, 'sonnet', 2000, 1000, 0.05)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('people', 'cli', 'sonnet', 'done', 2000, 1000, 0.05, 5000)
                 """)
         }
         let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
@@ -77,18 +80,20 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(byModel.count, 2)
         XCTAssertEqual(byModel[0].model, "sonnet")
         XCTAssertEqual(byModel[0].input, 2000)
+        XCTAssertEqual(byModel[0].totalApiTokens, 5000)
         XCTAssertEqual(byModel[1].model, "haiku")
         XCTAssertEqual(byModel[1].input, 1500) // 1000 + 500
         XCTAssertEqual(byModel[1].calls, 2)
+        XCTAssertEqual(byModel[1].totalApiTokens, 3000) // 2000 + 1000
     }
 
     func testByModelEmptyModel() throws {
         let db = try TestDatabase.create()
         try db.write { db in
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C001', 100, 200, 'channel', 'T', 10, '', 100, 50, 0.01)
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'cli', '', 'done', 100, 50, 0.01, 200)
                 """)
         }
         let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
@@ -99,9 +104,9 @@ final class TokenUsageQueryTests: XCTestCase {
 
     func testTokenUsageSummaryByModelSortedByCost() throws {
         let summary = TokenUsageSummary(rows: [
-            try makeRow(source: "digests", model: "haiku", cost: 0.01),
-            try makeRow(source: "people", model: "opus", cost: 0.10),
-            try makeRow(source: "tracks", model: "sonnet", cost: 0.05)
+            makeRow(pipeline: "digests", model: "haiku", cost: 0.01),
+            makeRow(pipeline: "people", model: "opus", cost: 0.10),
+            makeRow(pipeline: "tracks", model: "sonnet", cost: 0.05)
         ])
         let byModel = summary.byModel
         XCTAssertEqual(byModel[0].model, "opus")
@@ -109,17 +114,56 @@ final class TokenUsageQueryTests: XCTestCase {
         XCTAssertEqual(byModel[2].model, "haiku")
     }
 
-    // Helper to create TokenUsageRow via DB roundtrip
-    private func makeRow(source: String, model: String, cost: Double) throws -> TokenUsageRow {
+    func testExcludesRunningButIncludesErrorRuns() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            // 'done' run — should be counted
+            try db.execute(sql: """
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'cli', 'haiku', 'done', 1000, 500, 0.01, 2000)
+                """)
+            // 'running' run — should be excluded
+            try db.execute(sql: """
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('digests', 'cli', 'haiku', 'running', 500, 250, 0.005, 1000)
+                """)
+            // 'error' run — should be included (tokens were spent)
+            try db.execute(sql: """
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('tracks', 'cli', 'haiku', 'error', 300, 150, 0.003, 600)
+                """)
+        }
+        let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
+        XCTAssertEqual(summary.totalCalls, 2)
+        XCTAssertEqual(summary.totalInputTokens, 1300)
+        XCTAssertEqual(summary.totalOutputTokens, 650)
+        XCTAssertEqual(summary.totalCost, 0.013, accuracy: 0.001)
+        XCTAssertEqual(summary.totalApiTokens, 2600)
+    }
+
+    func testBriefingIncluded() throws {
         let db = try TestDatabase.create()
         try db.write { db in
             try db.execute(sql: """
-                INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count, model,
-                    input_tokens, output_tokens, cost_usd)
-                VALUES ('C001', 100, 200, 'channel', 'T', 10, ?, 100, 50, ?)
-                """, arguments: [model, cost])
+                INSERT INTO pipeline_runs (pipeline, source, model, status,
+                    input_tokens, output_tokens, cost_usd, total_api_tokens)
+                VALUES ('briefing', 'daemon', 'haiku', 'done', 5000, 2000, 0.10, 15000)
+                """)
         }
-        let rows = try db.read { try TokenUsageQueries.fetchUsage($0) }.rows
-        return rows[0]
+        let summary = try db.read { try TokenUsageQueries.fetchUsage($0) }
+        XCTAssertEqual(summary.totalCalls, 1)
+        XCTAssertEqual(summary.totalInputTokens, 5000)
+        XCTAssertEqual(summary.totalApiTokens, 15000)
+    }
+
+    // Helper to create TokenUsageRow in-memory (no DB roundtrip needed)
+    private func makeRow(pipeline: String, model: String, cost: Double) -> TokenUsageRow {
+        TokenUsageRow(
+            pipeline: pipeline, model: model, calls: 1,
+            inputTokens: 100, outputTokens: 50, costUSD: cost, totalApiTokens: 200
+        )
     }
 }

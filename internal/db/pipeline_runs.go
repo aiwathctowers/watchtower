@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-// PipelineRun represents a single invocation of a pipeline (digests, tracks, people, chains).
+// PipelineRun represents a single invocation of a pipeline (digests, tracks, people, briefing).
 type PipelineRun struct {
 	ID              int64
 	Pipeline        string
 	Source          string // "cli", "daemon"
+	Model           string
 	Status          string // "running", "done", "error"
 	ErrorMsg        string
 	ItemsFound      int
@@ -46,10 +47,10 @@ type PipelineStep struct {
 }
 
 // CreatePipelineRun inserts a new pipeline run with status "running" and returns its ID.
-func (db *DB) CreatePipelineRun(pipeline, source string) (int64, error) {
+func (db *DB) CreatePipelineRun(pipeline, source, model string) (int64, error) {
 	res, err := db.DB.Exec(
-		`INSERT INTO pipeline_runs (pipeline, source) VALUES (?, ?)`,
-		pipeline, source,
+		`INSERT INTO pipeline_runs (pipeline, source, model) VALUES (?, ?, ?)`,
+		pipeline, source, model,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert pipeline_run: %w", err)
@@ -113,7 +114,7 @@ func (db *DB) GetPipelineRuns(limit int) ([]PipelineRun, error) {
 		limit = 50
 	}
 	rows, err := db.DB.Query(`
-		SELECT id, pipeline, source, status, error_msg, items_found,
+		SELECT id, pipeline, source, model, status, error_msg, items_found,
 			input_tokens, output_tokens, cost_usd, total_api_tokens,
 			period_from, period_to, started_at, finished_at, duration_seconds
 		FROM pipeline_runs
@@ -131,7 +132,7 @@ func (db *DB) GetPipelineRunsByDate(date time.Time) ([]PipelineRun, error) {
 	dayStart := date.Truncate(24 * time.Hour).UTC().Format(time.RFC3339)
 	dayEnd := date.Truncate(24 * time.Hour).Add(24 * time.Hour).UTC().Format(time.RFC3339)
 	rows, err := db.DB.Query(`
-		SELECT id, pipeline, source, status, error_msg, items_found,
+		SELECT id, pipeline, source, model, status, error_msg, items_found,
 			input_tokens, output_tokens, cost_usd, total_api_tokens,
 			period_from, period_to, started_at, finished_at, duration_seconds
 		FROM pipeline_runs
@@ -174,12 +175,30 @@ func (db *DB) GetPipelineSteps(runID int64) ([]PipelineStep, error) {
 	return steps, rows.Err()
 }
 
+// GetLatestPipelineRunPeriodTo returns the MAX(period_to) for a given pipeline
+// with status='done' and non-null period_to. Returns 0 if none found.
+func (db *DB) GetLatestPipelineRunPeriodTo(pipeline string) (float64, error) {
+	var result sql.NullFloat64
+	err := db.DB.QueryRow(`
+		SELECT MAX(period_to) FROM pipeline_runs
+		WHERE pipeline = ? AND status = 'done' AND period_to IS NOT NULL`,
+		pipeline,
+	).Scan(&result)
+	if err != nil {
+		return 0, fmt.Errorf("get latest pipeline run period_to: %w", err)
+	}
+	if !result.Valid {
+		return 0, nil
+	}
+	return result.Float64, nil
+}
+
 func scanPipelineRuns(rows *sql.Rows) ([]PipelineRun, error) {
 	var runs []PipelineRun
 	for rows.Next() {
 		var r PipelineRun
 		if err := rows.Scan(
-			&r.ID, &r.Pipeline, &r.Source, &r.Status, &r.ErrorMsg, &r.ItemsFound,
+			&r.ID, &r.Pipeline, &r.Source, &r.Model, &r.Status, &r.ErrorMsg, &r.ItemsFound,
 			&r.InputTokens, &r.OutputTokens, &r.CostUSD, &r.TotalAPITokens,
 			&r.PeriodFrom, &r.PeriodTo, &r.StartedAt, &r.FinishedAt, &r.DurationSeconds,
 		); err != nil {

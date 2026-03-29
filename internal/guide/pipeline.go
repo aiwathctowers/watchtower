@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,9 +19,10 @@ import (
 )
 
 const (
-	DefaultWindowDays  = 7
-	DefaultMinMessages = 3
-	DefaultWorkers     = 10
+	DefaultWindowDays     = 7
+	DefaultMinMessages    = 3
+	DefaultBatchUsers     = 10
+	DefaultFullBatchUsers = 5 // smaller batches for full-data users (more context per user)
 )
 
 // PeopleCardResult is the AI output for a unified people card.
@@ -54,6 +54,27 @@ type TeamNorms struct {
 	TotalUsers      int
 }
 
+// BatchCardResult is the AI output for a single user within a batch response.
+type BatchCardResult struct {
+	UserID             string   `json:"user_id"`
+	Summary            string   `json:"summary"`
+	CommunicationStyle string   `json:"communication_style"`
+	DecisionRole       string   `json:"decision_role"`
+	RedFlags           []string `json:"red_flags"`
+	Highlights         []string `json:"highlights"`
+	Accomplishments    []string `json:"accomplishments"`
+	CommunicationGuide string   `json:"communication_guide"`
+	DecisionStyle      string   `json:"decision_style"`
+	Tactics            []string `json:"tactics"`
+}
+
+// batchUserEntry holds the data needed to include a user in a batch AI call.
+type batchUserEntry struct {
+	stats      db.UserStats
+	situations []db.ChannelSituations
+	sitCount   int
+}
+
 // ProgressFunc is called during generation to report progress.
 type ProgressFunc func(completed, totalUsers int, status string)
 
@@ -67,7 +88,6 @@ type Pipeline struct {
 
 	OnProgress      ProgressFunc
 	ForceRegenerate bool
-	Workers         int
 
 	// LastStep* fields are set before each OnProgress callback with the
 	// current step's message count and time window. Read them in OnProgress.
@@ -125,13 +145,17 @@ func (p *Pipeline) Run(ctx context.Context) (int, error) {
 
 // RunForWindow executes the people card pipeline for a specific time window.
 func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, error) {
+	t0 := time.Now()
 	p.loadCaches()
+	p.logger.Printf("people: loadCaches took %s", time.Since(t0).Round(time.Millisecond))
 
 	if !p.ForceRegenerate {
+		t1 := time.Now()
 		existing, err := p.db.GetPeopleCardsForWindow(from, to)
 		if err != nil {
 			return 0, fmt.Errorf("checking existing people cards: %w", err)
 		}
+		p.logger.Printf("people: GetPeopleCardsForWindow took %s (%d existing)", time.Since(t1).Round(time.Millisecond), len(existing))
 		if len(existing) > 0 {
 			p.logger.Printf("people: window already has %d cards, skipping", len(existing))
 			return 0, nil
@@ -140,7 +164,9 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 
 	p.progress(0, 0, "Computing user statistics...")
 
+	t1 := time.Now()
 	allStats, err := p.db.ComputeAllUserStats(from, to, DefaultMinMessages)
+	p.logger.Printf("people: ComputeAllUserStats took %s (%d users)", time.Since(t1).Round(time.Millisecond), len(allStats))
 	if err != nil {
 		return 0, fmt.Errorf("computing user stats: %w", err)
 	}
@@ -151,7 +177,9 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 	}
 
 	// Load all situations for v2 pipeline
+	t1 = time.Now()
 	allSituations, err := p.db.GetSituationsForWindow(from, to)
+	p.logger.Printf("people: GetSituationsForWindow took %s (%d users with situations)", time.Since(t1).Round(time.Millisecond), len(allSituations))
 	if err != nil {
 		p.logger.Printf("people: warning: failed to load situations: %v", err)
 		allSituations = make(map[string][]db.ChannelSituations)
@@ -172,58 +200,179 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 		teamNorms.TotalUsers, teamNorms.AvgMessages, len(allSituations))
 
 	totalUsers := len(allStats)
-	workers := p.Workers
-	if workers <= 0 {
-		workers = DefaultWorkers
-	}
-	if workers > totalUsers {
-		workers = totalUsers
+
+	// Classify users into full-data (individual AI) and batch (low-data, batched AI).
+	var fullDataUsers []db.UserStats
+	var batchEntries []batchUserEntry
+	for _, stats := range allStats {
+		userSits := allSituations[stats.UserID]
+		sitCount := 0
+		for _, cs := range userSits {
+			sitCount += len(cs.Situations)
+		}
+		hasEnoughData := sitCount >= MinSituations || stats.MessageCount >= MinSituationMessages
+		if hasEnoughData {
+			fullDataUsers = append(fullDataUsers, stats)
+		} else {
+			batchEntries = append(batchEntries, batchUserEntry{
+				stats:      stats,
+				situations: userSits,
+				sitCount:   sitCount,
+			})
+		}
 	}
 
-	p.progress(0, totalUsers, fmt.Sprintf("Generating people cards for %d users (%d workers)...", totalUsers, workers))
-	p.logger.Printf("people: generating cards for %d users with %d workers", totalUsers, workers)
+	p.logger.Printf("people: %d full-data users, %d low-data users (batch)", len(fullDataUsers), len(batchEntries))
+
+	p.progress(0, totalUsers, fmt.Sprintf("Generating people cards for %d users (%d low-data batch, %d full-data batch)...", totalUsers, len(batchEntries), len(fullDataUsers)))
+	p.logger.Printf("people: generating cards for %d users (low-data: %d in batches of %d, full-data: %d in batches of %d)",
+		totalUsers, len(batchEntries), DefaultBatchUsers, len(fullDataUsers), DefaultFullBatchUsers)
 
 	var completed atomic.Int32
-	tasks := make(chan db.UserStats, totalUsers)
-	var wg sync.WaitGroup
 
-	for _, s := range allStats {
-		tasks <- s
-	}
-	close(tasks)
+	// Phase 1: Batch processing for low-data users (fast, cheap).
+	if len(batchEntries) > 0 {
+		batches := groupUsersIntoBatches(batchEntries, DefaultBatchUsers)
+		for _, batch := range batches {
+			if ctx.Err() != nil {
+				break
+			}
+			stepStart := time.Now()
+			results, usage, pv, err := p.generateBatchCards(ctx, batch, from, to, teamNorms)
+			batchDuration := time.Since(stepStart).Seconds()
 
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for stats := range tasks {
-				if ctx.Err() != nil {
-					return
+			if err != nil {
+				// Fallback: create insufficient_data cards for the whole batch.
+				p.logger.Printf("people: batch error, falling back to insufficient_data: %v", err)
+				for _, entry := range batch {
+					if ferr := p.createInsufficientCard(entry.stats, from, to); ferr != nil {
+						p.logger.Printf("people: fallback card error for %s: %v", entry.stats.UserID, ferr)
+					}
+					newVal := int(completed.Add(1))
+					p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (insufficient)", p.userName(entry.stats.UserID)))
 				}
-				userName := p.userName(stats.UserID)
-				c := int(completed.Load())
-				p.LastStepMessageCount = stats.MessageCount
+				continue
+			}
+
+			// Index batch results by user_id for lookup.
+			resultMap := make(map[string]*BatchCardResult, len(results))
+			for i := range results {
+				resultMap[results[i].UserID] = &results[i]
+			}
+
+			// Distribute tokens evenly across batch users for progress reporting.
+			inTokPer, outTokPer, costPer := 0, 0, 0.0
+			if usage != nil && len(batch) > 0 {
+				inTokPer = usage.InputTokens / len(batch)
+				outTokPer = usage.OutputTokens / len(batch)
+				costPer = usage.CostUSD / float64(len(batch))
+			}
+
+			for _, entry := range batch {
+				result, ok := resultMap[entry.stats.UserID]
+				if !ok {
+					// AI didn't return this user — fallback to insufficient_data.
+					if ferr := p.createInsufficientCard(entry.stats, from, to); ferr != nil {
+						p.logger.Printf("people: batch missing user %s, fallback error: %v", entry.stats.UserID, ferr)
+					}
+				} else {
+					if serr := p.storeBatchCard(entry.stats, result, from, to, pv, inTokPer, outTokPer, costPer); serr != nil {
+						p.logger.Printf("people: store batch card error for %s: %v", entry.stats.UserID, serr)
+					}
+				}
+
+				// Synthetic per-user progress callback.
+				p.LastStepMessageCount = entry.stats.MessageCount
 				p.LastStepPeriodFrom = time.Unix(int64(from), 0)
 				p.LastStepPeriodTo = time.Unix(int64(to), 0)
-				p.LastStepDurationSeconds = 0
-				p.LastStepInputTokens = 0
-				p.LastStepOutputTokens = 0
-				p.LastStepCostUSD = 0
-				p.progress(c, totalUsers, fmt.Sprintf("@%s (%d msgs)...", userName, stats.MessageCount))
-
-				stepStart := time.Now()
-				userSituations := allSituations[stats.UserID]
-				if err := p.processUser(ctx, stats, from, to, userSituations, teamNorms); err != nil {
-					p.logger.Printf("people: error for @%s: %v", userName, err)
-				}
-				p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+				p.LastStepDurationSeconds = batchDuration / float64(len(batch))
+				p.LastStepInputTokens = inTokPer
+				p.LastStepOutputTokens = outTokPer
+				p.LastStepCostUSD = costPer
 				newVal := int(completed.Add(1))
-				p.progress(newVal, totalUsers, fmt.Sprintf("@%s done", userName))
+				p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (batch)", p.userName(entry.stats.UserID)))
 			}
-		}()
+		}
 	}
 
-	wg.Wait()
+	// Phase 2: Batch processing for full-data users (previously individual AI calls).
+	if len(fullDataUsers) > 0 {
+		// Convert full-data users to batch entries.
+		var fullBatchEntries []batchUserEntry
+		for _, stats := range fullDataUsers {
+			userSits := allSituations[stats.UserID]
+			sitCount := 0
+			for _, cs := range userSits {
+				sitCount += len(cs.Situations)
+			}
+			fullBatchEntries = append(fullBatchEntries, batchUserEntry{
+				stats:      stats,
+				situations: userSits,
+				sitCount:   sitCount,
+			})
+		}
+
+		batches := groupUsersIntoBatches(fullBatchEntries, DefaultFullBatchUsers)
+		p.logger.Printf("people: processing %d full-data users in %d batches", len(fullDataUsers), len(batches))
+
+		for _, batch := range batches {
+			if ctx.Err() != nil {
+				break
+			}
+			stepStart := time.Now()
+			results, usage, pv, err := p.generateBatchCards(ctx, batch, from, to, teamNorms)
+			batchDuration := time.Since(stepStart).Seconds()
+
+			if err != nil {
+				// Fallback: try individual processing for this batch.
+				p.logger.Printf("people: full-data batch error, falling back to individual: %v", err)
+				for _, entry := range batch {
+					if ferr := p.processUser(ctx, entry.stats, from, to, entry.situations, teamNorms); ferr != nil {
+						p.logger.Printf("people: individual fallback error for %s: %v", entry.stats.UserID, ferr)
+					}
+					newVal := int(completed.Add(1))
+					p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (fallback)", p.userName(entry.stats.UserID)))
+				}
+				continue
+			}
+
+			resultMap := make(map[string]*BatchCardResult, len(results))
+			for i := range results {
+				resultMap[results[i].UserID] = &results[i]
+			}
+
+			inTokPer, outTokPer, costPer := 0, 0, 0.0
+			if usage != nil && len(batch) > 0 {
+				inTokPer = usage.InputTokens / len(batch)
+				outTokPer = usage.OutputTokens / len(batch)
+				costPer = usage.CostUSD / float64(len(batch))
+			}
+
+			for _, entry := range batch {
+				result, ok := resultMap[entry.stats.UserID]
+				if !ok {
+					// AI didn't return this user — fallback to individual.
+					if ferr := p.processUser(ctx, entry.stats, from, to, entry.situations, teamNorms); ferr != nil {
+						p.logger.Printf("people: batch missing user %s, fallback error: %v", entry.stats.UserID, ferr)
+					}
+				} else {
+					if serr := p.storeBatchCard(entry.stats, result, from, to, pv, inTokPer, outTokPer, costPer); serr != nil {
+						p.logger.Printf("people: store batch card error for %s: %v", entry.stats.UserID, serr)
+					}
+				}
+
+				p.LastStepMessageCount = entry.stats.MessageCount
+				p.LastStepPeriodFrom = time.Unix(int64(from), 0)
+				p.LastStepPeriodTo = time.Unix(int64(to), 0)
+				p.LastStepDurationSeconds = batchDuration / float64(len(batch))
+				p.LastStepInputTokens = inTokPer
+				p.LastStepOutputTokens = outTokPer
+				p.LastStepCostUSD = costPer
+				newVal := int(completed.Add(1))
+				p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (batch)", p.userName(entry.stats.UserID)))
+			}
+		}
+	}
 
 	total := int(completed.Load())
 	p.progress(total, totalUsers, fmt.Sprintf("Complete: %d people cards generated", total))
@@ -260,28 +409,7 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 	hasEnoughData := totalSituations >= MinSituations || stats.MessageCount >= MinSituationMessages
 
 	if !hasEnoughData {
-		// Create an insufficient_data card with stats only
-		card := db.PeopleCard{
-			UserID:           stats.UserID,
-			PeriodFrom:       from,
-			PeriodTo:         to,
-			MessageCount:     stats.MessageCount,
-			ChannelsActive:   stats.ChannelsActive,
-			ThreadsInitiated: stats.ThreadsInitiated,
-			ThreadsReplied:   stats.ThreadsReplied,
-			AvgMessageLength: stats.AvgMessageLength,
-			ActiveHoursJSON:  stats.ActiveHoursJSON,
-			VolumeChangePct:  stats.VolumeChangePct,
-			Summary:          "Insufficient data for analysis this period.",
-			RedFlags:         "[]",
-			Highlights:       "[]",
-			Accomplishments:  "[]",
-			Tactics:          "[]",
-			Status:           "insufficient_data",
-			Model:            p.cfg.Digest.Model,
-		}
-		_, err := p.db.UpsertPeopleCard(card)
-		return err
+		return p.createInsufficientCard(stats, from, to)
 	}
 
 	situationsBlock := p.formatSituations(userSituations)
@@ -366,6 +494,178 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 
 	_, err = p.db.UpsertPeopleCard(card)
 	return err
+}
+
+// createInsufficientCard stores an insufficient_data card with stats only (no AI call).
+func (p *Pipeline) createInsufficientCard(stats db.UserStats, from, to float64) error {
+	card := db.PeopleCard{
+		UserID:           stats.UserID,
+		PeriodFrom:       from,
+		PeriodTo:         to,
+		MessageCount:     stats.MessageCount,
+		ChannelsActive:   stats.ChannelsActive,
+		ThreadsInitiated: stats.ThreadsInitiated,
+		ThreadsReplied:   stats.ThreadsReplied,
+		AvgMessageLength: stats.AvgMessageLength,
+		ActiveHoursJSON:  stats.ActiveHoursJSON,
+		VolumeChangePct:  stats.VolumeChangePct,
+		Summary:          "Insufficient data for analysis this period.",
+		RedFlags:         "[]",
+		Highlights:       "[]",
+		Accomplishments:  "[]",
+		Tactics:          "[]",
+		Status:           "insufficient_data",
+		Model:            p.cfg.Digest.Model,
+	}
+	_, err := p.db.UpsertPeopleCard(card)
+	return err
+}
+
+// storeBatchCard converts a BatchCardResult to a db.PeopleCard and stores it.
+func (p *Pipeline) storeBatchCard(stats db.UserStats, result *BatchCardResult, from, to float64, pv, inTok, outTok int, cost float64) error {
+	redFlags, _ := json.Marshal(result.RedFlags)
+	highlights, _ := json.Marshal(result.Highlights)
+	accomplishments, _ := json.Marshal(result.Accomplishments)
+	tactics, _ := json.Marshal(result.Tactics)
+
+	card := db.PeopleCard{
+		UserID:             stats.UserID,
+		PeriodFrom:         from,
+		PeriodTo:           to,
+		MessageCount:       stats.MessageCount,
+		ChannelsActive:     stats.ChannelsActive,
+		ThreadsInitiated:   stats.ThreadsInitiated,
+		ThreadsReplied:     stats.ThreadsReplied,
+		AvgMessageLength:   stats.AvgMessageLength,
+		ActiveHoursJSON:    stats.ActiveHoursJSON,
+		VolumeChangePct:    stats.VolumeChangePct,
+		Summary:            result.Summary,
+		CommunicationStyle: result.CommunicationStyle,
+		DecisionRole:       result.DecisionRole,
+		RedFlags:           string(redFlags),
+		Highlights:         string(highlights),
+		Accomplishments:    string(accomplishments),
+		CommunicationGuide: result.CommunicationGuide,
+		DecisionStyle:      result.DecisionStyle,
+		Tactics:            string(tactics),
+		Status:             "active",
+		Model:              p.cfg.Digest.Model,
+		PromptVersion:      pv,
+		InputTokens:        inTok,
+		OutputTokens:       outTok,
+		CostUSD:            cost,
+	}
+	_, err := p.db.UpsertPeopleCard(card)
+	return err
+}
+
+// generateBatchCards runs a single AI call for multiple low-data users.
+func (p *Pipeline) generateBatchCards(ctx context.Context, entries []batchUserEntry, from, to float64, teamNorms *TeamNorms) ([]BatchCardResult, *digest.Usage, int, error) {
+	fromStr := time.Unix(int64(from), 0).Local().Format("2006-01-02")
+	toStr := time.Unix(int64(to), 0).Local().Format("2006-01-02")
+
+	// Build users block.
+	var usersBlock strings.Builder
+	for _, entry := range entries {
+		userName := p.userName(entry.stats.UserID)
+		fmt.Fprintf(&usersBlock, "--- @%s (user_id: %s) ---\n", userName, entry.stats.UserID)
+		usersBlock.WriteString(p.formatStats(entry.stats))
+		if len(entry.situations) > 0 {
+			usersBlock.WriteString("Situations:\n")
+			usersBlock.WriteString(p.formatSituations(entry.situations))
+		} else {
+			usersBlock.WriteString("Situations: (none)\n")
+		}
+		usersBlock.WriteString("\n")
+	}
+
+	normsBlock := p.formatTeamNorms(teamNorms)
+
+	tmpl, pv := p.getPrompt(prompts.PeopleBatch, defaultPeopleBatchPrompt)
+	prompt := fmt.Sprintf(tmpl,
+		fromStr, toStr,
+		p.formatProfileContext(),
+		p.languageInstruction(),
+		p.languageInstruction(),
+		normsBlock,
+		usersBlock.String(),
+	)
+
+	sys, user := digest.SplitPromptAtData(prompt)
+	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "people.batch"), sys, user, "")
+	if err != nil {
+		return nil, nil, pv, fmt.Errorf("batch AI generation failed: %w", err)
+	}
+
+	if usage != nil {
+		p.totalInputTokens.Add(int64(usage.InputTokens))
+		p.totalOutputTokens.Add(int64(usage.OutputTokens))
+		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
+	}
+
+	results, err := parseBatchCardResult(raw)
+	if err != nil {
+		return nil, usage, pv, fmt.Errorf("parsing batch result: %w", err)
+	}
+	return results, usage, pv, nil
+}
+
+// groupUsersIntoBatches splits users into batches of at most maxUsers each.
+func groupUsersIntoBatches(entries []batchUserEntry, maxUsers int) [][]batchUserEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	if maxUsers <= 0 {
+		return [][]batchUserEntry{entries}
+	}
+	var batches [][]batchUserEntry
+	for i := 0; i < len(entries); i += maxUsers {
+		end := i + maxUsers
+		if end > len(entries) {
+			end = len(entries)
+		}
+		batches = append(batches, entries[i:end])
+	}
+	return batches
+}
+
+// parseBatchCardResult parses a JSON array of BatchCardResult from AI output.
+func parseBatchCardResult(raw string) ([]BatchCardResult, error) {
+	cleaned := raw
+	if idx := strings.Index(raw, "```json"); idx >= 0 {
+		cleaned = raw[idx+7:]
+		if end := strings.Index(cleaned, "```"); end >= 0 {
+			cleaned = cleaned[:end]
+		}
+	} else if idx := strings.Index(raw, "```"); idx >= 0 {
+		cleaned = raw[idx+3:]
+		if end := strings.Index(cleaned, "```"); end >= 0 {
+			cleaned = cleaned[:end]
+		}
+	}
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Find JSON array boundaries.
+	if start := strings.Index(cleaned, "["); start >= 0 {
+		if end := strings.LastIndex(cleaned, "]"); end > start {
+			cleaned = cleaned[start : end+1]
+		}
+	}
+
+	var results []BatchCardResult
+	if err := json.Unmarshal([]byte(cleaned), &results); err != nil {
+		return nil, fmt.Errorf("parsing batch card JSON: %w (raw: %.200s)", err, raw)
+	}
+
+	// Filter out entries with missing required fields.
+	var filtered []BatchCardResult
+	for _, r := range results {
+		if r.UserID != "" && r.Summary != "" {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered, nil
 }
 
 func (p *Pipeline) generateTeamSummary(ctx context.Context, from, to float64) error {
@@ -519,15 +819,39 @@ func (p *Pipeline) formatRawMessages(userID string, to float64) string {
 	if err != nil || len(msgs) == 0 {
 		return "(No recent messages available.)"
 	}
+
+	// Load reactions grouped by channel.
+	reactionMap := p.loadReactionsMultiChannel(msgs)
+
 	var sb strings.Builder
 	for _, m := range msgs {
 		text := sanitize(m.Text)
 		if len(text) > 200 {
 			text = text[:200] + "..."
 		}
-		fmt.Fprintf(&sb, "[%s] %s\n", m.TS, text)
+		reactStr := db.FormatReactions(reactionMap[m.TS])
+		fmt.Fprintf(&sb, "[%s] %s%s\n", m.TS, text, reactStr)
 	}
 	return sb.String()
+}
+
+// loadReactionsMultiChannel loads reactions for messages spanning multiple channels.
+func (p *Pipeline) loadReactionsMultiChannel(msgs []db.Message) map[string][]db.ReactionSummary {
+	byChannel := make(map[string][]string)
+	for _, m := range msgs {
+		byChannel[m.ChannelID] = append(byChannel[m.ChannelID], m.TS)
+	}
+	result := make(map[string][]db.ReactionSummary)
+	for chID, tss := range byChannel {
+		rm, err := p.db.GetReactionsForMessages(chID, tss)
+		if err != nil {
+			continue
+		}
+		for ts, summaries := range rm {
+			result[ts] = summaries
+		}
+	}
+	return result
 }
 
 func (p *Pipeline) formatTeamNorms(tn *TeamNorms) string {
@@ -699,6 +1023,7 @@ func (p *Pipeline) progress(completed, total int, status string) {
 var (
 	defaultPeopleReducePrompt = prompts.Defaults[prompts.PeopleReduce]
 	defaultPeopleTeamPrompt   = prompts.Defaults[prompts.PeopleTeam]
+	defaultPeopleBatchPrompt  = prompts.Defaults[prompts.PeopleBatch]
 )
 
 func sanitize(text string) string {

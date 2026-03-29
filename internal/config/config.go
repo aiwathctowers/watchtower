@@ -21,6 +21,7 @@ type WorkspaceConfig struct {
 type AIConfig struct {
 	Model         string `mapstructure:"model"`
 	ContextBudget int    `mapstructure:"context_budget"`
+	Workers       int    `mapstructure:"workers"` // max parallel LLM calls across all pipelines
 }
 
 type SyncConfig struct {
@@ -29,22 +30,35 @@ type SyncConfig struct {
 	PollInterval       time.Duration `mapstructure:"poll_interval"`
 	SyncThreads        bool          `mapstructure:"sync_threads"`
 	SyncOnWake         bool          `mapstructure:"sync_on_wake"`
-	ThreadSyncLimit    int           `mapstructure:"thread_sync_limit"`
 }
 
 type DigestConfig struct {
-	Enabled        bool          `mapstructure:"enabled"`
-	Model          string        `mapstructure:"model"`
-	MinMessages    int           `mapstructure:"min_messages"`
-	Language       string        `mapstructure:"language"`
-	Workers        int           `mapstructure:"workers"`
-	TracksInterval time.Duration `mapstructure:"action_items_interval"` // YAML key kept for backward compat
+	Enabled          bool          `mapstructure:"enabled"`
+	Model            string        `mapstructure:"model"`
+	MinMessages      int           `mapstructure:"min_messages"`
+	Language         string        `mapstructure:"language"`
+	Workers          int           `mapstructure:"workers"`
+	TracksInterval   time.Duration `mapstructure:"action_items_interval"` // YAML key kept for backward compat
+	BatchMaxChannels int           `mapstructure:"batch_max_channels"`
+	BatchMaxMessages int           `mapstructure:"batch_max_messages"`
 }
 
 // BriefingConfig holds settings for the daily briefing pipeline.
 type BriefingConfig struct {
 	Enabled bool `mapstructure:"enabled"` // enable daily briefings (default: true)
 	Hour    int  `mapstructure:"hour"`    // hour of day to generate (0-23, default: 8)
+}
+
+// InboxConfig holds settings for the inbox detection pipeline.
+type InboxConfig struct {
+	Enabled             bool `mapstructure:"enabled"`               // enable inbox detection (default: true)
+	MaxItemsPerRun      int  `mapstructure:"max_items_per_run"`     // max candidates per run (default: 100)
+	InitialLookbackDays int  `mapstructure:"initial_lookback_days"` // days to look back on first run (default: 7)
+}
+
+// TracksConfig holds settings for the tracks extraction pipeline.
+type TracksConfig struct {
+	MinMessages int `mapstructure:"min_messages"` // minimum visible messages for individual processing (default: 3)
 }
 
 // AnalysisConfig holds settings for the people analysis pipeline.
@@ -59,6 +73,8 @@ type Config struct {
 	Sync            SyncConfig                  `mapstructure:"sync"`
 	Digest          DigestConfig                `mapstructure:"digest"`
 	Briefing        BriefingConfig              `mapstructure:"briefing"`
+	Inbox           InboxConfig                 `mapstructure:"inbox"`
+	Tracks          TracksConfig                `mapstructure:"tracks"`
 	Analysis        AnalysisConfig              `mapstructure:"analysis"`
 	ClaudePath      string                      `mapstructure:"claude_path"`
 }
@@ -71,6 +87,7 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("active_workspace", DefaultActiveWorkspace)
 	v.SetDefault("ai.model", DefaultAIModel)
 	v.SetDefault("ai.context_budget", DefaultAIContextBudget)
+	v.SetDefault("ai.workers", DefaultAIWorkers)
 	v.SetDefault("sync.workers", DefaultSyncWorkers)
 	v.SetDefault("sync.initial_history_days", DefaultInitialHistDays)
 	v.SetDefault("sync.poll_interval", DefaultPollInterval)
@@ -82,9 +99,15 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("digest.language", DefaultDigestLang)
 	v.SetDefault("digest.workers", DefaultDigestWorkers)
 	v.SetDefault("digest.action_items_interval", DefaultTracksInterval)
+	v.SetDefault("digest.batch_max_channels", DefaultBatchMaxChannels)
+	v.SetDefault("digest.batch_max_messages", DefaultBatchMaxMessages)
 	v.RegisterAlias("digest.tracks_interval", "digest.action_items_interval")
 	v.SetDefault("briefing.enabled", DefaultBriefingEnabled)
 	v.SetDefault("briefing.hour", DefaultBriefingHour)
+	v.SetDefault("inbox.enabled", DefaultInboxEnabled)
+	v.SetDefault("inbox.max_items_per_run", DefaultInboxMaxItems)
+	v.SetDefault("inbox.initial_lookback_days", DefaultInboxLookbackDays)
+	v.SetDefault("tracks.min_messages", DefaultTracksMinMsgs)
 	// Config file
 	v.SetConfigFile(configPath)
 
@@ -103,12 +126,20 @@ func Load(configPath string) (*Config, error) {
 
 	// Explicit bindings for key env vars
 	_ = v.BindEnv("ai.model", "WATCHTOWER_AI_MODEL")
+	_ = v.BindEnv("ai.workers", "WATCHTOWER_AI_WORKERS")
 	_ = v.BindEnv("sync.workers", "WATCHTOWER_SYNC_WORKERS")
 	_ = v.BindEnv("digest.model", "WATCHTOWER_DIGEST_MODEL")
 
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+
+	// Backward compat: migrate digest.workers → ai.workers.
+	// If user has digest.workers in config but hasn't set ai.workers explicitly,
+	// use digest.workers as the pool size.
+	if cfg.Digest.Workers > 0 && !v.InConfig("ai.workers") && os.Getenv("WATCHTOWER_AI_WORKERS") == "" {
+		cfg.AI.Workers = cfg.Digest.Workers
 	}
 
 	// Bind workspace-level slack token from env

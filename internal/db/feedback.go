@@ -63,7 +63,7 @@ func (db *DB) GetFeedbackForPrompt(promptID string, limit int) ([]Feedback, erro
 	switch promptID {
 	case "digest.channel", "digest.daily", "digest.weekly", "digest.period":
 		entityType = "digest"
-	case "tracks.extract", "tracks.update":
+	case "tracks.extract", "tracks.update", "tracks.create":
 		entityType = "track"
 	case "analysis.user", "analysis.period", "people.reduce", "people.team":
 		entityType = "user_analysis"

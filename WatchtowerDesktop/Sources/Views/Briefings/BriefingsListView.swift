@@ -9,8 +9,7 @@ struct BriefingsListView: View {
         Group {
             if let vm = viewModel {
                 if let selID = selectedBriefingID,
-                   let briefing = vm.briefings.first(where: { $0.id == selID })
-                {
+                   let briefing = vm.briefings.first(where: { $0.id == selID }) {
                     detailView(briefing)
                 } else {
                     listView(vm)
@@ -65,7 +64,7 @@ struct BriefingsListView: View {
             Divider()
 
             if vm.briefings.isEmpty && !vm.isLoading {
-                emptyList
+                emptyList(vm)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
@@ -229,8 +228,10 @@ struct BriefingsListView: View {
 
     // MARK: - Empty State
 
-    private var emptyList: some View {
-        VStack(spacing: 8) {
+    private func emptyList(_ vm: BriefingViewModel) -> some View {
+        let processing = appState.backgroundTaskManager.hasActiveTasks
+
+        return VStack(spacing: 12) {
             Image(systemName: "sun.max")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
@@ -241,6 +242,34 @@ struct BriefingsListView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
+
+            Button {
+                vm.generateBriefing()
+            } label: {
+                if vm.isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.trailing, 4)
+                    Text("Generating...")
+                } else {
+                    Label("Generate Briefing", systemImage: "sparkles")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(processing || vm.isGenerating)
+            .help(processing ? "Wait for data processing to complete" : "Generate a briefing now")
+
+            if processing {
+                Text("Data is still being processed...")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let error = vm.generateError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

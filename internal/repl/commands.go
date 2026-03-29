@@ -148,8 +148,8 @@ func runSyncCommand(ctx context.Context, deps Deps) string {
 
 	snap := orch.Progress().Snapshot()
 	elapsed := time.Since(snap.StartTime).Round(time.Second)
-	return fmt.Sprintf("Sync complete in %s: %d messages, %d threads synced.",
-		elapsed, snap.MessagesFetched, snap.ThreadsFetched)
+	return fmt.Sprintf("Sync complete in %s: %d messages synced.",
+		elapsed, snap.MessagesFetched)
 }
 
 // runCatchup streams a catchup summary to stdout.

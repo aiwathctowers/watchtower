@@ -249,59 +249,6 @@ func TestGetAllThreadParentsEmpty(t *testing.T) {
 	assert.Empty(t, parents)
 }
 
-func TestGetOrphanThreadParents(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	// Reply whose parent IS in DB — not orphan.
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: "1700000000.000001", UserID: "U1", Text: "parent", ReplyCount: 1, RawJSON: "{}"}))
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: "1700000001.000001", UserID: "U2", Text: "reply", ThreadTS: sql.NullString{String: "1700000000.000001", Valid: true}, RawJSON: "{}"}))
-
-	// Reply whose parent is NOT in DB — orphan.
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C2", TS: "1700000010.000001", UserID: "U1", Text: "orphan reply", ThreadTS: sql.NullString{String: "1699999000.000001", Valid: true}, RawJSON: "{}"}))
-
-	// Another orphan in a different channel.
-	require.NoError(t, db.UpsertMessage(Message{ChannelID: "C3", TS: "1700000020.000001", UserID: "U1", Text: "orphan reply 2", ThreadTS: sql.NullString{String: "1699998000.000001", Valid: true}, RawJSON: "{}"}))
-
-	orphans, err := db.GetOrphanThreadParents(100)
-	require.NoError(t, err)
-	require.Len(t, orphans, 2)
-
-	// Should be sorted by ts_unix DESC.
-	assert.Equal(t, "C3", orphans[0].ChannelID)
-	assert.Equal(t, "1699998000.000001", orphans[0].ThreadTS)
-	assert.Equal(t, "C2", orphans[1].ChannelID)
-	assert.Equal(t, "1699999000.000001", orphans[1].ThreadTS)
-}
-
-func TestGetOrphanThreadParentsEmpty(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	orphans, err := db.GetOrphanThreadParents(100)
-	require.NoError(t, err)
-	assert.Empty(t, orphans)
-}
-
-func TestGetOrphanThreadParentsLimit(t *testing.T) {
-	db, err := Open(":memory:")
-	require.NoError(t, err)
-	defer db.Close()
-
-	// Create 3 orphans, limit to 2.
-	for i := range 3 {
-		ts := fmt.Sprintf("170000%04d.000001", i)
-		threadTS := fmt.Sprintf("169999%04d.000001", i)
-		require.NoError(t, db.UpsertMessage(Message{ChannelID: "C1", TS: ts, UserID: "U1", Text: "orphan", ThreadTS: sql.NullString{String: threadTS, Valid: true}, RawJSON: "{}"}))
-	}
-
-	orphans, err := db.GetOrphanThreadParents(2)
-	require.NoError(t, err)
-	assert.Len(t, orphans, 2)
-}
-
 func TestUpsertMessageUnicode(t *testing.T) {
 	db, err := Open(":memory:")
 	require.NoError(t, err)

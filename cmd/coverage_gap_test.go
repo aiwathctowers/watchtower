@@ -450,116 +450,6 @@ func TestRunPromptsReset_KnownPrompt(t *testing.T) {
 	assert.Contains(t, buf.String(), "reset")
 }
 
-// --- chains with different statuses ---
-
-func TestRunChains_ActiveAndResolved(t *testing.T) {
-	cleanup := setupWatchTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	for _, status := range []string{"active", "resolved", "stale"} {
-		_, err = database.CreateChain(db.Chain{
-			Title:      "Chain " + status,
-			Slug:       "chain-" + status,
-			Status:     status,
-			ChannelIDs: `["C001"]`,
-			FirstSeen:  now - 86400,
-			LastSeen:   now,
-			ItemCount:  2,
-		})
-		require.NoError(t, err)
-	}
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	chainsCmd.SetOut(buf)
-	chainsFlagStatus = ""
-
-	err = chainsCmd.RunE(chainsCmd, nil)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Chain active")
-}
-
-// --- chains with status filter ---
-
-func TestRunChains_FilterByStatus(t *testing.T) {
-	cleanup := setupWatchTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	_, err = database.CreateChain(db.Chain{
-		Title:      "Active Chain",
-		Slug:       "active-chain-filter",
-		Status:     "active",
-		ChannelIDs: `["C001"]`,
-		FirstSeen:  now - 86400,
-		LastSeen:   now,
-		ItemCount:  1,
-	})
-	require.NoError(t, err)
-	_, err = database.CreateChain(db.Chain{
-		Title:      "Resolved Chain",
-		Slug:       "resolved-chain-filter",
-		Status:     "resolved",
-		ChannelIDs: `["C001"]`,
-		FirstSeen:  now - 86400,
-		LastSeen:   now,
-		ItemCount:  1,
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	chainsCmd.SetOut(buf)
-	chainsFlagStatus = "resolved"
-	defer func() { chainsFlagStatus = "" }()
-
-	err = chainsCmd.RunE(chainsCmd, nil)
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Resolved Chain")
-}
-
-// --- chains detail by ID ---
-
-func TestRunChains_DetailByNumericID(t *testing.T) {
-	cleanup := setupWatchTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	now := float64(time.Now().Unix())
-	_, err = database.CreateChain(db.Chain{
-		Title:      "Detailed Chain",
-		Slug:       "detailed-chain",
-		Status:     "active",
-		ChannelIDs: `["C001"]`,
-		FirstSeen:  now - 86400,
-		LastSeen:   now,
-		ItemCount:  3,
-		Summary:    "This is a detailed chain summary",
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	chainsCmd.SetOut(buf)
-
-	err = chainsCmd.RunE(chainsCmd, []string{"1"})
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Detailed Chain")
-}
-
 // --- channels sort by messages ---
 
 func TestRunChannels_SortByName(t *testing.T) {
@@ -859,15 +749,6 @@ func TestPrintProgressJSON_DiscoveryPhase(t *testing.T) {
 	assert.Contains(t, output, `"discovery_pages"`)
 }
 
-func TestPrintProgressJSON_ThreadsPhase(t *testing.T) {
-	buf := new(bytes.Buffer)
-	snap := newThreadsSnapshot()
-	printProgressJSON(buf, snap, nil)
-	output := buf.String()
-	assert.Contains(t, output, "Threads")
-	assert.Contains(t, output, `"threads_total"`)
-}
-
 func TestPrintProgressJSON_UserProfilesPhase(t *testing.T) {
 	buf := new(bytes.Buffer)
 	snap := newUserProfilesSnapshot()
@@ -890,16 +771,6 @@ func newDiscoverySnapshot() internalsync.Snapshot {
 		DiscoveryTotalPages: 10,
 		DiscoveryChannels:   50,
 		DiscoveryUsers:      100,
-	}
-}
-
-func newThreadsSnapshot() internalsync.Snapshot {
-	return internalsync.Snapshot{
-		Phase:          internalsync.PhaseThreads,
-		StartTime:      time.Now().Add(-60 * time.Second),
-		ThreadsTotal:   100,
-		ThreadsDone:    50,
-		ThreadsFetched: 150,
 	}
 }
 
@@ -972,91 +843,6 @@ func TestRunStatus_WithSyncResultError(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "Last run:")
 	assert.Contains(t, output, "rate_limited")
-}
-
-// --- tracks dismiss with different user (covers verifyTrackOwnership error on dismiss) ---
-
-func TestRunTracksDismiss_DifferentUser(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	// Create a track assigned to a different user (current user is U001)
-	id, err := database.UpsertTrack(db.Track{
-		Text:           "Someone else's task",
-		AssigneeUserID: "U999",
-		ChannelID:      "C001",
-		Priority:       "medium",
-		Status:         "active",
-		PromptVersion:  1,
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksDismissCmd.SetOut(buf)
-
-	err = tracksDismissCmd.RunE(tracksDismissCmd, []string{fmt.Sprintf("%d", id)})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "different user")
-}
-
-// --- tracks accept success ---
-
-func TestRunTracksAccept_OwnTrack(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	id, err := database.UpsertTrack(db.Track{
-		Text:           "My inbox task",
-		AssigneeUserID: "U001",
-		ChannelID:      "C001",
-		Priority:       "high",
-		Status:         "inbox",
-		PromptVersion:  1,
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksAcceptCmd.SetOut(buf)
-
-	err = tracksAcceptCmd.RunE(tracksAcceptCmd, []string{fmt.Sprintf("%d", id)})
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "accepted")
-}
-
-// --- tracks done success ---
-
-func TestRunTracksDone_OwnTrack(t *testing.T) {
-	cleanup := setupTracksTestEnv(t)
-	defer cleanup()
-
-	database, err := openDBFromConfig()
-	require.NoError(t, err)
-
-	id, err := database.UpsertTrack(db.Track{
-		Text:           "My active task",
-		AssigneeUserID: "U001",
-		ChannelID:      "C001",
-		Priority:       "medium",
-		Status:         "active",
-		PromptVersion:  1,
-	})
-	require.NoError(t, err)
-	database.Close()
-
-	buf := new(bytes.Buffer)
-	tracksDoneCmd.SetOut(buf)
-
-	err = tracksDoneCmd.RunE(tracksDoneCmd, []string{fmt.Sprintf("%d", id)})
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "done")
 }
 
 // --- printProgress with messages phase ---

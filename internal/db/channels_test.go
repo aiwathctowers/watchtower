@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -487,6 +488,82 @@ func TestAutoMarkReadFromSlack_DailyMarkedWhenAllChannelDigestsRead(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, digests, 1)
 	assert.True(t, digests[0].ReadAt.Valid, "daily should be marked read when all channel digests are read")
+}
+
+func TestAutoMarkReadFromSlack_TracksMarkedWhenAllDigestsRead(t *testing.T) {
+	db, err := Open(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Channel with last_read covering everything.
+	require.NoError(t, db.UpsertChannel(Channel{
+		ID: "C001", Name: "general", Type: "public",
+		LastRead: "1700000500.000000",
+	}))
+
+	// Two channel digests — both will be auto-marked read (last_read=500 >= period_to).
+	d1ID, err := db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000000, PeriodTo: 1700000200, Summary: "d1",
+	})
+	require.NoError(t, err)
+	d2ID, err := db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000200, PeriodTo: 1700000400, Summary: "d2",
+	})
+	require.NoError(t, err)
+
+	// Track linked to both digests — should be auto-marked read.
+	allReadTrackID, err := db.UpsertTrack(Track{
+		Text: "all digests read", Priority: "medium",
+		RelatedDigestIDs: fmt.Sprintf("[%d,%d]", d1ID, d2ID),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.SetTrackHasUpdates(int(allReadTrackID)))
+
+	// Third digest with period_to beyond last_read — will NOT be marked read.
+	d3ID, err := db.UpsertDigest(Digest{
+		ChannelID: "C001", Type: "channel",
+		PeriodFrom: 1700000400, PeriodTo: 1700000600, Summary: "d3",
+	})
+	require.NoError(t, err)
+
+	// Track linked to d1 (read) and d3 (unread) — should NOT be auto-marked.
+	partialTrackID, err := db.UpsertTrack(Track{
+		Text: "partial digests read", Priority: "medium",
+		RelatedDigestIDs: fmt.Sprintf("[%d,%d]", d1ID, d3ID),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.SetTrackHasUpdates(int(partialTrackID)))
+
+	// Track with no updates (has_updates=0) — should be left alone.
+	noUpdatesTrackID, err := db.UpsertTrack(Track{
+		Text: "no updates", Priority: "medium",
+		RelatedDigestIDs: fmt.Sprintf("[%d]", d1ID),
+	})
+	require.NoError(t, err)
+	// has_updates defaults to 0, don't set it
+
+	digestsMarked, tracksMarked, err := db.AutoMarkReadFromSlack()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), digestsMarked) // d1 and d2
+	assert.Equal(t, int64(1), tracksMarked)  // only allReadTrack
+
+	// Verify: allReadTrack should be read (has_updates=0, read_at set).
+	track, err := db.GetTrackByID(int(allReadTrackID))
+	require.NoError(t, err)
+	assert.False(t, track.HasUpdates, "track with all digests read should have has_updates=0")
+	assert.NotEmpty(t, track.ReadAt, "track with all digests read should have read_at set")
+
+	// Verify: partialTrack should still have updates.
+	track, err = db.GetTrackByID(int(partialTrackID))
+	require.NoError(t, err)
+	assert.True(t, track.HasUpdates, "track with unread digest should still have has_updates=1")
+
+	// Verify: noUpdatesTrack should be unchanged (has_updates was already 0).
+	track, err = db.GetTrackByID(int(noUpdatesTrackID))
+	require.NoError(t, err)
+	assert.False(t, track.HasUpdates)
 }
 
 func TestGetChannelListWatchedStatus(t *testing.T) {

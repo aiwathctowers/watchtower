@@ -12,7 +12,7 @@ struct TracksListView: View {
 
                 if let id = selectedItemID, let item = vm.itemByID(id) {
                     Divider()
-                    TrackDetailView(item: item, viewModel: vm) { selectedItemID = nil }
+                    TrackDetailView(track: item, viewModel: vm) { selectedItemID = nil }
                         .id(id)
                         .frame(minWidth: 400, idealWidth: 500)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -27,34 +27,21 @@ struct TracksListView: View {
             if viewModel == nil, let db = appState.databaseManager {
                 let vm = TracksViewModel(dbManager: db)
                 viewModel = vm
-                vm.statusFilter = appState.trackStatusFilter
-                vm.ownershipFilter = appState.trackOwnershipFilter
                 vm.startObserving()
-            } else {
-                syncFilterAndLoad()
             }
         }
         .onChange(of: appState.isDBAvailable) {
             if viewModel == nil, let db = appState.databaseManager {
                 let vm = TracksViewModel(dbManager: db)
                 viewModel = vm
-                vm.statusFilter = appState.trackStatusFilter
-                vm.ownershipFilter = appState.trackOwnershipFilter
                 vm.startObserving()
             }
         }
-        .onChange(of: appState.trackStatusFilter) {
-            syncFilterAndLoad()
+        .onChange(of: selectedItemID) { _, newID in
+            if let id = newID, let track = viewModel?.itemByID(id), track.isUnread {
+                viewModel?.markRead(track)
+            }
         }
-        .onChange(of: appState.trackOwnershipFilter) {
-            syncFilterAndLoad()
-        }
-    }
-
-    private func syncFilterAndLoad() {
-        viewModel?.statusFilter = appState.trackStatusFilter
-        viewModel?.ownershipFilter = appState.trackOwnershipFilter
-        viewModel?.load()
     }
 
     // MARK: - List Panel
@@ -62,321 +49,273 @@ struct TracksListView: View {
     private func listPanel(_ vm: TracksViewModel) -> some View {
         VStack(spacing: 0) {
             // Toolbar
-            HStack {
-                Text(statusTitle)
-                    .font(.title2)
-                    .fontWeight(.bold)
+            VStack(spacing: 8) {
+                HStack {
+                    Text("Tracks")
+                        .font(.title2)
+                        .fontWeight(.bold)
 
-                if vm.updatedCount > 0 {
-                    Image(systemName: "bell.badge.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
+                    if vm.updatedCount > 0 {
+                        Text("\(vm.updatedCount)")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.orange, in: Capsule())
+                    }
+
+                    Spacer()
+
+                    // Priority filter
+                    Picker("Priority", selection: Bindable(vm).priorityFilter) {
+                        Text("All").tag(String?.none)
+                        Label("High", systemImage: "exclamationmark.triangle.fill")
+                            .tag(String?.some("high"))
+                        Label("Medium", systemImage: "minus.circle")
+                            .tag(String?.some("medium"))
+                        Label("Low", systemImage: "arrow.down.circle")
+                            .tag(String?.some("low"))
+                    }
+                    .frame(maxWidth: 140)
                 }
-
-                Spacer()
 
                 // Ownership filter
-                Picker("Ownership", selection: Bindable(vm).ownershipFilter) {
-                    Text("All").tag(String?.none)
-                    Label("Mine", systemImage: "person.fill").tag(String?.some("mine"))
-                    Label("Delegated", systemImage: "arrow.right.circle.fill").tag(String?.some("delegated"))
-                    Label("Watching", systemImage: "eye.fill").tag(String?.some("watching"))
+                HStack(spacing: 4) {
+                    ownershipButton(vm, label: "All", value: nil)
+                    ownershipButton(vm, label: "Mine", value: "mine")
+                    ownershipButton(vm, label: "Delegated", value: "delegated")
+                    ownershipButton(vm, label: "Watching", value: "watching")
+                    Spacer()
                 }
-                .frame(maxWidth: 140)
-
-                // Priority filter
-                Picker("Priority", selection: Bindable(vm).priorityFilter) {
-                    Text("All").tag(String?.none)
-                    Label("High", systemImage: "exclamationmark.triangle.fill").tag(String?.some("high"))
-                    Label("Medium", systemImage: "minus.circle").tag(String?.some("medium"))
-                    Label("Low", systemImage: "arrow.down.circle").tag(String?.some("low"))
-                }
-                .frame(maxWidth: 140)
-
-                // Starred channels filter
-                Toggle(isOn: Bindable(vm).starredOnly) {
-                    Image(systemName: vm.starredOnly ? "star.fill" : "star")
-                        .foregroundStyle(vm.starredOnly ? .yellow : .secondary)
-                }
-                .toggleStyle(.button)
-                .buttonStyle(.borderless)
-                .help(vm.starredOnly ? "Show all channels" : "Show starred channels only")
             }
             .padding()
-            .onChange(of: vm.ownershipFilter) {
-                appState.trackOwnershipFilter = vm.ownershipFilter
-                vm.load()
-            }
             .onChange(of: vm.priorityFilter) { vm.load() }
-            .onChange(of: vm.starredOnly) { vm.load() }
+            .onChange(of: vm.ownershipFilter) { vm.load() }
 
             Divider()
 
             if vm.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if vm.items.isEmpty {
+            } else if vm.updatedTracks.isEmpty && vm.allTracks.isEmpty {
                 VStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle")
+                    Image(systemName: "binoculars")
                         .font(.system(size: 48))
                         .foregroundStyle(.secondary)
-                    Text("No tracks")
+                    Text("No tracks yet")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text("Tracks are extracted from your Slack messages by AI")
+                    Text("Tracks are created automatically from your workspace activity")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(vm.items) { item in
-                            itemRow(item, vm: vm)
-                                .onAppear {
-                                    if item.id == vm.items.last?.id {
-                                        vm.loadMore()
-                                    }
-                                }
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        // Updates section
+                        if !vm.updatedTracks.isEmpty {
+                            sectionHeader("Updates", count: vm.updatedTracks.count, color: .orange)
+                            ForEach(vm.updatedTracks) { track in
+                                trackRow(track, vm: vm, isUpdate: true)
+                            }
                         }
-                        if vm.isLoadingMore {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                                .padding(8)
+
+                        // All tracks section
+                        if !vm.allTracks.isEmpty {
+                            sectionHeader(
+                                "All Tracks", count: vm.allTracks.count, color: .secondary
+                            )
+                            ForEach(vm.allTracks) { track in
+                                trackRow(track, vm: vm, isUpdate: false)
+                            }
                         }
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                 }
             }
         }
         .frame(minWidth: 350, idealWidth: 420)
     }
 
-    private var statusTitle: String {
-        switch appState.trackStatusFilter {
-        case nil: "Inbox"
-        case "inbox": "Inbox"
-        case "active": "Active"
-        case "done": "Done"
-        case "dismissed": "Dismissed"
-        case "snoozed": "Snoozed"
-        case "all": "All Tracks"
-        default: "Tracks"
+    private func ownershipButton(
+        _ vm: TracksViewModel, label: String, value: String?
+    ) -> some View {
+        Button {
+            vm.ownershipFilter = value
+        } label: {
+            Text(label)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    vm.ownershipFilter == value
+                        ? Color.accentColor.opacity(0.15)
+                        : Color.secondary.opacity(0.08),
+                    in: Capsule()
+                )
+                .foregroundStyle(
+                    vm.ownershipFilter == value ? .primary : .secondary
+                )
         }
+        .buttonStyle(.plain)
     }
 
-    private func itemRow(_ item: Track, vm: TracksViewModel) -> some View {
-        TrackRow(item: item, viewModel: vm)
+    private func sectionHeader(
+        _ title: String, count: Int, color: Color
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(color)
+            Text("\(count)")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(color, in: Capsule())
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+
+    private func trackRow(_ track: Track, vm: TracksViewModel, isUpdate: Bool) -> some View {
+        let isSelected = selectedItemID == track.id
+        let bgColor: Color = isSelected
+            ? Color.accentColor.opacity(0.15)
+            : track.isUnread
+                ? Color.blue.opacity(0.06)
+                : Color.clear
+
+        return TrackRow(track: track, viewModel: vm)
             .contentShape(Rectangle())
-            .onTapGesture { selectedItemID = item.id }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                selectedItemID == item.id
-                    ? Color.accentColor.opacity(0.12)
-                    : item.hasUpdates
-                        ? Color.orange.opacity(0.06)
-                        : Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 8)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(
-                        selectedItemID == item.id
-                            ? Color.accentColor.opacity(0.3)
-                            : item.hasUpdates
-                                ? Color.orange.opacity(0.25)
-                                : Color.primary.opacity(0.06),
-                        lineWidth: 1
-                    )
-            )
+            .onTapGesture { selectedItemID = track.id }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(bgColor, in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 4)
     }
 }
 
+// MARK: - Track Row
+
 struct TrackRow: View {
-    let item: Track
+    let track: Track
     let viewModel: TracksViewModel
+
+    private var isRead: Bool { track.isRead }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            topRow
-            trackText
-            metadataRow
-            subItemsRow
-            contextRow
-            blockingRow
-            participantsRow
-            snoozeRow
+            // Line 1: unread dot + priority + category + channels + time
+            HStack(alignment: .center, spacing: 6) {
+                priorityIcon
+
+                Text(track.categoryLabel)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(categoryColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(categoryColor.opacity(0.12), in: Capsule())
+
+                channelBadges
+
+                Spacer()
+
+                Text(track.updatedAgo)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            // Line 2: main text
+            Text(viewModel.resolveUserIDs(track.text))
+                .font(.subheadline)
+                .fontWeight(isRead ? .regular : .medium)
+                .foregroundStyle(isRead ? .secondary : .primary)
+                .lineLimit(2)
+
+            // Line 3: metadata row
+            HStack(spacing: 10) {
+                // Requester
+                if !track.requesterName.isEmpty {
+                    Label(
+                        viewModel.resolveUserIDs(track.requesterName),
+                        systemImage: "person.fill"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+
+                // Due date
+                if let dueFormatted = track.dueDateFormatted {
+                    Label(dueFormatted, systemImage: "calendar")
+                        .font(.caption2)
+                        .foregroundStyle(track.isOverdue ? Color.red : Color.secondary)
+                }
+
+                // Task count
+                let tasks = viewModel.taskCount(for: track.id)
+                if tasks > 0 {
+                    Label("\(tasks)", systemImage: "checkmark.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+
+                Spacer()
+
+                // Ownership badge
+                ownershipBadge
+            }
+
+            // Tags + participants on one line
+            let trackTags = track.decodedTags
+            let people = track.decodedParticipants
+            if !trackTags.isEmpty || !people.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(trackTags.prefix(3), id: \.self) { tag in
+                        Text(tag)
+                            .font(.system(size: 9))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                    }
+                    if trackTags.count > 3 {
+                        Text("+\(trackTags.count - 3)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    if !people.isEmpty {
+                        Spacer()
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                        Text(people.prefix(3).map(\.name).joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                        if people.count > 3 {
+                            Text("+\(people.count - 3)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
         }
         .padding(.vertical, 4)
     }
 
-    private var topRow: some View {
-        HStack(spacing: 6) {
-            priorityIcon
-            if item.hasUpdates {
-                Image(systemName: "bell.badge.fill")
-                    .foregroundStyle(.orange)
-                    .font(.caption)
-            }
-            ownershipBadge
-            channelLink
-            if item.isOverdue {
-                Text("OVERDUE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(.red, in: Capsule())
-            }
-            Spacer()
-            Text(item.sourceDate, style: .relative)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    @ViewBuilder
-    private var ownershipBadge: some View {
-        if item.isDelegated {
-            Text("Delegated")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.indigo, in: Capsule())
-        } else if item.isWatching {
-            Text("Watching")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.teal, in: Capsule())
-        }
-    }
-
-    @ViewBuilder
-    private var channelLink: some View {
-        if !item.sourceChannelName.isEmpty {
-            if let url = slackURL {
-                Link(destination: url) {
-                    Text("#\(item.sourceChannelName)")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-            } else {
-                Text("#\(item.sourceChannelName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var slackURL: URL? {
-        if !item.sourceMessageTS.isEmpty {
-            return viewModel.slackMessageURL(channelID: item.channelID, messageTS: item.sourceMessageTS)
-        }
-        return viewModel.slackChannelURL(channelID: item.channelID)
-    }
-
-    private var trackText: some View {
-        Text(viewModel.resolveUserIDs(item.text))
-            .font(.subheadline)
-            .fontWeight((item.isInbox || item.isActive) ? .medium : .regular)
-            .strikethrough(item.isDone)
-            .foregroundStyle(item.isDone || item.isDismissed ? .secondary : .primary)
-            .lineLimit(2)
-    }
-
-    private var metadataRow: some View {
-        HStack(spacing: 6) {
-            if !item.categoryLabel.isEmpty {
-                Text(item.categoryLabel)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-            }
-            if !item.requesterName.isEmpty {
-                Text("from \(item.requesterName)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var subItemsRow: some View {
-        let subProgress = item.subItemsProgress
-        if subProgress.total > 0 {
-            HStack(spacing: 4) {
-                Image(systemName: "checklist")
-                    .font(.system(size: 9))
-                    .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
-                Text("\(subProgress.done)/\(subProgress.total)")
-                    .font(.caption2)
-                    .foregroundStyle(subProgress.done == subProgress.total ? .green : .secondary)
-                ProgressView(value: Double(subProgress.done), total: Double(subProgress.total))
-                    .frame(width: 50)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var contextRow: some View {
-        if !item.context.isEmpty {
-            Text(viewModel.resolveUserIDs(item.context))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .lineLimit(2)
-        }
-    }
-
-    @ViewBuilder
-    private var blockingRow: some View {
-        if !item.blocking.isEmpty {
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.orange)
-                Text(viewModel.resolveUserIDs(item.blocking))
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var participantsRow: some View {
-        let people = item.decodedParticipants
-        if !people.isEmpty {
-            HStack(spacing: 4) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-                Text(people.map(\.name).joined(separator: ", "))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var snoozeRow: some View {
-        if item.status == "snoozed", let snoozeText = item.snoozeUntilFormatted {
-            Label("Snoozed until \(snoozeText)", systemImage: "moon.zzz.fill")
-                .font(.caption2)
-                .foregroundStyle(.purple)
-        }
-    }
+    // MARK: - Components
 
     @ViewBuilder
     private var priorityIcon: some View {
-        switch item.priority {
+        switch track.priority {
         case "high":
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
@@ -389,6 +328,57 @@ struct TrackRow: View {
             Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(.blue)
                 .font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private var ownershipBadge: some View {
+        switch track.ownership {
+        case "mine":
+            Label("Mine", systemImage: "person.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.green)
+        case "delegated":
+            Label("Delegated", systemImage: "arrow.right.circle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.purple)
+        case "watching":
+            Label("Watching", systemImage: "eye.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var categoryColor: Color {
+        switch track.category {
+        case "decision": .orange
+        case "risk", "blocker": .red
+        case "fyi": .blue
+        case "question": .purple
+        case "project": .indigo
+        default: .secondary
+        }
+    }
+
+    @ViewBuilder
+    private var channelBadges: some View {
+        let channels = track.decodedChannelIDs
+        if !channels.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(channels.prefix(2), id: \.self) { chID in
+                    let name = viewModel.channelName(for: chID) ?? chID
+                    Text("#\(name)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if channels.count > 2 {
+                    Text("+\(channels.count - 2)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 }

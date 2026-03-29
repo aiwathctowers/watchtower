@@ -108,7 +108,25 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	renderer := ai.NewResponseRenderer(database, ws.Domain, ws.ID)
 
-	resp, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+	runID, _ := database.CreatePipelineRun("ask", "cli", model)
+
+	resp, usage, err := aiClient.QuerySync(ctx, systemPrompt, userMessage, "")
+
+	// Complete pipeline run regardless of outcome.
+	{
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+		if usage != nil {
+			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+		}
+		if runID > 0 {
+			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("ai query failed: %w", err)
 	}

@@ -20,7 +20,6 @@ const (
 	PhaseDiscovery           // search-based channel/user discovery
 	PhaseMessages
 	PhaseUsers // lazy user profile fetching
-	PhaseThreads
 	PhaseDone
 )
 
@@ -34,8 +33,6 @@ func (p SyncPhase) String() string {
 		return "Messages"
 	case PhaseUsers:
 		return "Users"
-	case PhaseThreads:
-		return "Threads"
 	case PhaseDone:
 		return "Done"
 	default:
@@ -62,6 +59,7 @@ type Progress struct {
 	discoveryTotalPages int
 	discoveryChannels   int
 	discoveryUsers      int
+	searchAfter         string // date string (YYYY-MM-DD) for search query window
 
 	// Users phase (lazy profile fetch)
 	userProfilesTotal int
@@ -72,11 +70,6 @@ type Progress struct {
 	msgChannelsDone     int
 	messagesFetched     int
 	channelsSkippedInfo string // human-readable breakdown of skipped channels
-
-	// Threads phase
-	threadsTotal   int
-	threadsDone    int
-	threadsFetched int
 
 	// Timing for ETA
 	phaseStartTime time.Time
@@ -120,6 +113,13 @@ func (p *Progress) SetMetadataChannels(total, done int) {
 	defer p.mu.Unlock()
 	p.channelsTotal = total
 	p.channelsDone = done
+}
+
+// SetSearchAfter records the search query start date for progress reporting.
+func (p *Progress) SetSearchAfter(date string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.searchAfter = date
 }
 
 // SetDiscovery updates discovery phase progress.
@@ -168,21 +168,6 @@ func (p *Progress) AddMessages(count int) {
 	p.messagesFetched += count
 }
 
-// SetThreadsTotal sets the total number of threads to sync.
-func (p *Progress) SetThreadsTotal(total int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.threadsTotal = total
-}
-
-// IncThread increments the completed thread count and adds the reply count.
-func (p *Progress) IncThread(replies int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.threadsDone++
-	p.threadsFetched += replies
-}
-
 // Snapshot captures the current state for rendering without holding the lock.
 type Snapshot struct {
 	Phase               SyncPhase
@@ -195,14 +180,12 @@ type Snapshot struct {
 	DiscoveryTotalPages int
 	DiscoveryChannels   int
 	DiscoveryUsers      int
+	SearchAfter         string
 	UserProfilesTotal   int
 	UserProfilesDone    int
 	MsgChannelsTotal    int
 	MsgChannelsDone     int
 	MessagesFetched     int
-	ThreadsTotal        int
-	ThreadsDone         int
-	ThreadsFetched      int
 	PhaseStartTime      time.Time
 	ChannelsSkippedInfo string
 }
@@ -222,14 +205,12 @@ func (p *Progress) Snapshot() Snapshot {
 		DiscoveryTotalPages: p.discoveryTotalPages,
 		DiscoveryChannels:   p.discoveryChannels,
 		DiscoveryUsers:      p.discoveryUsers,
+		SearchAfter:         p.searchAfter,
 		UserProfilesTotal:   p.userProfilesTotal,
 		UserProfilesDone:    p.userProfilesDone,
 		MsgChannelsTotal:    p.msgChannelsTotal,
 		MsgChannelsDone:     p.msgChannelsDone,
 		MessagesFetched:     p.messagesFetched,
-		ThreadsTotal:        p.threadsTotal,
-		ThreadsDone:         p.threadsDone,
-		ThreadsFetched:      p.threadsFetched,
 		PhaseStartTime:      p.phaseStartTime,
 		ChannelsSkippedInfo: p.channelsSkippedInfo,
 	}
@@ -243,14 +224,12 @@ type JSONSnapshot struct {
 	DiscoveryTotalPages int     `json:"discovery_total_pages"`
 	DiscoveryChannels   int     `json:"discovery_channels"`
 	DiscoveryUsers      int     `json:"discovery_users"`
+	SearchAfter         string  `json:"search_after,omitempty"`
 	MessagesFetched     int     `json:"messages_fetched"`
 	MsgChannelsDone     int     `json:"msg_channels_done"`
 	MsgChannelsTotal    int     `json:"msg_channels_total"`
 	UserProfilesDone    int     `json:"user_profiles_done"`
 	UserProfilesTotal   int     `json:"user_profiles_total"`
-	ThreadsDone         int     `json:"threads_done"`
-	ThreadsTotal        int     `json:"threads_total"`
-	ThreadsFetched      int     `json:"threads_fetched"`
 }
 
 // JSON returns a JSON-encoded progress line.
@@ -263,14 +242,12 @@ func (p *Progress) JSON() []byte {
 		DiscoveryTotalPages: snap.DiscoveryTotalPages,
 		DiscoveryChannels:   snap.DiscoveryChannels,
 		DiscoveryUsers:      snap.DiscoveryUsers,
+		SearchAfter:         snap.SearchAfter,
 		MessagesFetched:     snap.MessagesFetched,
 		MsgChannelsDone:     snap.MsgChannelsDone,
 		MsgChannelsTotal:    snap.MsgChannelsTotal,
 		UserProfilesDone:    snap.UserProfilesDone,
 		UserProfilesTotal:   snap.UserProfilesTotal,
-		ThreadsDone:         snap.ThreadsDone,
-		ThreadsTotal:        snap.ThreadsTotal,
-		ThreadsFetched:      snap.ThreadsFetched,
 	}
 	data, _ := json.Marshal(j)
 	return data
@@ -323,11 +300,6 @@ func RenderSnapshot(snap Snapshot, workspace string) string {
 	// Users: show when active or done with results
 	if snap.Phase == PhaseUsers || (snap.Phase > PhaseUsers && snap.UserProfilesTotal > 0) {
 		lines = append(lines, renderUsers(snap))
-	}
-
-	// Threads: show when active or done with results
-	if snap.Phase == PhaseThreads || (snap.Phase > PhaseThreads && snap.ThreadsTotal > 0) {
-		lines = append(lines, renderThreads(snap))
 	}
 
 	return strings.Join(lines, "\n")
@@ -487,36 +459,6 @@ func renderMessages(snap Snapshot) string {
 			humanize.Comma(int64(snap.MsgChannelsDone)),
 			humanize.Comma(int64(snap.MsgChannelsTotal)),
 			humanize.Comma(int64(snap.MessagesFetched)),
-		)
-		return labelStyle.Render(prefix) + doneStyle.Render(detail)
-	}
-}
-
-func renderThreads(snap Snapshot) string {
-	prefix := "  Threads:  "
-	switch {
-	case snap.Phase < PhaseThreads:
-		return labelStyle.Render(prefix) + waitStyle.Render("waiting...")
-	case snap.Phase == PhaseThreads:
-		bar := progressBar(snap.ThreadsDone, snap.ThreadsTotal)
-		pct := percentage(snap.ThreadsDone, snap.ThreadsTotal)
-		detail := fmt.Sprintf("%s (%s/%s threads, %s replies)",
-			pct,
-			humanize.Comma(int64(snap.ThreadsDone)),
-			humanize.Comma(int64(snap.ThreadsTotal)),
-			humanize.Comma(int64(snap.ThreadsFetched)),
-		)
-		eta := estimateETA(snap.ThreadsDone, snap.ThreadsTotal, snap.PhaseStartTime)
-		line := fmt.Sprintf("%s %s", bar, detail)
-		if eta != "" {
-			line += " " + eta
-		}
-		return labelStyle.Render(prefix) + activeStyle.Render(line)
-	default:
-		detail := fmt.Sprintf("%s/%s threads, %s replies done",
-			humanize.Comma(int64(snap.ThreadsDone)),
-			humanize.Comma(int64(snap.ThreadsTotal)),
-			humanize.Comma(int64(snap.ThreadsFetched)),
 		)
 		return labelStyle.Render(prefix) + doneStyle.Render(detail)
 	}

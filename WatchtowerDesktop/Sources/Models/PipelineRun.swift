@@ -5,6 +5,7 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
     let id: Int64
     let pipeline: String
     let source: String
+    let model: String
     let status: String
     let errorMsg: String
     let itemsFound: Int
@@ -17,9 +18,13 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
     let startedAt: String
     let finishedAt: String?
     let durationSeconds: Double
+    let stepCount: Int
+
+    /// Number of actual AI API calls (steps if available, otherwise 1 per run).
+    var aiCallCount: Int { max(1, stepCount) }
 
     enum CodingKeys: String, CodingKey {
-        case id, pipeline, source, status
+        case id, pipeline, source, model, status
         case errorMsg = "error_msg"
         case itemsFound = "items_found"
         case inputTokens = "input_tokens"
@@ -31,6 +36,7 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
         case startedAt = "started_at"
         case finishedAt = "finished_at"
         case durationSeconds = "duration_seconds"
+        case stepCount = "step_count"
     }
 
     var pipelineTitle: String {
@@ -38,7 +44,6 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
         case "digests": return "Digests"
         case "tracks": return "Tracks"
         case "people": return "People Cards"
-        case "chains": return "Chains"
         default: return pipeline.capitalized
         }
     }
@@ -48,7 +53,6 @@ struct PipelineRun: Decodable, FetchableRecord, Identifiable {
         case "digests": return "doc.text.magnifyingglass"
         case "tracks": return "checklist"
         case "people": return "person.2.circle"
-        case "chains": return "link"
         default: return "gearshape"
         }
     }
