@@ -281,7 +281,7 @@ struct ChannelStatisticsView: View {
 
     private func digestCoverageMini(_ vm: ChannelStatsViewModel) -> some View {
         let statuses = computeDigestDistribution(vm)
-        let nonZero = statuses.filter { $0.count > 0 }
+        let nonZero = statuses.filter { $0.count != 0 } // swiftlint:disable:this empty_count
 
         return VStack(alignment: .leading, spacing: 6) {
             Text("Digest Coverage")

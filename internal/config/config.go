@@ -25,11 +25,11 @@ type AIConfig struct {
 }
 
 type SyncConfig struct {
-	Workers              int           `mapstructure:"workers"`
-	InitialHistoryDays   int           `mapstructure:"initial_history_days"`
-	PollInterval         time.Duration `mapstructure:"poll_interval"`
-	SyncThreads bool          `mapstructure:"sync_threads"`
-	SyncOnWake  bool          `mapstructure:"sync_on_wake"`
+	Workers            int           `mapstructure:"workers"`
+	InitialHistoryDays int           `mapstructure:"initial_history_days"`
+	PollInterval       time.Duration `mapstructure:"poll_interval"`
+	SyncThreads        bool          `mapstructure:"sync_threads"`
+	SyncOnWake         bool          `mapstructure:"sync_on_wake"`
 }
 
 type DigestConfig struct {

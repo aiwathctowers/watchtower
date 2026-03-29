@@ -398,8 +398,8 @@ type progressJSON struct {
 	UserProfilesDone    int     `json:"user_profiles_done"`
 	MsgChannelsTotal    int     `json:"msg_channels_total"`
 	MsgChannelsDone     int     `json:"msg_channels_done"`
-	MessagesFetched int    `json:"messages_fetched"`
-	Error           string `json:"error,omitempty"`
+	MessagesFetched     int     `json:"messages_fetched"`
+	Error               string  `json:"error,omitempty"`
 }
 
 func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Config, logger *log.Logger) {
@@ -469,7 +469,7 @@ func printProgressJSON(w io.Writer, snap sync.Snapshot, syncErr error) {
 		UserProfilesDone:    snap.UserProfilesDone,
 		MsgChannelsTotal:    snap.MsgChannelsTotal,
 		MsgChannelsDone:     snap.MsgChannelsDone,
-		MessagesFetched: snap.MessagesFetched,
+		MessagesFetched:     snap.MessagesFetched,
 	}
 	if syncErr != nil {
 		p.Error = syncErr.Error()

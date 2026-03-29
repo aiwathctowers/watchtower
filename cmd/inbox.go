@@ -438,10 +438,10 @@ func runInboxGenerate(cmd *cobra.Command, _ []string) error {
 			if runID > 0 && p.StepDurationSec > 0 {
 				_ = database.InsertPipelineStep(db.PipelineStep{
 					RunID: runID, Step: done, Total: total, Status: status,
-					InputTokens:    p.StepInputTokens,
-					OutputTokens:   p.StepOutputTokens,
-					CostUSD:        p.StepCostUSD,
-					TotalAPITokens: totalAPI,
+					InputTokens:     p.StepInputTokens,
+					OutputTokens:    p.StepOutputTokens,
+					CostUSD:         p.StepCostUSD,
+					TotalAPITokens:  totalAPI,
 					DurationSeconds: p.StepDurationSec,
 				})
 			}

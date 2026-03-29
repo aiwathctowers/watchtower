@@ -545,14 +545,14 @@ func (db *DB) CheckUserReplied(currentUserID, channelID, messageTS, threadTS str
 }
 
 // GetThreadContext returns recent messages in a thread for context.
-func (d *DB) GetThreadContext(channelID, threadTS string, limit int) ([]struct {
+func (db *DB) GetThreadContext(channelID, threadTS string, limit int) ([]struct {
 	UserID string
 	Text   string
 }, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := d.Query(`SELECT user_id, text FROM messages
+	rows, err := db.Query(`SELECT user_id, text FROM messages
 		WHERE channel_id = ? AND (thread_ts = ? OR ts = ?)
 		AND is_deleted = 0
 		ORDER BY ts_unix DESC LIMIT ?`, channelID, threadTS, threadTS, limit)
@@ -582,14 +582,14 @@ func (d *DB) GetThreadContext(channelID, threadTS string, limit int) ([]struct {
 }
 
 // GetChannelContextBefore returns recent messages in a channel before a given timestamp.
-func (d *DB) GetChannelContextBefore(channelID string, beforeTS string, limit int) ([]struct {
+func (db *DB) GetChannelContextBefore(channelID string, beforeTS string, limit int) ([]struct {
 	UserID string
 	Text   string
 }, error) {
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := d.Query(`SELECT user_id, text FROM messages
+	rows, err := db.Query(`SELECT user_id, text FROM messages
 		WHERE channel_id = ? AND ts < ?
 		AND (thread_ts IS NULL OR thread_ts = '' OR thread_ts = ts)
 		AND is_deleted = 0
