@@ -131,6 +131,12 @@ func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
 
 // Run executes the people card pipeline for the current 7-day window.
 func (p *Pipeline) Run(ctx context.Context) (int, error) {
+	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
+	p.totalInputTokens.Store(0)
+	p.totalOutputTokens.Store(0)
+	p.totalCostMicro.Store(0)
+	p.totalAPITokens.Store(0)
+
 	if !p.cfg.Digest.Enabled {
 		return 0, nil
 	}

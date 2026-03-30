@@ -151,6 +151,12 @@ func (p *Pipeline) lastTracksTime() float64 {
 // Run executes the tracks extraction pipeline.
 // Returns (stored count, error).
 func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
+	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
+	p.totalInputTokens.Store(0)
+	p.totalOutputTokens.Store(0)
+	p.totalCostMicro.Store(0)
+	p.totalAPITokens.Store(0)
+
 	if !p.cfg.Digest.Enabled {
 		return 0, 0, nil
 	}

@@ -246,6 +246,12 @@ func (p *Pipeline) acquireDigestLock() (*os.File, func(), error) {
 // Run executes the full digest pipeline: channel digests, then daily rollup.
 // Returns the number of channel digests generated and total token usage.
 func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
+	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
+	p.totalInputTokens.Store(0)
+	p.totalOutputTokens.Store(0)
+	p.totalCostMicro.Store(0)
+	p.totalAPITokens.Store(0)
+
 	if !p.cfg.Digest.Enabled {
 		return 0, nil, nil
 	}
@@ -302,6 +308,12 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 // RunChannelDigestsOnly runs only channel-level digests (no rollups).
 // Used by daemon to split channel digests from rollups with chains in between.
 func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, error) {
+	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
+	p.totalInputTokens.Store(0)
+	p.totalOutputTokens.Store(0)
+	p.totalCostMicro.Store(0)
+	p.totalAPITokens.Store(0)
+
 	if !p.cfg.Digest.Enabled {
 		return 0, nil, nil
 	}
