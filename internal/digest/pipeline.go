@@ -1325,6 +1325,30 @@ type BatchChannelResult struct {
 	RunningSummary json.RawMessage `json:"running_summary,omitempty"`
 }
 
+// UnmarshalJSON handles both structured topics ([]Topic) and flat topics ([]string).
+func (b *BatchChannelResult) UnmarshalJSON(data []byte) error {
+	type Alias BatchChannelResult
+	var raw struct {
+		Alias
+		Topics json.RawMessage `json:"topics"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*b = BatchChannelResult(raw.Alias)
+	// Try structured topics first.
+	if err := json.Unmarshal(raw.Topics, &b.Topics); err != nil {
+		// Fall back to string topics.
+		var titles []string
+		if err2 := json.Unmarshal(raw.Topics, &titles); err2 == nil {
+			for _, t := range titles {
+				b.Topics = append(b.Topics, Topic{Title: t})
+			}
+		}
+	}
+	return nil
+}
+
 // groupIntoBatches groups entries into batches not exceeding maxChannels and maxMessages.
 // If maxChannels <= 0, all entries go into a single batch (no limit).
 func groupIntoBatches(entries []batchEntry, maxChannels, maxMessages int) [][]batchEntry {
@@ -1827,65 +1851,57 @@ func parseDigestResult(raw string) (*DigestResult, error) {
 		}
 	}
 
-	var result DigestResult
-	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
-		// Fallback: AI may return flat format (topics as strings, decisions/action_items at top level).
-		// Convert to structured Topic format.
-		var flat flatDigestResult
-		if flatErr := json.Unmarshal([]byte(cleaned), &flat); flatErr != nil {
-			return nil, fmt.Errorf("parsing digest JSON: %w (raw: %.200s)", err, raw)
+	// Use a lenient intermediate format that won't fail on mixed topic types.
+	var lenient struct {
+		Summary        string            `json:"summary"`
+		Topics         json.RawMessage   `json:"topics"`
+		Decisions      json.RawMessage   `json:"decisions"`
+		ActionItems    json.RawMessage   `json:"action_items"`
+		Situations     json.RawMessage   `json:"situations"`
+		KeyMessages    json.RawMessage   `json:"key_messages"`
+		RunningSummary json.RawMessage   `json:"running_summary,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &lenient); err != nil {
+		return nil, fmt.Errorf("parsing digest JSON: %w (raw: %.500s)", err, raw)
+	}
+
+	result := DigestResult{
+		Summary:        lenient.Summary,
+		RunningSummary: lenient.RunningSummary,
+	}
+
+	// Try topics as structured []Topic first, fall back to []string.
+	var structuredTopics []Topic
+	if err := json.Unmarshal(lenient.Topics, &structuredTopics); err == nil {
+		result.Topics = structuredTopics
+	} else {
+		var stringTopics []string
+		if err2 := json.Unmarshal(lenient.Topics, &stringTopics); err2 == nil {
+			// Flat format: topics are strings, decisions/action_items/situations at top level.
+			var decisions []Decision
+			var actionItems []ActionItem
+			var situations []db.Situation
+			var keyMessages []string
+			_ = json.Unmarshal(lenient.Decisions, &decisions)
+			_ = json.Unmarshal(lenient.ActionItems, &actionItems)
+			_ = json.Unmarshal(lenient.Situations, &situations)
+			_ = json.Unmarshal(lenient.KeyMessages, &keyMessages)
+
+			for i, title := range stringTopics {
+				t := Topic{Title: title}
+				if i == 0 {
+					t.Summary = result.Summary
+					t.Decisions = decisions
+					t.ActionItems = actionItems
+					t.Situations = situations
+					t.KeyMessages = keyMessages
+				}
+				result.Topics = append(result.Topics, t)
+			}
 		}
-		result = flat.toDigestResult()
-		return &result, nil
+		// If both fail, proceed with empty topics — summary is still valuable.
 	}
 
 	return &result, nil
 }
 
-// flatDigestResult is the legacy AI response format with topics as strings
-// and decisions/action_items at the top level (not nested within topics).
-type flatDigestResult struct {
-	Summary        string          `json:"summary"`
-	Topics         []string        `json:"topics"`
-	Decisions      []Decision      `json:"decisions"`
-	ActionItems    []ActionItem    `json:"action_items"`
-	KeyMessages    []string        `json:"key_messages"`
-	Situations     []db.Situation  `json:"situations"`
-	RunningSummary json.RawMessage `json:"running_summary,omitempty"`
-}
-
-func (f flatDigestResult) toDigestResult() DigestResult {
-	var topics []Topic
-	if len(f.Topics) > 0 {
-		// Put all decisions/action_items/situations into a single topic
-		// or distribute evenly if multiple topics exist.
-		if len(f.Topics) == 1 {
-			topics = []Topic{{
-				Title:       f.Topics[0],
-				Summary:     f.Summary,
-				Decisions:   f.Decisions,
-				ActionItems: f.ActionItems,
-				Situations:  f.Situations,
-				KeyMessages: f.KeyMessages,
-			}}
-		} else {
-			// Create topics from titles, put all items in the first topic
-			for i, title := range f.Topics {
-				t := Topic{Title: title}
-				if i == 0 {
-					t.Summary = f.Summary
-					t.Decisions = f.Decisions
-					t.ActionItems = f.ActionItems
-					t.Situations = f.Situations
-					t.KeyMessages = f.KeyMessages
-				}
-				topics = append(topics, t)
-			}
-		}
-	}
-	return DigestResult{
-		Summary:        f.Summary,
-		Topics:         topics,
-		RunningSummary: f.RunningSummary,
-	}
-}
