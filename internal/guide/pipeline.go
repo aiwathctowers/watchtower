@@ -488,9 +488,9 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 		DecisionStyle:       result.DecisionStyle,
 		Tactics:             string(tactics),
 		RelationshipContext: relCtx,
-		Status:        "active",
-		Model:         "auto",
-		PromptVersion: pv,
+		Status:              "active",
+		Model:               "auto",
+		PromptVersion:       pv,
 	}
 	if usage != nil {
 		card.Model = usage.Model

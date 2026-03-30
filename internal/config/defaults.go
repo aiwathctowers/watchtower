@@ -12,8 +12,8 @@ const (
 	DefaultPollInterval       = 15 * time.Minute
 	DefaultSyncThreads        = true
 	DefaultSyncOnWake         = true
-	DefaultDigestEnabled = true
-	DefaultDigestMinMsgs = 10
+	DefaultDigestEnabled      = true
+	DefaultDigestMinMsgs      = 10
 	DefaultDigestLang         = "Russian"
 	DefaultDigestWorkers      = 5 // Deprecated: use DefaultAIWorkers. Kept for backward compat.
 	DefaultTracksInterval     = 1 * time.Hour

@@ -1243,9 +1243,9 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 		PeopleSignals:  "[]",
 		Situations:     string(situations),
 		RunningSummary: runningSummary,
-		MessageCount:  msgCount,
-		Model:         "auto",
-		PromptVersion: promptVersion,
+		MessageCount:   msgCount,
+		Model:          "auto",
+		PromptVersion:  promptVersion,
 	}
 	if usage != nil {
 		d.Model = usage.Model
@@ -1853,13 +1853,13 @@ func parseDigestResult(raw string) (*DigestResult, error) {
 
 	// Use a lenient intermediate format that won't fail on mixed topic types.
 	var lenient struct {
-		Summary        string            `json:"summary"`
-		Topics         json.RawMessage   `json:"topics"`
-		Decisions      json.RawMessage   `json:"decisions"`
-		ActionItems    json.RawMessage   `json:"action_items"`
-		Situations     json.RawMessage   `json:"situations"`
-		KeyMessages    json.RawMessage   `json:"key_messages"`
-		RunningSummary json.RawMessage   `json:"running_summary,omitempty"`
+		Summary        string          `json:"summary"`
+		Topics         json.RawMessage `json:"topics"`
+		Decisions      json.RawMessage `json:"decisions"`
+		ActionItems    json.RawMessage `json:"action_items"`
+		Situations     json.RawMessage `json:"situations"`
+		KeyMessages    json.RawMessage `json:"key_messages"`
+		RunningSummary json.RawMessage `json:"running_summary,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &lenient); err != nil {
 		return nil, fmt.Errorf("parsing digest JSON: %w (raw: %.500s)", err, raw)
@@ -1904,4 +1904,3 @@ func parseDigestResult(raw string) (*DigestResult, error) {
 
 	return &result, nil
 }
-

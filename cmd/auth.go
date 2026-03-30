@@ -225,8 +225,8 @@ func saveAuthResult(result *auth.OAuthResult) (*authResultInfo, error) {
 		"sync.poll_interval":        config.DefaultPollInterval.String(),
 		"sync.sync_threads":         config.DefaultSyncThreads,
 		"sync.sync_on_wake":         config.DefaultSyncOnWake,
-		"digest.enabled":      config.DefaultDigestEnabled,
-		"digest.min_messages": config.DefaultDigestMinMsgs,
+		"digest.enabled":            config.DefaultDigestEnabled,
+		"digest.min_messages":       config.DefaultDigestMinMsgs,
 	}
 	for key, val := range defaults {
 		if !v.IsSet(key) {
