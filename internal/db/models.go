@@ -184,7 +184,7 @@ type Track struct {
 	Priority         string  // "high", "medium", "low"
 	DueDate          float64 // Unix timestamp, 0 = no deadline
 	Fingerprint      string  // JSON: extracted entities for dedup
-	ReadAt           string // "" = unread, ISO8601 = when read
+	ReadAt           string  // "" = unread, ISO8601 = when read
 	HasUpdates       bool
 	DismissedAt      string // "" = active, ISO8601 = when dismissed
 	Model            string
