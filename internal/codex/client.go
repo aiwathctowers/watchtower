@@ -40,6 +40,7 @@ func (c *Client) buildArgs(systemPrompt, userMessage, workDir string) []string {
 		"--model", c.model,
 		"--json",
 		"--ephemeral",
+		"--skip-git-repo-check",
 		"-c", "approval_policy=never",
 		"-c", "sandbox_mode=read-only",
 	}

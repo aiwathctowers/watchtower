@@ -603,7 +603,7 @@ struct GeneralSettings: View {
             process.executableURL = URL(fileURLWithPath: path)
 
             if isCodex {
-                process.arguments = ["exec", "--model", model, "--json", "-c", "approval_policy=never", "respond with: OK"]
+                process.arguments = ["exec", "--model", model, "--json", "--skip-git-repo-check", "-c", "approval_policy=never", "respond with: OK"]
             } else {
                 process.arguments = ["-p", "respond with: OK", "--output-format", "text", "--model", model]
             }

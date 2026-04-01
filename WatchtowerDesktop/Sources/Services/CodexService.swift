@@ -95,11 +95,13 @@ final class CodexService: AIServiceProtocol, Sendable {
             // Session resume
             args = ["exec", "resume", "--last",
                     "--model", model, "--json", "--ephemeral",
+                    "--skip-git-repo-check",
                     "-c", "approval_policy=never",
                     "-c", "sandbox_mode=read-only"]
         } else {
             args = ["exec",
                     "--model", model, "--json", "--ephemeral",
+                    "--skip-git-repo-check",
                     "-c", "approval_policy=never",
                     "-c", "sandbox_mode=read-only"]
         }

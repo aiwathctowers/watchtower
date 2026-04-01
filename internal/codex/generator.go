@@ -46,6 +46,7 @@ func (g *CodexGenerator) Generate(ctx context.Context, systemPrompt, userMessage
 		"--model", model,
 		"--json",
 		"--ephemeral",
+		"--skip-git-repo-check",
 		"-c", "approval_policy=never",
 		"-c", "sandbox_mode=read-only",
 	}
