@@ -461,7 +461,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testNewChat() {
-        let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.messages = [
             ChatMessage(id: UUID(), role: .user, text: "Hi", timestamp: Date(), isStreaming: false),
             ChatMessage(id: UUID(), role: .assistant, text: "Hello!", timestamp: Date(), isStreaming: false)
@@ -475,7 +475,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testCancelStream() throws {
-        let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.isStreaming = true
         vm.messages = [
             ChatMessage(id: UUID(), role: .assistant, text: "Partial...", timestamp: Date(), isStreaming: true)
@@ -490,7 +490,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testSendCreatesMessages() async throws {
         let mock = MockClaudeService(events: [.text("Hello "), .text("world"), .done])
-        let vm = ChatViewModel(claudeService: mock, dbManager: dbManager)
+        let vm = ChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "Hi there"
         vm.send()
@@ -507,7 +507,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendEmptyDoesNothing() {
-        let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.inputText = "   "
         vm.send()
 
@@ -516,7 +516,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendWhileStreamingDoesNothing() {
-        let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.isStreaming = true
         vm.inputText = "Hello"
         vm.send()
@@ -526,7 +526,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendClearsInputText() {
-        let vm = ChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.inputText = "Hello"
         vm.send()
 
@@ -536,7 +536,7 @@ final class ChatViewModelTests: XCTestCase {
     @MainActor
     func testSendWithError() async throws {
         let mock = MockClaudeService(error: ClaudeError.notFound)
-        let vm = ChatViewModel(claudeService: mock, dbManager: dbManager)
+        let vm = ChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "Hello"
         vm.send()
@@ -573,6 +573,137 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertTrue(schema.contains("CREATE TABLE"))
         XCTAssertTrue(schema.contains("workspace"))
         XCTAssertTrue(schema.contains("messages"))
+    }
+}
+
+// MARK: - AIProvider & ChatModel Tests
+
+final class AIProviderTests: XCTestCase {
+    func testProviderDisplayNames() {
+        XCTAssertEqual(AIProvider.claude.displayName, "Claude")
+        XCTAssertEqual(AIProvider.codex.displayName, "Codex")
+    }
+
+    func testProviderAllCases() {
+        XCTAssertEqual(AIProvider.allCases.count, 2)
+    }
+
+    func testClaudeModelsProvider() {
+        XCTAssertEqual(ChatModel.sonnet.provider, .claude)
+        XCTAssertEqual(ChatModel.haiku.provider, .claude)
+        XCTAssertEqual(ChatModel.opus.provider, .claude)
+    }
+
+    func testCodexModelsProvider() {
+        XCTAssertEqual(ChatModel.gpt54.provider, .codex)
+        XCTAssertEqual(ChatModel.gpt54mini.provider, .codex)
+        XCTAssertEqual(ChatModel.gpt53codex.provider, .codex)
+    }
+
+    func testModelsForProvider() {
+        let claudeModels = ChatModel.models(for: .claude)
+        XCTAssertEqual(claudeModels.count, 3)
+        XCTAssertTrue(claudeModels.allSatisfy { $0.provider == .claude })
+
+        let codexModels = ChatModel.models(for: .codex)
+        XCTAssertEqual(codexModels.count, 3)
+        XCTAssertTrue(codexModels.allSatisfy { $0.provider == .codex })
+    }
+
+    func testModelDisplayNames() {
+        XCTAssertEqual(ChatModel.gpt54.displayName, "GPT-5.4")
+        XCTAssertEqual(ChatModel.gpt54mini.displayName, "GPT-5.4 Mini")
+        XCTAssertEqual(ChatModel.gpt53codex.displayName, "GPT-5.3 Codex")
+    }
+
+    func testModelRawValues() {
+        XCTAssertEqual(ChatModel.gpt54.rawValue, "gpt-5.4")
+        XCTAssertEqual(ChatModel.gpt54mini.rawValue, "gpt-5.4-mini")
+        XCTAssertEqual(ChatModel.gpt53codex.rawValue, "gpt-5.3-codex")
+    }
+}
+
+// MARK: - ChatViewModel Provider Switching Tests
+
+final class ChatViewModelProviderTests: XCTestCase {
+    private var dbManager: DatabaseManager!
+    private var dbPath: String!
+
+    override func setUp() {
+        super.setUp()
+        do {
+            (dbManager, dbPath) = try TestDatabase.createDatabaseManager()
+        } catch {
+            XCTFail("setUp failed: \(error)")
+        }
+    }
+
+    override func tearDown() {
+        TestDatabase.cleanup(path: dbPath)
+        super.tearDown()
+    }
+
+    @MainActor
+    func testDefaultProviderIsClaude() {
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
+        XCTAssertEqual(vm.selectedProvider, .claude)
+        XCTAssertEqual(vm.selectedModel.provider, .claude)
+    }
+
+    @MainActor
+    func testInitWithCodexProvider() {
+        let vm = ChatViewModel(
+            aiService: MockClaudeService(),
+            dbManager: dbManager,
+            provider: .codex
+        )
+        XCTAssertEqual(vm.selectedProvider, .codex)
+        XCTAssertEqual(vm.selectedModel.provider, .codex)
+    }
+
+    @MainActor
+    func testSwitchProviderChangesModel() {
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
+        XCTAssertEqual(vm.selectedProvider, .claude)
+
+        vm.switchProvider(.codex)
+
+        XCTAssertEqual(vm.selectedProvider, .codex)
+        XCTAssertEqual(vm.selectedModel.provider, .codex)
+    }
+
+    @MainActor
+    func testSwitchToSameProviderNoOp() {
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
+        let originalModel = vm.selectedModel
+
+        vm.switchProvider(.claude)
+
+        XCTAssertEqual(vm.selectedModel, originalModel)
+    }
+
+    @MainActor
+    func testSwitchProviderBackAndForth() {
+        let vm = ChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
+
+        vm.switchProvider(.codex)
+        XCTAssertEqual(vm.selectedProvider, .codex)
+
+        vm.switchProvider(.claude)
+        XCTAssertEqual(vm.selectedProvider, .claude)
+        XCTAssertEqual(vm.selectedModel.provider, .claude)
+    }
+
+    @MainActor
+    func testCreateServiceForClaude() {
+        let service = ChatViewModel.createService(for: .claude)
+        XCTAssertTrue(service is ClaudeService)
+    }
+
+    @MainActor
+    func testCreateServiceForCodex() {
+        let service = ChatViewModel.createService(for: .codex)
+        XCTAssertTrue(service is CodexService)
     }
 }
 

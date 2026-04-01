@@ -81,7 +81,7 @@ final class OnboardingChatViewModel {
 
     private static let readyMarker = "[READY]"
     private var sessionID: String?
-    private let claudeService: any ClaudeServiceProtocol
+    private let claudeService: any AIServiceProtocol
     private var dbManager: DatabaseManager?
     private var streamTask: Task<Void, Never>?
     private var chatCompleted = false
@@ -89,7 +89,7 @@ final class OnboardingChatViewModel {
     /// The UI language selected during onboarding settings step.
     let language: String
 
-    init(claudeService: any ClaudeServiceProtocol, language: String = "English", dbManager: DatabaseManager? = nil) {
+    init(claudeService: any AIServiceProtocol, language: String = "English", dbManager: DatabaseManager? = nil) {
         self.claudeService = claudeService
         self.language = language
         self.dbManager = dbManager

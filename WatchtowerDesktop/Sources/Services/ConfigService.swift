@@ -18,7 +18,9 @@ final class ConfigService {
     var aiWorkers: Int?
     var analysisLegacyMode: Bool = false
     var briefingHour: Int = 8
+    var aiProvider: String?
     var claudePath: String?
+    var codexPath: String?
     var parseError: String?
 
     private let configPath: String
@@ -68,9 +70,11 @@ final class ConfigService {
             if let ai = yaml["ai"] as? [String: Any] {
                 aiModel = ai["model"] as? String
                 aiWorkers = ai["workers"] as? Int
+                aiProvider = ai["provider"] as? String
             }
 
             claudePath = yaml["claude_path"] as? String
+            codexPath = yaml["codex_path"] as? String
 
             parseError = nil
         } catch {
@@ -108,10 +112,14 @@ final class ConfigService {
         var ai = (yaml["ai"] as? [String: Any]) ?? [:]
         if let val = aiModel, !val.isEmpty { ai["model"] = val } else { ai.removeValue(forKey: "model") }
         if let val = aiWorkers { ai["workers"] = val } else { ai.removeValue(forKey: "workers") }
+        if let val = aiProvider, !val.isEmpty { ai["provider"] = val } else { ai.removeValue(forKey: "provider") }
         if !ai.isEmpty { yaml["ai"] = ai } else { yaml.removeValue(forKey: "ai") }
 
         // Claude path override
         if let val = claudePath, !val.isEmpty { yaml["claude_path"] = val } else { yaml.removeValue(forKey: "claude_path") }
+
+        // Codex path override
+        if let val = codexPath, !val.isEmpty { yaml["codex_path"] = val } else { yaml.removeValue(forKey: "codex_path") }
 
         let output = try Yams.dump(object: yaml, allowUnicode: true)
 

@@ -45,6 +45,7 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -126,7 +127,7 @@ func runCatchup(cmd *cobra.Command, args []string) error {
 	userMessage := ai.AssembleUserMessage(question, timeHints)
 
 	// Create AI client and query
-	aiClient := ai.NewClient(cfg.AI.Model, dbPath, cfg.ClaudePath)
+	aiClient := newAIClient(cfg, dbPath)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

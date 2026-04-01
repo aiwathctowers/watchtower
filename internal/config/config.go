@@ -21,7 +21,8 @@ type WorkspaceConfig struct {
 type AIConfig struct {
 	Model         string `mapstructure:"model"`
 	ContextBudget int    `mapstructure:"context_budget"`
-	Workers       int    `mapstructure:"workers"` // max parallel LLM calls across all pipelines
+	Workers       int    `mapstructure:"workers"`  // max parallel LLM calls across all pipelines
+	Provider      string `mapstructure:"provider"` // "claude" (default) | "codex"
 }
 
 type SyncConfig struct {
@@ -76,6 +77,7 @@ type Config struct {
 	Tracks          TracksConfig                `mapstructure:"tracks"`
 	Analysis        AnalysisConfig              `mapstructure:"analysis"`
 	ClaudePath      string                      `mapstructure:"claude_path"`
+	CodexPath       string                      `mapstructure:"codex_path"`
 }
 
 // Load reads config from the given path, binds env vars, and returns the config.
@@ -84,6 +86,7 @@ func Load(configPath string) (*Config, error) {
 
 	// Defaults
 	v.SetDefault("active_workspace", DefaultActiveWorkspace)
+	v.SetDefault("ai.provider", DefaultAIProvider)
 	v.SetDefault("ai.model", DefaultAIModel)
 	v.SetDefault("ai.context_budget", DefaultAIContextBudget)
 	v.SetDefault("ai.workers", DefaultAIWorkers)

@@ -201,13 +201,24 @@ struct GeneralSettings: View {
 
     private var aiSection: some View {
         Section("AI") {
+            Picker(
+                "AI Provider",
+                selection: Binding(
+                    get: { config.aiProvider ?? "claude" },
+                    set: { config.aiProvider = $0 }
+                )
+            ) {
+                Text("Claude").tag("claude")
+                Text("Codex").tag("codex")
+            }
+
             TextField(
                 "Model",
                 text: Binding(
                     get: { config.aiModel ?? "" },
                     set: { config.aiModel = $0.isEmpty ? nil : $0 }
                 ),
-                prompt: Text("claude-sonnet-4-6")
+                prompt: Text(config.aiProvider == "codex" ? "gpt-5.4" : "claude-sonnet-4-6")
             )
 
             TextField(
@@ -242,6 +253,30 @@ struct GeneralSettings: View {
                 }
             }
             .help("Override auto-detection. Run 'which claude' in terminal to find the path.")
+
+            if config.aiProvider == "codex" {
+                HStack {
+                    TextField(
+                        "Codex CLI Path",
+                        text: Binding(
+                            get: { config.codexPath ?? "" },
+                            set: { config.codexPath = $0.isEmpty ? nil : $0 }
+                        ),
+                        prompt: Text("auto-detect")
+                    )
+
+                    if let path = Constants.findCodexPath() {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .help("Found: \(path)")
+                    } else {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .help("Codex CLI not found")
+                    }
+                }
+                .help("Override auto-detection. Run 'which codex' in terminal to find the path.")
+            }
 
             HStack {
                 Button {

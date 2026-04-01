@@ -7,7 +7,7 @@ enum StreamEvent {
     case done
 }
 
-protocol ClaudeServiceProtocol: Sendable {
+protocol AIServiceProtocol: Sendable {
     func stream(
         prompt: String,
         systemPrompt: String?,
@@ -18,7 +18,7 @@ protocol ClaudeServiceProtocol: Sendable {
     ) -> AsyncThrowingStream<StreamEvent, Error>
 }
 
-extension ClaudeServiceProtocol {
+extension AIServiceProtocol {
     func stream(
         prompt: String,
         systemPrompt: String?,
@@ -88,7 +88,7 @@ private final class ProcessHandle: @unchecked Sendable {
     }
 }
 
-final class ClaudeService: ClaudeServiceProtocol, Sendable {
+final class ClaudeService: AIServiceProtocol, Sendable {
     private let model: String
 
     init(model: String = "claude-sonnet-4-6") {

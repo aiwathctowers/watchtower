@@ -184,6 +184,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 
 	// --stop only needs workspace validation (no Slack token).
 	if syncFlagStop {
