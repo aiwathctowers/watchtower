@@ -97,12 +97,9 @@ type Pipeline struct {
 	LastStepDurationSeconds float64
 	LastStepInputTokens     int
 	LastStepOutputTokens    int
-	LastStepCostUSD         float64
-
-	totalInputTokens  atomic.Int64
-	totalOutputTokens atomic.Int64
-	totalCostMicro    atomic.Int64
-	totalAPITokens    atomic.Int64
+	totalInputTokens        atomic.Int64
+	totalOutputTokens       atomic.Int64
+	totalAPITokens          atomic.Int64
 
 	channelNames map[string]string
 	userNames    map[string]string
@@ -126,7 +123,7 @@ func (p *Pipeline) SetPromptStore(store *prompts.Store) {
 
 // AccumulatedUsage returns the total token usage accumulated across all Generate calls.
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
-	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
+	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), 0, int(p.totalAPITokens.Load())
 }
 
 // Run executes the people card pipeline for the current 7-day window.
@@ -134,7 +131,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, error) {
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
 	p.totalInputTokens.Store(0)
 	p.totalOutputTokens.Store(0)
-	p.totalCostMicro.Store(0)
 	p.totalAPITokens.Store(0)
 
 	if !p.cfg.Digest.Enabled {
@@ -271,7 +267,6 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 			if usage != nil && len(batch) > 0 {
 				inTokPer = usage.InputTokens / len(batch)
 				outTokPer = usage.OutputTokens / len(batch)
-				costPer = usage.CostUSD / float64(len(batch))
 			}
 
 			for _, entry := range batch {
@@ -294,7 +289,7 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 				p.LastStepDurationSeconds = batchDuration / float64(len(batch))
 				p.LastStepInputTokens = inTokPer
 				p.LastStepOutputTokens = outTokPer
-				p.LastStepCostUSD = costPer
+
 				newVal := int(completed.Add(1))
 				p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (batch)", p.userName(entry.stats.UserID)))
 			}
@@ -351,7 +346,6 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 			if usage != nil && len(batch) > 0 {
 				inTokPer = usage.InputTokens / len(batch)
 				outTokPer = usage.OutputTokens / len(batch)
-				costPer = usage.CostUSD / float64(len(batch))
 			}
 
 			for _, entry := range batch {
@@ -373,7 +367,7 @@ func (p *Pipeline) RunForWindow(ctx context.Context, from, to float64) (int, err
 				p.LastStepDurationSeconds = batchDuration / float64(len(batch))
 				p.LastStepInputTokens = inTokPer
 				p.LastStepOutputTokens = outTokPer
-				p.LastStepCostUSD = costPer
+
 				newVal := int(completed.Add(1))
 				p.progress(newVal, totalUsers, fmt.Sprintf("@%s done (batch)", p.userName(entry.stats.UserID)))
 			}
@@ -450,11 +444,10 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 	if usage != nil {
 		p.totalInputTokens.Add(int64(usage.InputTokens))
 		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+
 		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 		p.LastStepInputTokens += usage.InputTokens
 		p.LastStepOutputTokens += usage.OutputTokens
-		p.LastStepCostUSD += usage.CostUSD
 	}
 
 	result, err := parsePeopleCardResult(raw)
@@ -496,7 +489,7 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 		card.Model = usage.Model
 		card.InputTokens = usage.InputTokens
 		card.OutputTokens = usage.OutputTokens
-		card.CostUSD = usage.CostUSD
+		card.CostUSD = 0
 	}
 
 	_, err = p.db.UpsertPeopleCard(card)
@@ -607,7 +600,7 @@ func (p *Pipeline) generateBatchCards(ctx context.Context, entries []batchUserEn
 	if usage != nil {
 		p.totalInputTokens.Add(int64(usage.InputTokens))
 		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+
 		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 	}
 
@@ -715,11 +708,10 @@ func (p *Pipeline) generateTeamSummary(ctx context.Context, from, to float64) er
 	if usage != nil {
 		p.totalInputTokens.Add(int64(usage.InputTokens))
 		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
+
 		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 		p.LastStepInputTokens += usage.InputTokens
 		p.LastStepOutputTokens += usage.OutputTokens
-		p.LastStepCostUSD += usage.CostUSD
 	}
 
 	result, err := parseTeamSummaryResult(raw)
@@ -742,7 +734,7 @@ func (p *Pipeline) generateTeamSummary(ctx context.Context, from, to float64) er
 		s.Model = usage.Model
 		s.InputTokens = usage.InputTokens
 		s.OutputTokens = usage.OutputTokens
-		s.CostUSD = usage.CostUSD
+		s.CostUSD = 0
 	}
 
 	return p.db.UpsertPeopleCardSummary(s)

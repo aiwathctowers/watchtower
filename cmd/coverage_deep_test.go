@@ -503,7 +503,7 @@ func TestRunDigestStats_AllTimeCost(t *testing.T) {
 
 	output := buf.String()
 	assert.Contains(t, output, "All time")
-	assert.Contains(t, output, "0.0100")
+	assert.Contains(t, output, "1 digests")
 }
 
 // --- printDigest with channel lookup miss ---

@@ -140,12 +140,9 @@ type Pipeline struct {
 	LastStepDurationSeconds float64
 	LastStepInputTokens     int
 	LastStepOutputTokens    int
-	LastStepCostUSD         float64
-
 	// Accumulated usage across all AI calls.
 	totalInputTokens  int
 	totalOutputTokens int
-	totalCostMicro    int64 // cost in micro-USD for precision
 	totalAPITokens    int
 }
 
@@ -166,7 +163,7 @@ func (p *Pipeline) SetPromptStore(store *prompts.Store) {
 
 // AccumulatedUsage returns the total token usage accumulated across all Generate calls.
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
-	return p.totalInputTokens, p.totalOutputTokens, float64(p.totalCostMicro) / 1e6, p.totalAPITokens
+	return p.totalInputTokens, p.totalOutputTokens, 0, p.totalAPITokens
 }
 
 // Run executes the inbox pipeline: detect new items, check for auto-resolve, then AI prioritize.
@@ -175,7 +172,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
 	p.totalInputTokens = 0
 	p.totalOutputTokens = 0
-	p.totalCostMicro = 0
 	p.totalAPITokens = 0
 
 	if p.cfg != nil && !p.cfg.Inbox.Enabled {
@@ -357,8 +353,14 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	}
 
 	// Update last processed TS.
-	nowTS := float64(time.Now().Unix())
-	if err := p.db.SetInboxLastProcessedTS(nowTS); err != nil {
+	// Use a 30-minute buffer instead of wall-clock time to account for
+	// Slack search API indexing delays — messages may arrive in the DB
+	// with ts_unix values behind wall-clock time.
+	bufferTS := float64(time.Now().Add(-30 * time.Minute).Unix())
+	if bufferTS < lastTS {
+		bufferTS = lastTS // never go backwards
+	}
+	if err := p.db.SetInboxLastProcessedTS(bufferTS); err != nil {
 		p.logger.Printf("inbox: error updating last processed ts: %v", err)
 	}
 
@@ -526,11 +528,9 @@ func (p *Pipeline) aiPrioritizeNewItems(ctx context.Context, currentUserID strin
 		if usage != nil {
 			p.totalInputTokens += usage.InputTokens
 			p.totalOutputTokens += usage.OutputTokens
-			p.totalCostMicro += int64(usage.CostUSD * 1e6)
 			p.totalAPITokens += usage.TotalAPITokens
 			p.LastStepInputTokens = usage.InputTokens
 			p.LastStepOutputTokens = usage.OutputTokens
-			p.LastStepCostUSD = usage.CostUSD
 		}
 
 		p.LastStepDurationSeconds = time.Since(stepStart).Seconds()

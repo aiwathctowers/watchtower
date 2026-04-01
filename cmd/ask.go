@@ -46,6 +46,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -99,8 +100,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		model = askFlagModel
 	}
 
-	// Create AI client
-	aiClient := ai.NewClient(model, dbPath, cfg.ClaudePath)
+	// Create AI client — temporarily apply model override
+	origModel := cfg.AI.Model
+	cfg.AI.Model = model
+	aiClient := newAIClient(cfg, dbPath)
+	cfg.AI.Model = origModel
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -120,7 +124,7 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		}
 		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
 		if usage != nil {
-			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+			inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 		}
 		if runID > 0 {
 			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, cost, totalAPI, nil, nil, errMsg)

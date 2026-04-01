@@ -22,12 +22,13 @@ import (
 
 // Deps holds the shared dependencies for the REPL session.
 type Deps struct {
-	Config    *config.Config
-	DB        *db.DB
-	DBPath    string
-	Domain    string
-	TeamID    string
-	Workspace string
+	Config     *config.Config
+	DB         *db.DB
+	DBPath     string
+	Domain     string
+	TeamID     string
+	Workspace  string
+	AIProvider ai.Provider // optional; if nil, falls back to ai.NewClient
 }
 
 // REPL is a simple line-oriented read-eval-print loop. No alternate screen,
@@ -40,6 +41,15 @@ type REPL struct {
 	streaming    atomic.Bool
 	mu           sync.Mutex // protects streamCancel
 	streamCancel context.CancelFunc
+}
+
+// aiProvider returns the configured AI provider, falling back to ai.NewClient.
+func (r *REPL) aiProvider() ai.Provider {
+	if r.deps.AIProvider != nil {
+		return r.deps.AIProvider
+	}
+	cfg := r.deps.Config
+	return ai.NewClient(cfg.AI.Model, r.deps.DBPath, cfg.ClaudePath)
 }
 
 // setStreamCancel atomically sets the stream cancel function.
@@ -164,7 +174,7 @@ func (r *REPL) runAIQuery(question string) {
 		fmt.Print(dimStyle.Render("Thinking..."))
 	}
 
-	aiClient := ai.NewClient(cfg.AI.Model, r.deps.DBPath, cfg.ClaudePath)
+	aiClient := r.aiProvider()
 	textCh, errCh, sidCh := aiClient.Query(streamCtx, systemPrompt, userMessage, r.sessionID)
 
 	var fullResponse strings.Builder

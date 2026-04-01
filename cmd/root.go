@@ -17,6 +17,7 @@ var (
 	flagWorkspace string
 	flagConfig    string
 	flagVerbose   bool
+	flagProvider  string
 )
 
 var rootCmd = &cobra.Command{
@@ -41,6 +42,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagWorkspace, "workspace", "", "workspace name to use")
 	rootCmd.PersistentFlags().StringVar(&flagConfig, "config", defaultConfigPath(), "path to config file")
 	rootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "enable verbose output")
+	rootCmd.PersistentFlags().StringVar(&flagProvider, "provider", "", "AI provider to use (claude|codex)")
 }
 
 func defaultConfigPath() string {
@@ -59,6 +61,7 @@ func runREPL(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -84,12 +87,13 @@ func runREPL(cmd *cobra.Command, args []string) error {
 	}
 
 	deps := repl.Deps{
-		Config:    cfg,
-		DB:        database,
-		DBPath:    cfg.DBPath(),
-		Domain:    domain,
-		TeamID:    teamID,
-		Workspace: workspace,
+		Config:     cfg,
+		DB:         database,
+		DBPath:     cfg.DBPath(),
+		Domain:     domain,
+		TeamID:     teamID,
+		Workspace:  workspace,
+		AIProvider: newAIClient(cfg, cfg.DBPath()),
 	}
 
 	return repl.Run(deps)

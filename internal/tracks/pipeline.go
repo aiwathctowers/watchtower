@@ -83,8 +83,6 @@ type Pipeline struct {
 	LastStepDurationSeconds float64
 	LastStepInputTokens     int
 	LastStepOutputTokens    int
-	LastStepCostUSD         float64
-
 	// LastFrom/LastTo are set after Run() completes, for callers to pass to CompletePipelineRun.
 	LastFrom float64
 	LastTo   float64
@@ -92,7 +90,6 @@ type Pipeline struct {
 	// Accumulated token usage across all Generate calls (thread-safe).
 	totalInputTokens  atomic.Int64
 	totalOutputTokens atomic.Int64
-	totalCostMicro    atomic.Int64 // cost * 1e6 for atomic ops
 	totalAPITokens    atomic.Int64
 
 	// caches (populated once per Run)
@@ -122,7 +119,7 @@ func (p *Pipeline) SetPromptStore(store *prompts.Store) {
 // AccumulatedUsage returns the total token usage accumulated across all Generate calls.
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
 	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()),
-		float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
+		0, int(p.totalAPITokens.Load())
 }
 
 // DayWindow returns a 24h window ending at now.
@@ -172,7 +169,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
 	p.totalInputTokens.Store(0)
 	p.totalOutputTokens.Store(0)
-	p.totalCostMicro.Store(0)
 	p.totalAPITokens.Store(0)
 
 	if !p.cfg.Digest.Enabled {
@@ -512,7 +508,6 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 		p.LastStepDurationSeconds = 0
 		p.LastStepInputTokens = 0
 		p.LastStepOutputTokens = 0
-		p.LastStepCostUSD = 0
 		p.progress(i, len(batches), fmt.Sprintf("Batch %d/%d (%d channels, %d topics)", i+1, len(batches), len(batch), batchTopics))
 
 		stepStart := time.Now()
@@ -553,7 +548,6 @@ func (p *Pipeline) storeTrackItems(items []aiItem, userID, channelID, channelNam
 		model = usage.Model
 		inputTokens = usage.InputTokens / len(items)
 		outputTokens = usage.OutputTokens / len(items)
-		costUSD = usage.CostUSD / float64(len(items))
 	}
 
 	// Fallback related digest IDs for items without usable source_refs.
@@ -859,7 +853,6 @@ func (p *Pipeline) generateBatchTracks(ctx context.Context, entries []digestEntr
 	if usage != nil {
 		p.totalInputTokens.Add(int64(usage.InputTokens))
 		p.totalOutputTokens.Add(int64(usage.OutputTokens))
-		p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
 		p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 	}
 

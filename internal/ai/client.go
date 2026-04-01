@@ -15,11 +15,10 @@ import (
 	"watchtower/internal/claude"
 )
 
-// Usage holds token and cost metrics from an AI call.
+// Usage holds token metrics from an AI call.
 type Usage struct {
 	InputTokens    int
 	OutputTokens   int
-	CostUSD        float64
 	TotalAPITokens int
 }
 
@@ -254,7 +253,6 @@ func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessi
 	usage := &Usage{
 		InputTokens:    resp.Usage.InputTokens,
 		OutputTokens:   resp.Usage.OutputTokens,
-		CostUSD:        resp.CostUSD,
 		TotalAPITokens: totalAPI,
 	}
 

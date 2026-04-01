@@ -337,6 +337,7 @@ func openPromptStore() (*config.Config, *prompts.Store, func(), error) {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid config: %w", err)
 	}

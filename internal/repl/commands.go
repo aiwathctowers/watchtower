@@ -212,7 +212,7 @@ func (r *REPL) runCatchup() {
 		fmt.Print(dimStyle.Render("Thinking..."))
 	}
 
-	aiClient := ai.NewClient(cfg.AI.Model, r.deps.DBPath, cfg.ClaudePath)
+	aiClient := r.aiProvider()
 	textCh, errCh, _ := aiClient.Query(streamCtx, systemPrompt, userMessage, "")
 
 	var fullResponse strings.Builder

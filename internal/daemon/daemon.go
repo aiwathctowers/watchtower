@@ -199,7 +199,7 @@ func (d *Daemon) runSync(ctx context.Context) {
 			}
 			inTok, outTok, cost, totalAPI := d.inboxPipe.AccumulatedUsage()
 			if inTok > 0 || outTok > 0 {
-				d.logger.Printf("inbox: %d+%d tokens, $%.4f", inTok, outTok, cost)
+				d.logger.Printf("inbox: %d+%d tokens", inTok, outTok)
 			}
 			_ = d.db.CompletePipelineRun(inboxRunID, created+resolved, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
 		}
@@ -216,8 +216,8 @@ func (d *Daemon) runSync(ctx context.Context) {
 			d.logger.Printf("digest error: %v", err)
 		} else if n > 0 {
 			if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
-				d.logger.Printf("generated %d digest(s) (%d+%d tokens, $%.4f)",
-					n, usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+				d.logger.Printf("generated %d digest(s) (%d+%d tokens)",
+					n, usage.InputTokens, usage.OutputTokens)
 			} else {
 				d.logger.Printf("generated %d digest(s)", n)
 			}

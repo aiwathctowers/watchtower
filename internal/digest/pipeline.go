@@ -22,11 +22,11 @@ import (
 	"watchtower/internal/prompts"
 )
 
-// Usage holds token and cost metrics from an AI generation call.
+// Usage holds token metrics from an AI generation call.
 type Usage struct {
 	InputTokens    int     // Our prompt tokens (estimated from prompt size)
 	OutputTokens   int     // AI response tokens
-	CostUSD        float64 // Actual cost from CLI (includes all caching)
+	CostUSD        float64 // Deprecated: always 0. Kept for struct compatibility.
 	TotalAPITokens int     // Total tokens API processed (input + cache_read + cache_creation)
 	Model          string  // Actual model used for this call
 }
@@ -126,7 +126,6 @@ type Pipeline struct {
 	// accumulated usage across all Generate calls (atomic for concurrent workers)
 	totalInputTokens  atomic.Int64
 	totalOutputTokens atomic.Int64
-	totalCostMicro    atomic.Int64 // cost * 1e6 for atomic ops
 	totalAPITokens    atomic.Int64 // total API tokens (our content + CLI overhead)
 
 	// accumulated stats across all channel digests (atomic for concurrent workers)
@@ -144,7 +143,6 @@ type Pipeline struct {
 	LastStepDurationSeconds float64
 	LastStepInputTokens     int
 	LastStepOutputTokens    int
-	LastStepCostUSD         float64
 
 	// caches populated during a run
 	channelNames map[string]string
@@ -157,7 +155,7 @@ type Pipeline struct {
 // AccumulatedUsage returns the total token usage accumulated across all Generate calls.
 // Returns (inputTokens, outputTokens, costUSD, overheadTokens).
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
-	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), float64(p.totalCostMicro.Load()) / 1e6, int(p.totalAPITokens.Load())
+	return int(p.totalInputTokens.Load()), int(p.totalOutputTokens.Load()), 0, int(p.totalAPITokens.Load())
 }
 
 // AccumulatedStats returns (totalMessageCount, earliestPeriodFrom, latestPeriodTo)
@@ -172,7 +170,6 @@ func (p *Pipeline) accumulateUsage(usage *Usage) {
 	}
 	p.totalInputTokens.Add(int64(usage.InputTokens))
 	p.totalOutputTokens.Add(int64(usage.OutputTokens))
-	p.totalCostMicro.Add(int64(usage.CostUSD * 1e6))
 	p.totalAPITokens.Add(int64(usage.TotalAPITokens))
 }
 
@@ -250,7 +247,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, *Usage, error) {
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
 	p.totalInputTokens.Store(0)
 	p.totalOutputTokens.Store(0)
-	p.totalCostMicro.Store(0)
 	p.totalAPITokens.Store(0)
 
 	if !p.cfg.Digest.Enabled {
@@ -312,7 +308,6 @@ func (p *Pipeline) RunChannelDigestsOnly(ctx context.Context) (int, *Usage, erro
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
 	p.totalInputTokens.Store(0)
 	p.totalOutputTokens.Store(0)
-	p.totalCostMicro.Store(0)
 	p.totalAPITokens.Store(0)
 
 	if !p.cfg.Digest.Enabled {
@@ -355,7 +350,6 @@ func (p *Pipeline) runTrackLinker(ctx context.Context) {
 	p.LastStepMessageCount = 0
 	p.LastStepInputTokens = 0
 	p.LastStepOutputTokens = 0
-	p.LastStepCostUSD = 0
 	p.LastStepDurationSeconds = 0
 	p.lastStepMu.Unlock()
 
@@ -675,7 +669,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 		errCount    atomic.Int32
 		totalInput  atomic.Int64
 		totalOutput atomic.Int64
-		totalCostU  atomic.Int64 // cost * 1e6
 		lastErrMu   sync.Mutex
 		lastErr     error
 		wg          sync.WaitGroup
@@ -701,7 +694,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 					p.LastStepDurationSeconds = 0
 					p.LastStepInputTokens = 0
 					p.LastStepOutputTokens = 0
-					p.LastStepCostUSD = 0
 					if p.OnProgress != nil {
 						p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", e.channelName, len(e.msgs)))
 					}
@@ -754,15 +746,12 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 					if usage != nil {
 						p.LastStepInputTokens = usage.InputTokens
 						p.LastStepOutputTokens = usage.OutputTokens
-						p.LastStepCostUSD = usage.CostUSD
 						totalInput.Add(int64(usage.InputTokens))
 						totalOutput.Add(int64(usage.OutputTokens))
-						totalCostU.Add(int64(usage.CostUSD * 1e6))
 						p.accumulateUsage(usage)
 					} else {
 						p.LastStepInputTokens = 0
 						p.LastStepOutputTokens = 0
-						p.LastStepCostUSD = 0
 					}
 					done := int(completed.Add(1))
 					if p.OnProgress != nil {
@@ -770,8 +759,8 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 					}
 					p.lastStepMu.Unlock()
 					if usage != nil {
-						p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens, $%.4f)",
-							e.channelName, len(e.msgs), usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+						p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens)",
+							e.channelName, len(e.msgs), usage.InputTokens, usage.OutputTokens)
 					} else {
 						p.logger.Printf("digest: generated for #%s (%d messages)", e.channelName, len(e.msgs))
 					}
@@ -791,7 +780,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				p.LastStepDurationSeconds = 0
 				p.LastStepInputTokens = 0
 				p.LastStepOutputTokens = 0
-				p.LastStepCostUSD = 0
 				if p.OnProgress != nil {
 					c := int(completed.Load())
 					p.OnProgress(c, total, fmt.Sprintf("Batch (%d channels, %d msgs)...", len(batch), batchMsgCount))
@@ -858,7 +846,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				if usage != nil {
 					totalInput.Add(int64(usage.InputTokens))
 					totalOutput.Add(int64(usage.OutputTokens))
-					totalCostU.Add(int64(usage.CostUSD * 1e6))
 					p.accumulateUsage(usage)
 				}
 
@@ -872,7 +859,6 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				if usage != nil {
 					p.LastStepInputTokens = usage.InputTokens
 					p.LastStepOutputTokens = usage.OutputTokens
-					p.LastStepCostUSD = usage.CostUSD
 				}
 				if p.OnProgress != nil {
 					done := int(completed.Load())
@@ -892,7 +878,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 	totalUsage := &Usage{
 		InputTokens:    int(totalInput.Load()),
 		OutputTokens:   int(totalOutput.Load()),
-		CostUSD:        float64(totalCostU.Load()) / 1e6,
+		CostUSD:        0,
 		TotalAPITokens: accAPITokens,
 	}
 
@@ -1251,7 +1237,7 @@ func (p *Pipeline) storeDigest(channelID, digestType string, from, to float64, r
 		d.Model = usage.Model
 		d.InputTokens = usage.InputTokens
 		d.OutputTokens = usage.OutputTokens
-		d.CostUSD = usage.CostUSD
+		d.CostUSD = 0
 	}
 
 	digestID, err := p.db.UpsertDigest(d)

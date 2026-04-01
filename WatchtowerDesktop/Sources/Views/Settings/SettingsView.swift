@@ -201,13 +201,32 @@ struct GeneralSettings: View {
 
     private var aiSection: some View {
         Section("AI") {
+            Picker(
+                "AI Provider",
+                selection: Binding(
+                    get: { config.aiProvider ?? "claude" },
+                    set: { newProvider in
+                        let oldProvider = config.aiProvider ?? "claude"
+                        config.aiProvider = newProvider
+                        // Reset model when switching providers so it doesn't carry over
+                        if newProvider != oldProvider {
+                            config.aiModel = nil
+                            connectionTestResult = nil
+                        }
+                    }
+                )
+            ) {
+                Text("Claude").tag("claude")
+                Text("Codex").tag("codex")
+            }
+
             TextField(
                 "Model",
                 text: Binding(
                     get: { config.aiModel ?? "" },
                     set: { config.aiModel = $0.isEmpty ? nil : $0 }
                 ),
-                prompt: Text("claude-sonnet-4-6")
+                prompt: Text(config.aiProvider == "codex" ? "gpt-5.4" : "claude-sonnet-4-6")
             )
 
             TextField(
@@ -243,9 +262,33 @@ struct GeneralSettings: View {
             }
             .help("Override auto-detection. Run 'which claude' in terminal to find the path.")
 
+            if config.aiProvider == "codex" {
+                HStack {
+                    TextField(
+                        "Codex CLI Path",
+                        text: Binding(
+                            get: { config.codexPath ?? "" },
+                            set: { config.codexPath = $0.isEmpty ? nil : $0 }
+                        ),
+                        prompt: Text("auto-detect")
+                    )
+
+                    if let path = Constants.findCodexPath() {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .help("Found: \(path)")
+                    } else {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .help("Codex CLI not found")
+                    }
+                }
+                .help("Override auto-detection. Run 'which codex' in terminal to find the path.")
+            }
+
             HStack {
                 Button {
-                    testClaudeConnection()
+                    testConnection()
                 } label: {
                     HStack(spacing: 4) {
                         if connectionTestRunning {
@@ -538,9 +581,14 @@ struct GeneralSettings: View {
         return (process.terminationStatus, stdout, stderr)
     }
 
-    private func testClaudeConnection() {
-        guard let claudePath = Constants.findClaudePath() else {
-            connectionTestResult = "Claude CLI not found"
+    private func testConnection() {
+        let isCodex = (config.aiProvider ?? "claude") == "codex"
+        let cliPath: String? = isCodex ? Constants.findCodexPath() : Constants.findClaudePath()
+        let providerName = isCodex ? "Codex" : "Claude"
+        let defaultModel = isCodex ? "gpt-5.4" : "claude-sonnet-4-6"
+
+        guard let path = cliPath else {
+            connectionTestResult = "\(providerName) CLI not found"
             connectionTestSuccess = false
             return
         }
@@ -548,14 +596,18 @@ struct GeneralSettings: View {
         connectionTestRunning = true
         connectionTestResult = nil
 
-        let model = (config.aiModel ?? "").isEmpty ? "claude-sonnet-4-6" : (config.aiModel ?? "claude-sonnet-4-6")
+        let model = (config.aiModel ?? "").isEmpty ? defaultModel : (config.aiModel ?? defaultModel)
 
         Task.detached {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: claudePath)
-            process.arguments = ["-p", "respond with: OK", "--output-format", "text", "--model", model]
+            process.executableURL = URL(fileURLWithPath: path)
 
-            // Use shared resolved environment (caches login shell PATH)
+            if isCodex {
+                process.arguments = ["exec", "--model", model, "--json", "--skip-git-repo-check", "-c", "approval_policy=never", "respond with: OK"]
+            } else {
+                process.arguments = ["-p", "respond with: OK", "--output-format", "text", "--model", model]
+            }
+
             process.environment = Constants.resolvedEnvironment()
 
             let stdoutPipe = Pipe()

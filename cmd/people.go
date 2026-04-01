@@ -320,6 +320,7 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -359,7 +360,6 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 			Status           string  `json:"status,omitempty"`
 			InputTokens      int     `json:"input_tokens"`
 			OutputTokens     int     `json:"output_tokens"`
-			CostUSD          float64 `json:"cost_usd"`
 			Error            string  `json:"error,omitempty"`
 			Finished         bool    `json:"finished"`
 			ItemsFound       int     `json:"items_found"`
@@ -369,7 +369,6 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 			StepDurationSec  float64 `json:"step_duration_seconds,omitempty"`
 			StepInputTokens  int     `json:"step_input_tokens,omitempty"`
 			StepOutputTokens int     `json:"step_output_tokens,omitempty"`
-			StepCostUSD      float64 `json:"step_cost_usd,omitempty"`
 			TotalAPITokens   int     `json:"total_api_tokens,omitempty"`
 		}
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
@@ -377,8 +376,8 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 		runID, _ := database.CreatePipelineRun("people", "cli", "auto")
 
 		pipe.OnProgress = func(completed, total int, status string) {
-			inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
-			p := pj{Pipeline: "people", Done: completed, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+			inTok, outTok, _, totalAPI := pipe.AccumulatedUsage()
+			p := pj{Pipeline: "people", Done: completed, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI}
 			if pipe.LastStepMessageCount > 0 {
 				p.MessageCount = pipe.LastStepMessageCount
 				p.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
@@ -389,7 +388,6 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 			}
 			p.StepInputTokens = pipe.LastStepInputTokens
 			p.StepOutputTokens = pipe.LastStepOutputTokens
-			p.StepCostUSD = pipe.LastStepCostUSD
 			emit(p)
 
 			if runID > 0 && p.StepDurationSec > 0 {
@@ -402,16 +400,16 @@ func runPeopleGenerate(cmd *cobra.Command, args []string) error {
 				_ = database.InsertPipelineStep(db.PipelineStep{
 					RunID: runID, Step: completed, Total: total, Status: status,
 					InputTokens: p.StepInputTokens, OutputTokens: p.StepOutputTokens,
-					CostUSD: p.StepCostUSD, TotalAPITokens: totalAPI,
-					MessageCount: pipe.LastStepMessageCount,
-					PeriodFrom:   pFrom, PeriodTo: pTo,
+					TotalAPITokens: totalAPI,
+					MessageCount:   pipe.LastStepMessageCount,
+					PeriodFrom:     pFrom, PeriodTo: pTo,
 					DurationSeconds: p.StepDurationSec,
 				})
 			}
 		}
 		n, err := pipe.Run(cmd.Context())
 		inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
-		final := pj{Pipeline: "people", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+		final := pj{Pipeline: "people", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI}
 		if pipe.LastStepMessageCount > 0 {
 			final.MessageCount = pipe.LastStepMessageCount
 			final.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)

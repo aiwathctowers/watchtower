@@ -184,6 +184,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 
 	// --stop only needs workspace validation (no Slack token).
 	if syncFlagStop {
@@ -425,8 +426,8 @@ func runPostSyncPipelines(ctx context.Context, database *db.DB, cfg *config.Conf
 		digestSpinner.Stop(fmt.Sprintf("Digest error: %v", err))
 	} else if n > 0 {
 		if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
-			digestSpinner.Stop(fmt.Sprintf("Generated %d digest(s) (%d+%d tokens, $%.4f)",
-				n, usage.InputTokens, usage.OutputTokens, usage.CostUSD))
+			digestSpinner.Stop(fmt.Sprintf("Generated %d digest(s) (%d+%d tokens)",
+				n, usage.InputTokens, usage.OutputTokens))
 		} else {
 			digestSpinner.Stop(fmt.Sprintf("Generated %d digest(s)", n))
 		}

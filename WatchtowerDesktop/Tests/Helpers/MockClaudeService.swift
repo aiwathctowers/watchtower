@@ -1,7 +1,7 @@
 import Foundation
 @testable import WatchtowerDesktop
 
-final class MockClaudeService: ClaudeServiceProtocol, @unchecked Sendable {
+final class MockClaudeService: AIServiceProtocol, @unchecked Sendable {
     private let events: [StreamEvent]
     private let eventSequence: [[StreamEvent]]
     private let error: (any Error)?

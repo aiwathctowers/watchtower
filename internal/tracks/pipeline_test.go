@@ -176,12 +176,11 @@ func TestAccumulatedUsage(t *testing.T) {
 
 	pipe.totalInputTokens.Add(1000)
 	pipe.totalOutputTokens.Add(500)
-	pipe.totalCostMicro.Add(10000) // 0.01 USD
 	pipe.totalAPITokens.Add(8000)
 	in, out, cost, overhead = pipe.AccumulatedUsage()
 	assert.Equal(t, 1000, in)
 	assert.Equal(t, 500, out)
-	assert.InDelta(t, 0.01, cost, 0.0001)
+	assert.Equal(t, 0.0, cost) // cost always 0
 	assert.Equal(t, 8000, overhead)
 }
 

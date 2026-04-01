@@ -13,7 +13,7 @@ final class TrackChatViewModel {
 
     private var conversationID: Int64?
     private var sessionID: String?
-    private let claudeService: any ClaudeServiceProtocol
+    private let claudeService: any AIServiceProtocol
     private let dbManager: DatabaseManager
     private var track: Track
     private weak var viewModel: TracksViewModel?
@@ -24,7 +24,7 @@ final class TrackChatViewModel {
         track: Track,
         viewModel: TracksViewModel,
         dbManager: DatabaseManager,
-        claudeService: (any ClaudeServiceProtocol)? = nil
+        claudeService: (any AIServiceProtocol)? = nil
     ) {
         self.track = track
         self.viewModel = viewModel
@@ -145,7 +145,7 @@ final class TrackChatViewModel {
         track: Track,
         dbPool: DatabasePool,
         dbPath: String,
-        claudeService: any ClaudeServiceProtocol,
+        claudeService: any AIServiceProtocol,
         dbManager: DatabaseManager,
         conversationID: Int64?
     ) async {

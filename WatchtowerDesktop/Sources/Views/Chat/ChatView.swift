@@ -81,13 +81,25 @@ private struct ChatSplitView: View {
 
     private var chatToolbar: some View {
         HStack(spacing: 8) {
+            Picker("Provider", selection: Binding(
+                get: { chatVM.selectedProvider },
+                set: { chatVM.switchProvider($0) }
+            )) {
+                ForEach(AIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 100)
+            .disabled(chatVM.isStreaming)
+
             Picker("Model", selection: $chatVM.selectedModel) {
-                ForEach(ChatModel.allCases) { model in
+                ForEach(ChatModel.models(for: chatVM.selectedProvider)) { model in
                     Text(model.displayName).tag(model)
                 }
             }
             .pickerStyle(.menu)
-            .frame(width: 130)
+            .frame(width: 140)
             .disabled(chatVM.isStreaming)
 
             Button {

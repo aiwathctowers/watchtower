@@ -91,7 +91,6 @@ func TestQuerySync_Success(t *testing.T) {
 	require.NotNil(t, usage)
 	assert.Equal(t, 10, usage.InputTokens)
 	assert.Equal(t, 5, usage.OutputTokens)
-	assert.InDelta(t, 0.001, usage.CostUSD, 0.0001)
 }
 
 func TestQuerySync_TrimsTrailingNewlines(t *testing.T) {

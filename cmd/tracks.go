@@ -445,6 +445,7 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -475,14 +476,12 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 			Status           string  `json:"status,omitempty"`
 			InputTokens      int     `json:"input_tokens"`
 			OutputTokens     int     `json:"output_tokens"`
-			CostUSD          float64 `json:"cost_usd"`
 			Error            string  `json:"error,omitempty"`
 			Finished         bool    `json:"finished"`
 			ItemsFound       int     `json:"items_found"`
 			StepDurationSec  float64 `json:"step_duration_seconds,omitempty"`
 			StepInputTokens  int     `json:"step_input_tokens,omitempty"`
 			StepOutputTokens int     `json:"step_output_tokens,omitempty"`
-			StepCostUSD      float64 `json:"step_cost_usd,omitempty"`
 			TotalAPITokens   int     `json:"total_api_tokens,omitempty"`
 		}
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
@@ -490,14 +489,13 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 		runID, _ := database.CreatePipelineRun("tracks", "cli", "auto")
 
 		pipe.OnProgress = func(done, total int, status string) {
-			inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
-			p := pj{Pipeline: "tracks", Done: done, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+			inTok, outTok, _, totalAPI := pipe.AccumulatedUsage()
+			p := pj{Pipeline: "tracks", Done: done, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI}
 			if pipe.LastStepDurationSeconds > 0 {
 				p.StepDurationSec = pipe.LastStepDurationSeconds
 			}
 			p.StepInputTokens = pipe.LastStepInputTokens
 			p.StepOutputTokens = pipe.LastStepOutputTokens
-			p.StepCostUSD = pipe.LastStepCostUSD
 			emit(p)
 
 			// Log step to DB.
@@ -506,7 +504,7 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 					RunID: runID, Step: done, Total: total, Status: status,
 					InputTokens:     p.StepInputTokens,
 					OutputTokens:    p.StepOutputTokens,
-					CostUSD:         p.StepCostUSD,
+					CostUSD:         0,
 					TotalAPITokens:  totalAPI,
 					DurationSeconds: p.StepDurationSec,
 				})
@@ -518,9 +516,9 @@ func runTracksGenerate(cmd *cobra.Command, args []string) error {
 		errMsg := ""
 		if err != nil {
 			errMsg = err.Error()
-			emit(pj{Pipeline: "tracks", Finished: true, Error: errMsg, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI})
+			emit(pj{Pipeline: "tracks", Finished: true, Error: errMsg, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI})
 		} else {
-			emit(pj{Pipeline: "tracks", Finished: true, ItemsFound: created + updated, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI})
+			emit(pj{Pipeline: "tracks", Finished: true, ItemsFound: created + updated, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI})
 		}
 
 		if runID > 0 {

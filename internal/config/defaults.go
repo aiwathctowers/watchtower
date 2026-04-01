@@ -4,6 +4,7 @@ import "time"
 
 const (
 	DefaultActiveWorkspace    = ""
+	DefaultAIProvider         = "claude"
 	DefaultAIModel            = "claude-sonnet-4-6"
 	DefaultAIContextBudget    = 150000
 	DefaultAIWorkers          = 5

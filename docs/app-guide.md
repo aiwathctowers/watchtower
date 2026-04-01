@@ -104,9 +104,10 @@ Each task created from a source retains a link back to it. Click the source link
 **Daemon** — The background daemon automatically unsnoozes tasks whose snooze date has passed, moving them back to To Do.
 
 ### AI Chat
-Chat with Claude about your workspace. The bot can query your Slack database to answer questions about messages, activity, decisions, and people.
-- Model selector: switch between Sonnet, Haiku, and Opus
-- Multi-turn conversations with session memory
+Chat with AI about your workspace. The bot can query your Slack database to answer questions about messages, activity, decisions, and people.
+- Provider selector: switch between Claude and Codex (OpenAI). Switching provider resets the model to the provider's default and creates a new service instance.
+- Model selector: shows models for the selected provider. Claude: Sonnet 4.6, Haiku 4.5, Opus 4.6. Codex: GPT-5.4, GPT-5.4 Mini, GPT-5.3 Codex.
+- Multi-turn conversations with session memory (Claude only; Codex sessions are ephemeral)
 - Quick prompts: "What happened today?", "Any decisions?", "Summarize activity"
 - Chat history sidebar (toggle with button or Cmd+N for new chat)
 - Bot can generate Slack deep links to specific messages
@@ -178,7 +179,7 @@ Fine-tune AI prompts based on your feedback. Shows quality score, feedback stats
 
 ## Settings
 
-**General:** Sync interval, workers, history depth, digest model/language, briefing hour, Claude CLI path.
+**General:** Sync interval, workers, history depth, AI provider (Claude or Codex), digest model/language, briefing hour, Claude CLI path, Codex CLI path (shown when Codex provider is selected, with auto-detection indicator).
 **Profile:** Your role, team, manager, reports, peers, starred channels/people.
 **Notifications:** Decision alerts, daily summaries, quiet hours.
 **Daemon:** Start/stop the background sync daemon, view status.
@@ -204,3 +205,4 @@ Watchtower runs a daemon (`watchtower sync --detach`) that periodically syncs Sl
 - **Feedback loop** — Your thumbs up/down ratings and importance corrections improve AI quality over time through prompt tuning
 - **Starred items** — Star channels and people to prioritize them in analysis and filtering
 - **Muted channels** — Channels excluded from AI processing (digests, tracks, briefings). Use the Statistics tab to mute noisy or bot-heavy channels and reduce token costs
+- **Multi-provider AI** — Watchtower supports multiple AI providers: Claude (Anthropic) and Codex (OpenAI). Switch providers in chat toolbar or Settings. All pipelines (digests, tracks, people, briefings, inbox) respect the configured provider. CLI flag `--provider claude|codex` overrides per-command. Config field `ai.provider` sets the default

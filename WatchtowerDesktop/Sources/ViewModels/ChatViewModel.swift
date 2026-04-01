@@ -15,18 +15,58 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
+enum AIProvider: String, CaseIterable, Identifiable {
+    case claude
+    case codex
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        }
+    }
+}
+
 enum ChatModel: String, CaseIterable, Identifiable {
+    // Claude
     case sonnet = "claude-sonnet-4-6"
     case haiku = "claude-haiku-4-5-20251001"
     case opus = "claude-opus-4-6"
+    // Codex
+    case gpt54 = "gpt-5.4"
+    case gpt54mini = "gpt-5.4-mini"
+    case gpt53codex = "gpt-5.3-codex"
 
     var id: String { rawValue }
+
+    var provider: AIProvider {
+        switch self {
+        case .sonnet, .haiku, .opus: .claude
+        case .gpt54, .gpt54mini, .gpt53codex: .codex
+        }
+    }
 
     var displayName: String {
         switch self {
         case .sonnet: "Sonnet 4.6"
         case .haiku: "Haiku 4.5"
         case .opus: "Opus 4.6"
+        case .gpt54: "GPT-5.4"
+        case .gpt54mini: "GPT-5.4 Mini"
+        case .gpt53codex: "GPT-5.3 Codex"
+        }
+    }
+
+    static func models(for provider: AIProvider) -> [Self] {
+        allCases.filter { $0.provider == provider }
+    }
+
+    static func defaultModel(for provider: AIProvider) -> Self {
+        switch provider {
+        case .claude: .sonnet
+        case .codex: .gpt54
         }
     }
 }
@@ -38,11 +78,12 @@ final class ChatViewModel {
     var isStreaming = false
     var inputText = ""
     var errorMessage: String?
+    var selectedProvider: AIProvider = .claude
     var selectedModel: ChatModel = .sonnet
 
     private(set) var conversationID: Int64?
     private var sessionID: String?
-    private let claudeService: any ClaudeServiceProtocol
+    private var aiService: any AIServiceProtocol
     private let dbManager: DatabaseManager
     private var streamTask: Task<Void, Never>?
     private var observationTask: Task<Void, Never>?
@@ -50,9 +91,26 @@ final class ChatViewModel {
     /// Callback to notify history that title/session changed
     var onConversationUpdated: ((Int64, String?, String?) -> Void)?
 
-    init(claudeService: any ClaudeServiceProtocol, dbManager: DatabaseManager) {
-        self.claudeService = claudeService
+    init(aiService: any AIServiceProtocol, dbManager: DatabaseManager, provider: AIProvider = .claude) {
+        self.aiService = aiService
         self.dbManager = dbManager
+        self.selectedProvider = provider
+        self.selectedModel = ChatModel.defaultModel(for: provider)
+    }
+
+    func switchProvider(_ provider: AIProvider) {
+        guard provider != selectedProvider else { return }
+        cancelStream()
+        selectedProvider = provider
+        selectedModel = ChatModel.defaultModel(for: provider)
+        aiService = Self.createService(for: provider)
+    }
+
+    static func createService(for provider: AIProvider) -> any AIServiceProtocol {
+        switch provider {
+        case .claude: ClaudeService()
+        case .codex: CodexService()
+        }
     }
 
     func bind(to conversation: ChatConversation) {
@@ -93,7 +151,7 @@ final class ChatViewModel {
         let model = selectedModel.rawValue
         let capturedConvID = conversationID
         let capturedDBManager = dbManager
-        let capturedClaudeService = claudeService
+        let capturedAIService = aiService
 
         streamTask = Task { [weak self] in
             let systemPrompt: String? = currentSessionID == nil ? Self.buildSystemPrompt(dbPool: dbPool) : nil
@@ -101,7 +159,7 @@ final class ChatViewModel {
             var fullText = ""
             var newSessionID: String?
             do {
-                let stream = capturedClaudeService.stream(
+                let stream = capturedAIService.stream(
                     prompt: text,
                     systemPrompt: systemPrompt,
                     sessionID: currentSessionID,
@@ -428,7 +486,7 @@ final class ChatViewModel {
         and uses AI to generate insights: daily briefings, inbox, digests, tracks, and people analytics.
 
         TABS:
-        - AI Chat: chat with Claude about workspace data, multi-turn with session memory
+        - AI Chat: chat with AI about workspace data. Provider selector (Claude/Codex), model selector (filtered by provider). Claude: Sonnet/Haiku/Opus; Codex: GPT-5.4/GPT-5.4 Mini/GPT-5.3 Codex. Multi-turn with session memory (Claude only; Codex is ephemeral)
         - Briefings: personalized daily overview — needs attention, your day, what happened, team pulse, coaching
         - Inbox: messages awaiting your response — @mentions and DMs auto-detected after each sync, AI-prioritized (high/medium/low), auto-resolved when you reply. Statuses: pending, resolved, dismissed, snoozed. Actions: resolve, dismiss, snooze, create task, open in Slack
         - Tasks: personal action items with priority, ownership, due dates, sub-items. Sources: track, briefing, digest, inbox, manual, chat
@@ -441,8 +499,9 @@ final class ChatViewModel {
         - Usage: token consumption and costs by date, model, feature; live pipeline progress
         - Training: prompt editor, feedback stats, quality score, tuning controls
 
-        SETTINGS: sync interval, workers, history depth, digest model/language, briefing hour, Claude CLI path,
-        profile (role, team, manager, reports, peers), notifications, daemon control, logs, data management.
+        SETTINGS: sync interval, workers, history depth, AI provider (Claude/Codex), digest model/language, briefing hour,
+        Claude CLI path, Codex CLI path (when Codex selected), profile (role, team, manager, reports, peers),
+        notifications, daemon control, logs, data management.
 
         BACKGROUND PROCESSES: daemon syncs Slack periodically, then runs pipelines:
         inbox (detect + AI prioritize) → channel digests → tracks → rollup digests → people → briefing (automatic after each sync).
@@ -475,7 +534,7 @@ final class ChatViewModel {
         let model = selectedModel.rawValue
         let capturedConvID = conversationID
         let capturedDBManager = dbManager
-        let capturedClaudeService = claudeService
+        let capturedAIService = aiService
 
         streamTask = Task { [weak self] in
             let systemPrompt = Self.buildSystemPrompt(dbPool: dbPool)
@@ -483,7 +542,7 @@ final class ChatViewModel {
             var fullText = ""
             var newSessionID: String?
             do {
-                let stream = capturedClaudeService.stream(
+                let stream = capturedAIService.stream(
                     prompt: welcomePrompt,
                     systemPrompt: systemPrompt,
                     sessionID: nil,

@@ -101,7 +101,7 @@ func TestRunDigest_DailyDigest(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	_, err = database.UpsertDigest(db.Digest{
-		PeriodFrom:   now - 86400,
+		PeriodFrom:   now - 43200, // 12h ago — safely within 1-day filter window
 		PeriodTo:     now,
 		Type:         "daily",
 		Summary:      "Daily rollup: busy day across the org",

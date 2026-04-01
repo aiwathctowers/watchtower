@@ -58,8 +58,35 @@ enum Constants {
         return findInPath("claude")
     }
 
+    /// Read `codex_path` override from config.yaml (lightweight, no Yams dependency).
+    nonisolated static func codexPathFromConfig() -> String? {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              let str = String(data: data, encoding: .utf8) else { return nil }
+        for line in str.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("codex_path:") {
+                let value = trimmed.dropFirst("codex_path:".count)
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if !value.isEmpty && FileManager.default.isExecutableFile(atPath: value) {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Check if Codex CLI is available.
+    /// Priority: config override → search resolved PATH.
+    nonisolated static func findCodexPath() -> String? {
+        if let override = codexPathFromConfig() {
+            return override
+        }
+        return findInPath("codex")
+    }
+
     /// Search for a binary in the resolved user PATH, with well-known fallback directories.
-    nonisolated private static func findInPath(_ binary: String) -> String? {
+    nonisolated static func findInPath(_ binary: String) -> String? {
         let env = resolvedEnvironment()
         guard let pathValue = env["PATH"] else { return nil }
         for dir in pathValue.split(separator: ":") {

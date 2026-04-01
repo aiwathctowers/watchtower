@@ -80,14 +80,14 @@ type Pipeline struct {
 	// Accumulated usage from the last Run call.
 	lastInputTokens    int
 	lastOutputTokens   int
-	lastCostUSD        float64
+	lastCostUSD        float64 // Deprecated: always 0
 	lastTotalAPITokens int
 }
 
 // AccumulatedUsage returns the token usage from the last Run call.
 // Returns (inputTokens, outputTokens, costUSD, totalAPITokens).
 func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
-	return p.lastInputTokens, p.lastOutputTokens, p.lastCostUSD, p.lastTotalAPITokens
+	return p.lastInputTokens, p.lastOutputTokens, 0, p.lastTotalAPITokens
 }
 
 // New creates a new briefing pipeline.
@@ -212,16 +212,14 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	coachingJSON, _ := json.Marshal(result.Coaching)
 
 	var inTok, outTok, totalAPI int
-	var cost float64
 	if usage != nil {
 		inTok = usage.InputTokens
 		outTok = usage.OutputTokens
-		cost = usage.CostUSD
 		totalAPI = usage.TotalAPITokens
 	}
 	p.lastInputTokens = inTok
 	p.lastOutputTokens = outTok
-	p.lastCostUSD = cost
+	p.lastCostUSD = 0
 	p.lastTotalAPITokens = totalAPI
 
 	briefing := db.Briefing{
@@ -237,7 +235,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 		Model:         usage.Model,
 		InputTokens:   inTok,
 		OutputTokens:  outTok,
-		CostUSD:       cost,
+		CostUSD:       0,
 		PromptVersion: promptVersion,
 	}
 
@@ -246,8 +244,8 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 		return 0, fmt.Errorf("storing briefing: %w", err)
 	}
 
-	p.logger.Printf("briefing: generated (id=%d, %d+%d tokens, $%.4f)",
-		id, inTok, outTok, cost)
+	p.logger.Printf("briefing: generated (id=%d, %d+%d tokens)",
+		id, inTok, outTok)
 
 	return int(id), nil
 }

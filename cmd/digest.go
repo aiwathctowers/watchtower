@@ -281,6 +281,7 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -331,7 +332,6 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			Status           string  `json:"status,omitempty"`
 			InputTokens      int     `json:"input_tokens"`
 			OutputTokens     int     `json:"output_tokens"`
-			CostUSD          float64 `json:"cost_usd"`
 			Error            string  `json:"error,omitempty"`
 			Finished         bool    `json:"finished"`
 			ItemsFound       int     `json:"items_found"`
@@ -341,7 +341,6 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			StepDurationSec  float64 `json:"step_duration_seconds,omitempty"`
 			StepInputTokens  int     `json:"step_input_tokens,omitempty"`
 			StepOutputTokens int     `json:"step_output_tokens,omitempty"`
-			StepCostUSD      float64 `json:"step_cost_usd,omitempty"`
 			TotalAPITokens   int     `json:"total_api_tokens,omitempty"`
 		}
 		emit := func(p pj) { data, _ := json.Marshal(p); fmt.Fprintln(out, string(data)) }
@@ -349,8 +348,8 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 		runID, _ := database.CreatePipelineRun("digests", "cli", "auto")
 
 		pipe.OnProgress = func(done, total int, status string) {
-			inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
-			p := pj{Pipeline: "digest", Done: done, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+			inTok, outTok, _, totalAPI := pipe.AccumulatedUsage()
+			p := pj{Pipeline: "digest", Done: done, Total: total, Status: status, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI}
 			if pipe.LastStepMessageCount > 0 {
 				p.MessageCount = pipe.LastStepMessageCount
 				p.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
@@ -361,7 +360,6 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			}
 			p.StepInputTokens = pipe.LastStepInputTokens
 			p.StepOutputTokens = pipe.LastStepOutputTokens
-			p.StepCostUSD = pipe.LastStepCostUSD
 			emit(p)
 
 			// Log step to DB
@@ -375,7 +373,7 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 				_ = database.InsertPipelineStep(db.PipelineStep{
 					RunID: runID, Step: done, Total: total, Status: status,
 					InputTokens: p.StepInputTokens, OutputTokens: p.StepOutputTokens,
-					CostUSD: p.StepCostUSD, TotalAPITokens: totalAPI,
+					CostUSD: 0, TotalAPITokens: totalAPI,
 					MessageCount: pipe.LastStepMessageCount,
 					PeriodFrom:   pFrom, PeriodTo: pTo,
 					DurationSeconds: p.StepDurationSec,
@@ -399,8 +397,8 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			logger.Printf("auto-marked %d digests, %d tracks as read (based on Slack read state)", markDigests, markTracks)
 		}
 
-		inTok, outTok, cost, totalAPI := pipe.AccumulatedUsage()
-		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, CostUSD: cost, TotalAPITokens: totalAPI}
+		inTok, outTok, _, totalAPI := pipe.AccumulatedUsage()
+		final := pj{Pipeline: "digest", Finished: true, ItemsFound: n, InputTokens: inTok, OutputTokens: outTok, TotalAPITokens: totalAPI}
 		if pipe.LastStepMessageCount > 0 {
 			final.MessageCount = pipe.LastStepMessageCount
 			final.PeriodFrom = pipe.LastStepPeriodFrom.Format(time.RFC3339)
@@ -466,11 +464,10 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 	} else {
 		msg := fmt.Sprintf("Generated %d channel digest(s).", n)
 		if usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
-			msg = fmt.Sprintf("Generated %d channel digest(s). Tokens: %s in + %s out | $%.4f",
+			msg = fmt.Sprintf("Generated %d channel digest(s). Tokens: %s in + %s out",
 				n,
 				humanize.Comma(int64(usage.InputTokens)),
-				humanize.Comma(int64(usage.OutputTokens)),
-				usage.CostUSD)
+				humanize.Comma(int64(usage.OutputTokens)))
 		}
 		spinner.Stop(msg)
 		fmt.Fprintln(out, "Run 'watchtower digest' to view them.")
@@ -514,13 +511,12 @@ func runDigestStats(cmd *cobra.Command, args []string) error {
 		if stats.TotalDigests == 0 {
 			continue
 		}
-		fmt.Fprintf(out, "%-8s  %d digests | %s messages | %s in + %s out tokens | $%.4f\n",
+		fmt.Fprintf(out, "%-8s  %d digests | %s messages | %s in + %s out tokens\n",
 			dtype,
 			stats.TotalDigests,
 			humanize.Comma(int64(stats.TotalMessages)),
 			humanize.Comma(int64(stats.InputTokens)),
 			humanize.Comma(int64(stats.OutputTokens)),
-			stats.CostUSD,
 		)
 	}
 
@@ -535,13 +531,12 @@ func runDigestStats(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Fprintf(out, "\nTotal (%d days): %d digests | %s messages | %s in + %s out tokens | $%.4f\n",
+	fmt.Fprintf(out, "\nTotal (%d days): %d digests | %s messages | %s in + %s out tokens\n",
 		days,
 		total.TotalDigests,
 		humanize.Comma(int64(total.TotalMessages)),
 		humanize.Comma(int64(total.InputTokens)),
 		humanize.Comma(int64(total.OutputTokens)),
-		total.CostUSD,
 	)
 
 	// All-time stats
@@ -549,8 +544,8 @@ func runDigestStats(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("querying all-time stats: %w", err)
 	}
-	if allTime.CostUSD > 0 {
-		fmt.Fprintf(out, "All time: %d digests | $%.4f\n", allTime.TotalDigests, allTime.CostUSD)
+	if allTime.TotalDigests > 0 {
+		fmt.Fprintf(out, "All time: %d digests\n", allTime.TotalDigests)
 	}
 
 	return nil
@@ -564,6 +559,7 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
@@ -670,10 +666,9 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 	}
 
 	if usage != nil {
-		fmt.Fprintf(&buf, "---\nTokens: %s in + %s out | $%.4f\n",
+		fmt.Fprintf(&buf, "---\nTokens: %s in + %s out\n",
 			humanize.Comma(int64(usage.InputTokens)),
-			humanize.Comma(int64(usage.OutputTokens)),
-			usage.CostUSD)
+			humanize.Comma(int64(usage.OutputTokens)))
 	}
 
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))

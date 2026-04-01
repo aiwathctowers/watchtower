@@ -51,7 +51,10 @@ final class AppState {
     /// Ensures chat ViewModels exist (lazy init, called from ChatView).
     func ensureChatViewModels() {
         guard let db = databaseManager, chatViewModel == nil else { return }
-        let cvm = ChatViewModel(claudeService: ClaudeService(), dbManager: db)
+        let configProvider = ConfigService().aiProvider
+        let provider: AIProvider = configProvider == "codex" ? .codex : .claude
+        let service = ChatViewModel.createService(for: provider)
+        let cvm = ChatViewModel(aiService: service, dbManager: db, provider: provider)
         let hvm = ChatHistoryViewModel(dbManager: db)
         hvm.load { [weak self, weak cvm, weak hvm] in
             self?.maybeCreateWelcomeChat(chatVM: cvm, historyVM: hvm)

@@ -103,6 +103,7 @@ func openDBFromConfig() (*db.DB, error) {
 	if flagWorkspace != "" {
 		cfg.ActiveWorkspace = flagWorkspace
 	}
+	applyProviderOverride(cfg)
 	if err := cfg.ValidateWorkspace(); err != nil {
 		return nil, err
 	}
