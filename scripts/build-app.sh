@@ -49,8 +49,10 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 OAUTH_ID="${WATCHTOWER_OAUTH_CLIENT_ID:-}"
 OAUTH_SECRET="${WATCHTOWER_OAUTH_CLIENT_SECRET:-}"
+GOOGLE_ID="${WATCHTOWER_GOOGLE_CLIENT_ID:-}"
+GOOGLE_SECRET="${WATCHTOWER_GOOGLE_CLIENT_SECRET:-}"
 GOARCH=arm64 CGO_ENABLED=0 go build \
-    -ldflags="-s -w -X watchtower/cmd.Version=${VERSION} -X watchtower/cmd.Commit=${COMMIT} -X watchtower/cmd.BuildDate=${BUILD_DATE} -X watchtower/internal/auth.DefaultClientID=${OAUTH_ID} -X watchtower/internal/auth.DefaultClientSecret=${OAUTH_SECRET}" \
+    -ldflags="-s -w -X watchtower/cmd.Version=${VERSION} -X watchtower/cmd.Commit=${COMMIT} -X watchtower/cmd.BuildDate=${BUILD_DATE} -X watchtower/internal/auth.DefaultClientID=${OAUTH_ID} -X watchtower/internal/auth.DefaultClientSecret=${OAUTH_SECRET} -X watchtower/internal/calendar.DefaultGoogleClientID=${GOOGLE_ID} -X watchtower/internal/calendar.DefaultGoogleClientSecret=${GOOGLE_SECRET}" \
     -o "$BUILD_DIR/watchtower" .
 echo "    Go CLI built ($(du -h "$BUILD_DIR/watchtower" | cut -f1))"
 

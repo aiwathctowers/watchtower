@@ -134,6 +134,11 @@ func (cb *ContextBuilder) Build(query ParsedQuery) (string, error) {
 		sections = append(sections, broad)
 	}
 
+	// 5. Calendar context — upcoming events (best effort)
+	if calendarCtx := cb.buildCalendarContext(); calendarCtx != "" {
+		sections = append(sections, calendarCtx)
+	}
+
 	return strings.Join(sections, "\n\n"), nil
 }
 
@@ -491,6 +496,43 @@ func (cb *ContextBuilder) buildBroadContext(query ParsedQuery, budget int) (stri
 		return "", nil
 	}
 	return result, nil
+}
+
+// buildCalendarContext adds upcoming calendar events to the chat context.
+func (cb *ContextBuilder) buildCalendarContext() string {
+	now := time.Now().UTC()
+	toTime := now.Add(48 * time.Hour)
+	events, err := cb.db.GetCalendarEvents(db.CalendarEventFilter{
+		FromTime: now.Format(time.RFC3339),
+		ToTime:   toTime.Format(time.RFC3339),
+	})
+	if err != nil || len(events) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("=== UPCOMING CALENDAR ===\n")
+	for _, e := range events {
+		start, _ := time.Parse(time.RFC3339, e.StartTime)
+		end, _ := time.Parse(time.RFC3339, e.EndTime)
+		start = start.Local()
+		end = end.Local()
+
+		var timeStr string
+		if e.IsAllDay {
+			timeStr = start.Format("Mon Jan 2") + " (all day)"
+		} else {
+			timeStr = start.Format("Mon 15:04") + "-" + end.Format("15:04")
+		}
+
+		line := fmt.Sprintf("- %s: %s", timeStr, e.Title)
+		if e.Location != "" {
+			line += " @ " + e.Location
+		}
+		line += "\n"
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 // formatChannelMessagesDedup formats recent messages from a channel, tracking and skipping duplicates.

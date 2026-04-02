@@ -646,3 +646,44 @@ CREATE TABLE IF NOT EXISTS pipeline_steps (
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_steps_run ON pipeline_steps(run_id);
+
+-- Google Calendar calendars
+CREATE TABLE IF NOT EXISTS calendar_calendars (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    is_primary  INTEGER NOT NULL DEFAULT 0,
+    is_selected INTEGER NOT NULL DEFAULT 1,
+    color       TEXT NOT NULL DEFAULT '',
+    synced_at   TEXT NOT NULL DEFAULT ''
+);
+
+-- Calendar events (synced from Google Calendar)
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id              TEXT PRIMARY KEY,
+    calendar_id     TEXT NOT NULL REFERENCES calendar_calendars(id),
+    title           TEXT NOT NULL DEFAULT '',
+    description     TEXT NOT NULL DEFAULT '',
+    location        TEXT NOT NULL DEFAULT '',
+    start_time      TEXT NOT NULL,           -- ISO8601
+    end_time        TEXT NOT NULL,           -- ISO8601
+    organizer_email TEXT NOT NULL DEFAULT '',
+    attendees       TEXT NOT NULL DEFAULT '[]',  -- JSON array
+    is_recurring    INTEGER NOT NULL DEFAULT 0,
+    is_all_day      INTEGER NOT NULL DEFAULT 0,
+    event_status    TEXT NOT NULL DEFAULT 'confirmed',
+    event_type      TEXT NOT NULL DEFAULT '',
+    html_link       TEXT NOT NULL DEFAULT '',
+    raw_json        TEXT NOT NULL DEFAULT '{}',
+    synced_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_calendar ON calendar_events(calendar_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_time);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_time);
+
+-- Calendar attendee email to Slack user_id mapping cache
+CREATE TABLE IF NOT EXISTS calendar_attendee_map (
+    email          TEXT PRIMARY KEY,
+    slack_user_id  TEXT NOT NULL DEFAULT '',
+    resolved_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);

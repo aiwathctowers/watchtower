@@ -30,6 +30,7 @@ const (
 	TracksExtractBatch = "tracks.extract_batch"
 	PeopleBatch        = "people.batch"
 	TasksGenerate      = "tasks.generate"
+	MeetingPrep        = "meeting.prep"
 )
 
 // Store loads, caches, and persists prompt templates.

@@ -6,11 +6,13 @@ struct BriefingDetailView: View {
     @State private var showCreateTask = false
     @State private var taskPrefillText = ""
     @State private var taskPrefillIntent = ""
+    @State private var calendarEvents: [CalendarEvent] = []
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                calendarSection
                 attentionSection
                 yourDaySection
                 whatHappenedSection
@@ -27,6 +29,31 @@ struct BriefingDetailView: View {
                 prefillSourceID: String(briefing.id)
             )
         }
+        .onAppear { loadCalendarEvents() }
+    }
+
+    // MARK: - Calendar
+
+    @ViewBuilder
+    private var calendarSection: some View {
+        if !calendarEvents.isEmpty {
+            sectionView(
+                title: "Today's Schedule",
+                icon: "calendar",
+                iconColor: .blue
+            ) {
+                ForEach(calendarEvents) { event in
+                    CalendarEventRow(event: event)
+                }
+            }
+        }
+    }
+
+    private func loadCalendarEvents() {
+        guard let db = appState.databaseManager else { return }
+        calendarEvents = (try? db.dbPool.read { db in
+            try CalendarQueries.fetchTodayEvents(db)
+        }) ?? []
     }
 
     // MARK: - Header

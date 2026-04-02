@@ -491,6 +491,44 @@ enum TestDatabase {
     CREATE INDEX IF NOT EXISTS idx_inbox_sender ON inbox_items(sender_user_id);
     CREATE INDEX IF NOT EXISTS idx_inbox_snooze ON inbox_items(snooze_until);
 
+    CREATE TABLE IF NOT EXISTS calendar_calendars (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        is_primary  INTEGER NOT NULL DEFAULT 0,
+        is_selected INTEGER NOT NULL DEFAULT 1,
+        color       TEXT NOT NULL DEFAULT '',
+        synced_at   TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS calendar_events (
+        id              TEXT PRIMARY KEY,
+        calendar_id     TEXT NOT NULL REFERENCES calendar_calendars(id),
+        title           TEXT NOT NULL DEFAULT '',
+        description     TEXT NOT NULL DEFAULT '',
+        location        TEXT NOT NULL DEFAULT '',
+        start_time      TEXT NOT NULL,
+        end_time        TEXT NOT NULL,
+        organizer_email TEXT NOT NULL DEFAULT '',
+        attendees       TEXT NOT NULL DEFAULT '[]',
+        is_recurring    INTEGER NOT NULL DEFAULT 0,
+        is_all_day      INTEGER NOT NULL DEFAULT 0,
+        event_status    TEXT NOT NULL DEFAULT 'confirmed',
+        event_type      TEXT NOT NULL DEFAULT '',
+        html_link       TEXT NOT NULL DEFAULT '',
+        raw_json        TEXT NOT NULL DEFAULT '{}',
+        synced_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at      TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_calendar ON calendar_events(calendar_id);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_time);
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_time);
+
+    CREATE TABLE IF NOT EXISTS calendar_attendee_map (
+        email          TEXT PRIMARY KEY,
+        slack_user_id  TEXT NOT NULL DEFAULT '',
+        resolved_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+
     CREATE TABLE IF NOT EXISTS feedback (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis', 'briefing', 'task', 'inbox')),
@@ -840,5 +878,50 @@ enum TestDatabase {
             """, arguments: [channelID, messageTS, threadTS, senderUserID,
                              triggerType, snippet, permalink, status, priority, aiReason,
                              resolvedReason, snoozeUntil, taskID, readAt])
+    }
+
+    // MARK: - Calendar Fixtures
+
+    static func ensureCalendar(
+        _ db: Database,
+        id: String = "primary",
+        name: String = "Primary",
+        isPrimary: Bool = true,
+        isSelected: Bool = true
+    ) throws {
+        try db.execute(sql: """
+            INSERT OR IGNORE INTO calendar_calendars (id, name, is_primary, is_selected)
+            VALUES (?, ?, ?, ?)
+            """, arguments: [id, name, isPrimary ? 1 : 0, isSelected ? 1 : 0])
+    }
+
+    static func insertCalendarEvent(
+        _ db: Database,
+        id: String = "evt_001",
+        calendarID: String = "primary",
+        title: String = "Team Standup",
+        description: String = "",
+        startTime: String = "2023-11-14T22:13:20Z",
+        endTime: String = "2023-11-14T23:13:20Z",
+        isAllDay: Bool = false,
+        location: String = "",
+        organizerEmail: String = "alice@example.com",
+        attendees: String = "[]",
+        isRecurring: Bool = false,
+        eventStatus: String = "confirmed",
+        eventType: String = "",
+        htmlLink: String = "",
+        updatedAt: String = ""
+    ) throws {
+        try ensureCalendar(db, id: calendarID)
+        try db.execute(sql: """
+            INSERT INTO calendar_events (id, calendar_id, title, description, location,
+                start_time, end_time, organizer_email, attendees, is_recurring,
+                is_all_day, event_status, event_type, html_link, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [id, calendarID, title, description, location,
+                             startTime, endTime, organizerEmail, attendees,
+                             isRecurring ? 1 : 0, isAllDay ? 1 : 0, eventStatus,
+                             eventType, htmlLink, updatedAt])
     }
 }

@@ -61,6 +61,13 @@ type TracksConfig struct {
 	MinMessages int `mapstructure:"min_messages"` // minimum visible messages for individual processing (default: 3)
 }
 
+// CalendarConfig holds Google Calendar integration settings.
+type CalendarConfig struct {
+	Enabled           bool     `mapstructure:"enabled"`            // enable calendar sync (default: false)
+	SelectedCalendars []string `mapstructure:"selected_calendars"` // specific calendar IDs to sync
+	SyncDaysAhead     int      `mapstructure:"sync_days_ahead"`    // days ahead to fetch (default: 2)
+}
+
 // AnalysisConfig holds settings for the people analysis pipeline.
 type AnalysisConfig struct {
 	LegacyMode bool `mapstructure:"legacy_mode"` // enable legacy people analytics (default: false)
@@ -75,6 +82,7 @@ type Config struct {
 	Briefing        BriefingConfig              `mapstructure:"briefing"`
 	Inbox           InboxConfig                 `mapstructure:"inbox"`
 	Tracks          TracksConfig                `mapstructure:"tracks"`
+	Calendar        CalendarConfig              `mapstructure:"calendar"`
 	Analysis        AnalysisConfig              `mapstructure:"analysis"`
 	ClaudePath      string                      `mapstructure:"claude_path"`
 	CodexPath       string                      `mapstructure:"codex_path"`
@@ -109,6 +117,8 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("inbox.max_items_per_run", DefaultInboxMaxItems)
 	v.SetDefault("inbox.initial_lookback_days", DefaultInboxLookbackDays)
 	v.SetDefault("tracks.min_messages", DefaultTracksMinMsgs)
+	v.SetDefault("calendar.enabled", DefaultCalendarEnabled)
+	v.SetDefault("calendar.sync_days_ahead", DefaultCalendarSyncDaysAhead)
 	// Config file
 	v.SetConfigFile(configPath)
 

@@ -33,4 +33,8 @@ const (
 	// Tiered batching thresholds (visible message count).
 	DefaultBatchHighActivityThreshold = 200 // >200 → individual batch (1 channel)
 	DefaultBatchLowActivityThreshold  = 30  // <30 → triple channel limit per batch
+
+	// Calendar defaults
+	DefaultCalendarEnabled       = false
+	DefaultCalendarSyncDaysAhead = 2
 )

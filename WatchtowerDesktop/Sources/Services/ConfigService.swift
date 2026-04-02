@@ -21,6 +21,8 @@ final class ConfigService {
     var aiProvider: String?
     var claudePath: String?
     var codexPath: String?
+    var calendarEnabled: Bool = false
+    var calendarSyncDaysAhead: Int = 2
     var parseError: String?
 
     private let configPath: String
@@ -76,6 +78,11 @@ final class ConfigService {
             claudePath = yaml["claude_path"] as? String
             codexPath = yaml["codex_path"] as? String
 
+            if let calendar = yaml["calendar"] as? [String: Any] {
+                calendarEnabled = (calendar["enabled"] as? Bool) ?? false
+                calendarSyncDaysAhead = (calendar["sync_days_ahead"] as? Int) ?? 7
+            }
+
             parseError = nil
         } catch {
             parseError = error.localizedDescription
@@ -114,6 +121,12 @@ final class ConfigService {
         if let val = aiWorkers { ai["workers"] = val } else { ai.removeValue(forKey: "workers") }
         if let val = aiProvider, !val.isEmpty { ai["provider"] = val } else { ai.removeValue(forKey: "provider") }
         if !ai.isEmpty { yaml["ai"] = ai } else { yaml.removeValue(forKey: "ai") }
+
+        // Calendar section
+        var calendarDict = (yaml["calendar"] as? [String: Any]) ?? [:]
+        calendarDict["enabled"] = calendarEnabled
+        calendarDict["sync_days_ahead"] = calendarSyncDaysAhead
+        yaml["calendar"] = calendarDict
 
         // Claude path override
         if let val = claudePath, !val.isEmpty { yaml["claude_path"] = val } else { yaml.removeValue(forKey: "claude_path") }

@@ -147,6 +147,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	tasksCtx, hasRealTasks := p.gatherTasks()
 	tracksCtx, hasRealTracks := p.gatherTracks()
 	inboxCtx, hasRealInbox := p.gatherInbox()
+	calendarCtx := p.gatherCalendar()
 	digestsCtx := p.gatherDigests(date)
 	dailyDigestCtx := p.gatherLatestDailyDigest()
 	peopleCardsCtx := p.gatherPeopleCards()
@@ -182,6 +183,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 		langDirective,
 		tasksCtx,
 		inboxCtx,
+		calendarCtx,
 		tracksCtx,
 		digestsCtx,
 		dailyDigestCtx,
@@ -507,6 +509,72 @@ func (p *Pipeline) gatherPeopleSummary() string {
 		return ""
 	}
 	return fmt.Sprintf("Team summary: %s\nAttention: %s\nTips: %s\n", s.Summary, s.Attention, s.Tips)
+}
+
+// gatherCalendar loads today's calendar events for the briefing.
+func (p *Pipeline) gatherCalendar() string {
+	today := time.Now().Local().Format("2006-01-02")
+	events, err := p.db.GetCalendarEventsForDate(today)
+	if err != nil || len(events) == 0 {
+		return ""
+	}
+
+	var buf strings.Builder
+	for _, e := range events {
+		buf.WriteString(formatCalendarEvent(e, p.db))
+	}
+	return buf.String()
+}
+
+// formatCalendarEvent formats a calendar event for the briefing prompt.
+func formatCalendarEvent(e db.CalendarEvent, database *db.DB) string {
+	start, _ := time.Parse(time.RFC3339, e.StartTime)
+	end, _ := time.Parse(time.RFC3339, e.EndTime)
+	start = start.Local()
+	end = end.Local()
+
+	var timeStr string
+	if e.IsAllDay {
+		timeStr = "All day"
+	} else {
+		timeStr = fmt.Sprintf("%s-%s", start.Format("15:04"), end.Format("15:04"))
+	}
+
+	var attendeeNames []string
+	var attendees []struct {
+		Email          string `json:"email"`
+		DisplayName    string `json:"display_name"`
+		ResponseStatus string `json:"response_status"`
+		SlackUserID    string `json:"slack_user_id"`
+	}
+	if err := json.Unmarshal([]byte(e.Attendees), &attendees); err == nil {
+		for _, a := range attendees {
+			name := a.DisplayName
+			if a.SlackUserID != "" {
+				if u, err := database.GetUserByID(a.SlackUserID); err == nil && u != nil {
+					displayName := u.DisplayName
+					if displayName == "" {
+						displayName = u.RealName
+					}
+					if displayName == "" {
+						displayName = u.Name
+					}
+					name = "@" + displayName
+				}
+			}
+			if name == "" {
+				name = a.Email
+			}
+			attendeeNames = append(attendeeNames, name)
+		}
+	}
+
+	line := fmt.Sprintf("- %s %q", timeStr, e.Title)
+	if len(attendeeNames) > 0 {
+		line += " — " + strings.Join(attendeeNames, ", ")
+	}
+	line += "\n"
+	return line
 }
 
 func formatUserProfile(profile *db.UserProfile) string {

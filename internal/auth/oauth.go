@@ -69,7 +69,7 @@ var exchangeToken = func(ctx context.Context, clientID, clientSecret, code, redi
 // openBrowserFunc can be replaced in tests to avoid opening a real browser.
 var (
 	openBrowserMu   sync.Mutex
-	openBrowserFunc = openBrowser
+	openBrowserFunc = OpenBrowser
 )
 
 func getOpenBrowserFunc() func(string) {
@@ -111,7 +111,7 @@ type PrepareResult struct {
 // The desktop app uses a custom scheme (e.g. watchtower-auth://callback) so that
 // ASWebAuthenticationSession can intercept the redirect automatically.
 func Prepare(cfg OAuthConfig, customRedirectURI string) (*PrepareResult, error) {
-	state, err := randomState()
+	state, err := RandomState()
 	if err != nil {
 		return nil, fmt.Errorf("generating state: %w", err)
 	}
@@ -194,7 +194,7 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 	}
 
 	// Find an available port
-	listener, err := listenLocalTLS(tlsCert)
+	listener, err := ListenLocalTLS(tlsCert)
 	if err != nil {
 		return nil, fmt.Errorf("starting local server: %w", err)
 	}
@@ -202,10 +202,10 @@ func Login(ctx context.Context, cfg OAuthConfig, out io.Writer, opts ...LoginOpt
 
 	// Extract port from the underlying TCP listener address
 	addr := listener.Addr().String()
-	redirectURI := fmt.Sprintf("https://127.0.0.1:%s%s", portFromAddr(addr), callbackPath)
+	redirectURI := fmt.Sprintf("https://127.0.0.1:%s%s", PortFromAddr(addr), callbackPath)
 
 	// Generate random state
-	state, err := randomState()
+	state, err := RandomState()
 	if err != nil {
 		return nil, fmt.Errorf("generating state: %w", err)
 	}
@@ -386,8 +386,8 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	}, nil
 }
 
-// listenLocalTLS tries preferred ports with TLS, then falls back to a random port.
-func listenLocalTLS(cert tls.Certificate) (net.Listener, error) {
+// ListenLocalTLS tries preferred ports with TLS, then falls back to a random port.
+func ListenLocalTLS(cert tls.Certificate) (net.Listener, error) {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
@@ -403,8 +403,8 @@ func listenLocalTLS(cert tls.Certificate) (net.Listener, error) {
 	return tls.Listen("tcp", "127.0.0.1:0", tlsConfig)
 }
 
-// portFromAddr extracts the port from a "host:port" address string.
-func portFromAddr(addr string) string {
+// PortFromAddr extracts the port from a "host:port" address string.
+func PortFromAddr(addr string) string {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
@@ -412,8 +412,8 @@ func portFromAddr(addr string) string {
 	return port
 }
 
-// randomState generates a cryptographically random hex string.
-func randomState() (string, error) {
+// RandomState generates a cryptographically random hex string.
+func RandomState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -421,7 +421,8 @@ func randomState() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func openBrowser(rawURL string) {
+// OpenBrowser opens a URL in the user's default browser.
+func OpenBrowser(rawURL string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

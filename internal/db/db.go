@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 54"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 56"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2478,6 +2478,93 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v54: %w", err)
 		}
 		version = 54
+	}
+
+	if version < 55 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v55: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Drop old calendar_events table (had REAL timestamps, single-table design).
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS calendar_events`); err != nil {
+			return fmt.Errorf("migration v55 drop old calendar_events: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS calendar_calendars (
+			id          TEXT PRIMARY KEY,
+			name        TEXT NOT NULL,
+			is_primary  INTEGER NOT NULL DEFAULT 0,
+			is_selected INTEGER NOT NULL DEFAULT 1,
+			color       TEXT NOT NULL DEFAULT '',
+			synced_at   TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+			return fmt.Errorf("migration v55 create calendar_calendars: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS calendar_events (
+			id              TEXT PRIMARY KEY,
+			calendar_id     TEXT NOT NULL REFERENCES calendar_calendars(id),
+			title           TEXT NOT NULL DEFAULT '',
+			description     TEXT NOT NULL DEFAULT '',
+			location        TEXT NOT NULL DEFAULT '',
+			start_time      TEXT NOT NULL,
+			end_time        TEXT NOT NULL,
+			organizer_email TEXT NOT NULL DEFAULT '',
+			attendees       TEXT NOT NULL DEFAULT '[]',
+			is_recurring    INTEGER NOT NULL DEFAULT 0,
+			is_all_day      INTEGER NOT NULL DEFAULT 0,
+			event_status    TEXT NOT NULL DEFAULT 'confirmed',
+			event_type      TEXT NOT NULL DEFAULT '',
+			html_link       TEXT NOT NULL DEFAULT '',
+			raw_json        TEXT NOT NULL DEFAULT '{}',
+			synced_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			updated_at      TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+			return fmt.Errorf("migration v55 create calendar_events: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_calendar_events_calendar ON calendar_events(calendar_id)`); err != nil {
+			return fmt.Errorf("migration v55 create idx_calendar_events_calendar: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_time)`); err != nil {
+			return fmt.Errorf("migration v55 create idx_calendar_events_start: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_calendar_events_end ON calendar_events(end_time)`); err != nil {
+			return fmt.Errorf("migration v55 create idx_calendar_events_end: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 55"); err != nil {
+			return fmt.Errorf("setting schema version v55: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v55: %w", err)
+		}
+		version = 55
+	}
+
+	if version < 56 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v56: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS calendar_attendee_map (
+			email         TEXT PRIMARY KEY,
+			slack_user_id TEXT NOT NULL DEFAULT '',
+			resolved_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v56 create calendar_attendee_map: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 56"); err != nil {
+			return fmt.Errorf("setting schema version v56: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v56: %w", err)
+		}
+		version = 56
 	}
 
 	_ = version // silence unused variable if this is the last migration

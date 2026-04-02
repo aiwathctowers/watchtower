@@ -22,6 +22,7 @@ var Defaults = map[string]string{
 	TracksExtractBatch: defaultTracksExtractBatch,
 	PeopleBatch:        defaultPeopleBatch,
 	TasksGenerate:      defaultTasksGenerate,
+	MeetingPrep:        defaultMeetingPrep,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -42,6 +43,7 @@ var AllIDs = []string{
 	BriefingDaily,
 	InboxPrioritize,
 	TasksGenerate,
+	MeetingPrep,
 }
 
 // DefaultVersions tracks the current version of each built-in prompt template.
@@ -60,11 +62,12 @@ var DefaultVersions = map[string]int{
 	GuidePeriod:        1,
 	PeopleReduce:       1,
 	PeopleTeam:         1,
-	BriefingDaily:      3, // v3: inbox integration
+	BriefingDaily:      4, // v4: calendar integration
 	InboxPrioritize:    3, // v3: closing signal resolution rules
 	DigestChannelBatch: 2, // v2: full decision/situation rules, 2-7 topics, 2000 char running_summary
 	PeopleBatch:        1, // v1: batch people cards for low-data users
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
+	MeetingPrep:        1, // v1: meeting prep with attendee context
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
@@ -85,6 +88,7 @@ var Descriptions = map[string]string{
 	DigestChannelBatch: "Channel batch digest — multi-channel analysis for low-activity channels",
 	PeopleBatch:        "People batch cards — lightweight cards for low-data users in one AI call",
 	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
+	MeetingPrep:        "Meeting prep — AI-powered meeting brief with talking points, open items, and people notes",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -588,6 +592,13 @@ Rules:
 - team_pulse: signals from people cards. Include user_id. Flag volume changes, red flags, conflicts.
 - coaching: max 3 items. Grounded in observed patterns — not generic advice. Include related_user_id when applicable.
   - When suggesting actions, consider existing tasks. Use suggest_task=true on tracks where user should create a task.
+- CALENDAR INTEGRATION: When calendar events are present, cross-reference attendees with tracks, inbox, and people data.
+  - In "attention": flag meetings in the next 2 hours with unresolved items involving attendees.
+  - In "your_day": interleave meetings with tasks/tracks, ordered chronologically. Add prep suggestions before important meetings.
+  - In "coaching": suggest conversation points based on people cards of attendees.
+  - If a meeting attendee has a people card with red_flags, mention it in team_pulse.
+  - Do NOT list meetings as standalone items — always cross-reference with work data.
+  - If CALENDAR section is empty, ignore calendar instructions entirely.
 - Be specific: name people, channels, decisions — not vague generalities.
 - If user has reports, prioritize their signals in team_pulse.
 - %s
@@ -597,6 +608,9 @@ Rules:
 %s
 
 === INBOX (awaiting your response) ===
+%s
+
+=== CALENDAR (today's meetings) ===
 %s
 
 === ACTIVE TRACKS ===
@@ -862,3 +876,48 @@ Return ONLY valid JSON in this exact format:
     {"text": "step 2 description", "done": false}
   ]
 }`
+
+const defaultMeetingPrep = `You are preparing a meeting brief for %s ahead of "%s" at %s.
+
+Your job is to help the user walk into this meeting fully prepared. Synthesize available data about attendees, shared work, and open items into actionable prep.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "event_id": "google-event-id",
+  "title": "Meeting title",
+  "start_time": "ISO8601",
+  "talking_points": [
+    {"text": "Topic to raise or discuss", "source_type": "track|digest|inbox|task", "source_id": "123", "priority": "high|medium|low"}
+  ],
+  "open_items": [
+    {"text": "Unresolved item involving an attendee", "type": "track|inbox|task", "id": "456", "person_name": "@alice", "person_id": "U123"}
+  ],
+  "people_notes": [
+    {"user_id": "U123", "name": "@alice", "communication_tip": "Prefers data-driven arguments", "recent_context": "Leading the migration project, under deadline pressure"}
+  ],
+  "suggested_prep": [
+    "Review track #42 (blocked, involves @alice and @bob)",
+    "Check digest from #engineering — decision about API versioning"
+  ]
+}
+
+Rules:
+- talking_points: max 7. Prioritize: blocked items > decisions needed > FYI updates. Include source references.
+- open_items: items specifically involving meeting attendees. Include tracks where attendee is ball_on, pending inbox from them, shared tasks.
+- people_notes: only for attendees the user interacts with regularly. Use people card data if available. Skip if no useful context.
+- suggested_prep: max 5. Specific links/references to read before the meeting. Not generic advice.
+- Be concrete: name tracks by title, reference specific decisions, cite channel digests.
+- If meeting has >8 attendees, focus people_notes on the user's direct reports and key collaborators.
+- If no relevant data exists for an attendee, omit them from people_notes — don't fabricate.
+- %s
+- Return valid JSON only.
+
+=== MEETING ATTENDEES ===
+%s
+
+=== SHARED CONTEXT (tracks, digests, decisions involving attendees) ===
+%s
+
+=== USER PROFILE ===
+%s`

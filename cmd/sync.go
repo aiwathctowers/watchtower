@@ -17,6 +17,7 @@ import (
 
 	"encoding/json"
 	"watchtower/internal/briefing"
+	"watchtower/internal/calendar"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
 	"watchtower/internal/db"
@@ -278,6 +279,22 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			if cfg.Inbox.Enabled {
 				d.SetInboxPipeline(inbox.New(database, cfg, gen, logger))
+			}
+		}
+		// Wire calendar syncer if token exists.
+		calendarStore := calendar.NewTokenStore(cfg.WorkspaceDir())
+		if calendarStore.Exists() {
+			googleCfg := resolveGoogleOAuthConfig()
+			calToken, err := calendarStore.Load()
+			if err != nil {
+				logger.Printf("calendar: failed to load token: %v", err)
+			} else {
+				calClient, err := calendar.NewClient(ctx, calToken.RefreshToken, googleCfg)
+				if err != nil {
+					logger.Printf("calendar: failed to create client: %v", err)
+				} else {
+					d.SetCalendarSyncer(calendar.NewSyncer(calClient, database, cfg, logger))
+				}
 			}
 		}
 		return d.Run(ctx)

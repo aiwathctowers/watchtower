@@ -43,6 +43,7 @@ struct GeneralSettings: View {
     @State private var slackReconnectResult: String?
     @State private var slackReconnectSuccess = false
     @State private var slackAuthProcess: Process?
+    @State private var googleAuth = GoogleAuthService()
 
     var body: some View {
         Form {
@@ -51,6 +52,7 @@ struct GeneralSettings: View {
             digestSection
             briefingSection
             aiSection
+            calendarSettingsSection
 
             if let error = config.parseError {
                 Section("Parse Error") {
@@ -309,6 +311,49 @@ struct GeneralSettings: View {
                         .lineLimit(3)
                         .textSelection(.enabled)
                 }
+            }
+        }
+    }
+
+    private var calendarSettingsSection: some View {
+        Section("Google Calendar") {
+            if googleAuth.isConnected {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Connected")
+                    Spacer()
+                    Button("Disconnect") { googleAuth.disconnect() }
+                }
+
+                Picker("Sync days ahead", selection: $config.calendarSyncDaysAhead) {
+                    Text("2 days").tag(2)
+                    Text("3 days").tag(3)
+                    Text("5 days").tag(5)
+                    Text("7 days").tag(7)
+                    Text("14 days").tag(14)
+                }
+            } else {
+                HStack {
+                    Image(systemName: "calendar.badge.plus")
+                        .foregroundStyle(.secondary)
+                    Text("Not connected")
+                    Spacer()
+
+                    if googleAuth.isAuthenticating {
+                        ProgressView().controlSize(.small)
+                        Button("Cancel") { googleAuth.cancelConnect() }
+                    } else {
+                        Button("Connect") { googleAuth.connect() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+
+            if let err = googleAuth.error {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
     }
