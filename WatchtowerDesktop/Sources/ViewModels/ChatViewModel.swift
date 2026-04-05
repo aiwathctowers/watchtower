@@ -483,12 +483,15 @@ final class ChatViewModel {
         how to use the app, or what something means — answer based on this guide.
 
         Watchtower is a macOS desktop app that syncs a Slack workspace to a local SQLite database
-        and uses AI to generate insights: daily briefings, inbox, digests, tracks, and people analytics.
+        and uses AI to generate insights: daily briefings, inbox, calendar with meeting prep, digests, tracks, and people analytics.
 
         TABS:
-        - AI Chat: chat with AI about workspace data. Provider selector (Claude/Codex), model selector (filtered by provider). Claude: Sonnet/Haiku/Opus; Codex: GPT-5.4/GPT-5.4 Mini/GPT-5.3 Codex. Multi-turn with session memory (Claude only; Codex is ephemeral)
-        - Briefings: personalized daily overview — needs attention, your day, what happened, team pulse, coaching
+        - AI Chat: chat with AI about workspace data. Provider selector (Claude/Codex), model selector.
+          Claude: Sonnet/Haiku/Opus; Codex: GPT-5.4/GPT-5.4 Mini/GPT-5.3 Codex.
+          Multi-turn with session memory (Claude only; Codex is ephemeral). Calendar events (48h) injected into context
+        - Briefings: personalized daily overview — today's schedule (calendar events), needs attention, your day, what happened, team pulse, coaching
         - Inbox: messages awaiting your response — @mentions and DMs auto-detected after each sync, AI-prioritized (high/medium/low), auto-resolved when you reply. Statuses: pending, resolved, dismissed, snoozed. Actions: resolve, dismiss, snooze, create task, open in Slack
+        - Calendar: Google Calendar integration — today's and tomorrow's events, meeting prep (AI-generated talking points, open items, people notes, suggested prep). Connect in Settings. Events highlight: green=happening now, blue=upcoming within 1 hour
         - Tasks: personal action items with priority, ownership, due dates, sub-items. Sources: track, briefing, digest, inbox, manual, chat
         - Tracks: auto-generated narrative summaries of ongoing initiatives from digests (priority: high/medium/low; narrative, timeline, participants, key messages)
         - Digests: AI summaries of channel activity (channel/daily/weekly), with topics, decisions, running context
@@ -500,11 +503,11 @@ final class ChatViewModel {
         - Training: prompt editor, feedback stats, quality score, tuning controls
 
         SETTINGS: sync interval, workers, history depth, AI provider (Claude/Codex), digest model/language, briefing hour,
-        Claude CLI path, Codex CLI path (when Codex selected), profile (role, team, manager, reports, peers),
-        notifications, daemon control, logs, data management.
+        Claude CLI path, Codex CLI path (when Codex selected), Google Calendar (connect/disconnect, sync days ahead),
+        profile (role, team, manager, reports, peers), notifications, daemon control, logs, data management.
 
         BACKGROUND PROCESSES: daemon syncs Slack periodically, then runs pipelines:
-        inbox (detect + AI prioritize) → channel digests → tracks → rollup digests → people → briefing (automatic after each sync).
+        calendar sync → inbox (detect + AI prioritize) → channel digests → tracks → rollup digests → people → briefing (automatic after each sync).
         Also auto-unsnoozes tasks and inbox items past their snooze date.
 
         KEY CONCEPTS:
@@ -513,6 +516,7 @@ final class ChatViewModel {
         - Feedback loop: thumbs up/down + importance corrections improve AI via prompt tuning
         - Starred items: prioritize specific channels and people in analysis
         - Muted channels: excluded from AI processing to reduce noise and token costs
+        - Google Calendar: optional integration syncing events to local DB, enabling meeting prep and schedule-aware briefings/chat
 
         When answering about the app, be specific and accurate. Do not invent features that don't exist.
         """

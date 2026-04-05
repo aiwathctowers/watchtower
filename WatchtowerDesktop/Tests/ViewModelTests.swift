@@ -1628,7 +1628,7 @@ final class BackgroundTaskManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.totalInputTokens, 600)
         XCTAssertEqual(manager.totalOutputTokens, 300)
-        XCTAssertEqual(manager.totalCostUsd, 0.006, accuracy: 0.0001)
+
     }
 
     private func decodeProgress(_ json: String) throws -> InsightProgressData {
@@ -1640,7 +1640,7 @@ final class BackgroundTaskManagerTests: XCTestCase {
         let manager = BackgroundTaskManager()
         XCTAssertEqual(manager.totalInputTokens, 0)
         XCTAssertEqual(manager.totalOutputTokens, 0)
-        XCTAssertEqual(manager.totalCostUsd, 0.0)
+
     }
 
     @MainActor

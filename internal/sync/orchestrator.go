@@ -175,11 +175,12 @@ func (o *Orchestrator) runSearchSync(ctx context.Context, opts SyncOptions) erro
 	// Phase 3: sync channel read state (search sync doesn't call conversations.list)
 	o.syncChannelReadState(ctx)
 
-	// Phase 4: user profiles
-	o.logger.Println("phase 4: syncing user profiles")
+	// Phase 4: full user roster (users.list) — search sync only discovers users
+	// from recent messages, so we always fetch the complete workspace roster here.
+	o.logger.Println("phase 4: syncing all workspace users")
 	o.progress.SetPhase(PhaseUsers)
-	if err := o.syncUserProfiles(ctx); err != nil {
-		return fmt.Errorf("user profile sync: %w", err)
+	if err := o.fetchAllUserProfiles(ctx); err != nil {
+		return fmt.Errorf("user roster sync: %w", err)
 	}
 
 	// Thread sync skipped in search path — search.messages already returns

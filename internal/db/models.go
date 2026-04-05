@@ -532,6 +532,60 @@ type InboxFilter struct {
 	IncludeResolved bool   // include resolved/dismissed
 }
 
+// CalendarCalendar represents a Google Calendar.
+type CalendarCalendar struct {
+	ID         string
+	Name       string
+	IsPrimary  bool
+	IsSelected bool
+	Color      string
+	SyncedAt   string
+}
+
+// CalendarEvent represents a Google Calendar event stored locally.
+type CalendarEvent struct {
+	ID             string
+	CalendarID     string
+	Title          string
+	Description    string
+	Location       string
+	StartTime      string // ISO8601
+	EndTime        string // ISO8601
+	OrganizerEmail string
+	Attendees      string // JSON
+	IsRecurring    bool
+	IsAllDay       bool
+	EventStatus    string
+	EventType      string
+	HTMLLink       string
+	RawJSON        string
+	SyncedAt       string
+	UpdatedAt      string
+}
+
+// CalendarAttendeeMap caches email to Slack user_id resolution.
+type CalendarAttendeeMap struct {
+	Email       string
+	SlackUserID string
+	ResolvedAt  string
+}
+
+// CalendarEventFilter specifies criteria for querying calendar events.
+type CalendarEventFilter struct {
+	CalendarID string
+	FromTime   string // ISO8601
+	ToTime     string // ISO8601
+	Limit      int
+}
+
+// MeetingPrepCache stores a cached meeting prep result for an event.
+type MeetingPrepCache struct {
+	EventID     string
+	ResultJSON  string
+	UserNotes   string
+	GeneratedAt string
+}
+
 // PromptHistory records a snapshot of a prompt at a specific version.
 type PromptHistory struct {
 	ID        int

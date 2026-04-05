@@ -420,7 +420,7 @@ func TestUpsertPeriodSummary(t *testing.T) {
 		Model:        "haiku",
 		InputTokens:  500,
 		OutputTokens: 100,
-		CostUSD:      0.001,
+		CostUSD:      0,
 	}
 	err := db.UpsertPeriodSummary(s)
 	require.NoError(t, err)

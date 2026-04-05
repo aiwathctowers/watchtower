@@ -274,7 +274,7 @@ func TestRunDigestStats_MultipleTypes(t *testing.T) {
 			Model:        "haiku",
 			InputTokens:  500,
 			OutputTokens: 100,
-			CostUSD:      0.002,
+			CostUSD:      0,
 		})
 		require.NoError(t, err)
 		now += 10 // slightly different period_from to avoid dedup

@@ -242,7 +242,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, systemPrompt, userMessag
 		Model:          model,
 		InputTokens:    resp.Usage.InputTokens,
 		OutputTokens:   resp.Usage.OutputTokens,
-		CostUSD:        resp.CostUSD,
+		CostUSD:        0,
 		TotalAPITokens: totalAPI,
 	}
 

@@ -144,7 +144,7 @@ func TestRunDigestStats_AllTimeCostOutput(t *testing.T) {
 		Model:        "haiku",
 		InputTokens:  1000,
 		OutputTokens: 200,
-		CostUSD:      0.005,
+		CostUSD:      0,
 	})
 	require.NoError(t, err)
 	database.Close()

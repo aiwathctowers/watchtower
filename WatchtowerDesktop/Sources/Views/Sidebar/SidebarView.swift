@@ -39,6 +39,25 @@ struct SidebarView: View {
                 }
             }
 
+            // Next calendar event
+            if let calVM = appState.calendarViewModel, let nextEvt = calVM.nextEvent {
+                HStack(spacing: 4) {
+                    Image(systemName: "calendar")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(nextEvt.title)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Text(nextEvt.startDate, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
+
             // Update available indicator
             if appState.updateService.isUpdateAvailable {
                 Button {

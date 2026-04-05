@@ -1,6 +1,6 @@
 # Watchtower — User Guide
 
-Watchtower is a macOS desktop app that syncs your Slack workspace to a local database and uses AI to generate insights: daily briefings, inbox (messages awaiting response), digests, tracks, and people analytics.
+Watchtower is a macOS desktop app that syncs your Slack workspace to a local database and uses AI to generate insights: daily briefings, inbox (messages awaiting response), calendar integration with meeting prep, digests, tracks, and people analytics.
 
 ## Tabs & Features
 
@@ -55,6 +55,44 @@ Each item shows: trigger type icon (@ for mentions, envelope for DMs), priority 
 **Briefing integration** — Pending inbox items appear in the briefing's "Needs Attention" section with priority and sender info.
 
 **Daemon** — The inbox pipeline runs after each sync (Phase 0.5, before channel digests). The daemon also unsnoozes inbox items whose snooze date has passed, returning them to Pending.
+
+### Calendar
+Google Calendar integration showing upcoming events and AI-powered meeting preparation.
+
+**Connecting:** Go to Settings > Google Calendar and click "Connect". This opens the Google OAuth flow via the CLI (`watchtower calendar login`). Once connected, calendar events sync automatically after each Slack sync.
+
+**Events view** — Shows today's and tomorrow's events. Each event displays: time range (or "All day"), duration, title, location, and attendee count. Events happening now have a green highlight; upcoming events (within 1 hour) have a blue highlight.
+
+**Meeting Prep** — Click "Prepare" on any event to open the AI-powered meeting prep sheet. The AI analyzes attendees' people cards, shared tracks, open items, and recent context to generate:
+- **Talking Points** — prioritized topics to discuss (high/medium/low), linked to source tracks or digests
+- **Open Items** — unresolved items relevant to this meeting's attendees, with person attribution
+- **People Notes** — communication tips and recent context for each attendee (from people cards)
+- **Suggested Prep** — action items to review before the meeting
+
+Meeting prep is generated via the CLI (`watchtower meeting-prep [event-id|next] --json`).
+
+**Sidebar** — Shows a compact "next event" indicator with time and title when calendar is connected. The Calendar tab icon is "calendar" in the sidebar between Inbox and Tasks.
+
+**Not connected state** — When Google Calendar is not connected, the tab shows a prompt to connect in Settings.
+
+**Settings** — The Google Calendar section in Settings shows connection status and a "Sync days ahead" picker (3/5/7/14 days) when connected. Config field: `calendar.sync_days_ahead` (default: 2).
+
+**Briefing integration** — Today's calendar events appear as "Today's Schedule" at the top of the briefing detail view, before "Needs Attention". Events are also included in the briefing AI prompt for context-aware recommendations.
+
+**AI Chat integration** — Upcoming calendar events (next 48 hours) are automatically injected into the AI chat context as "UPCOMING CALENDAR", allowing the bot to answer questions about your schedule.
+
+**Daemon** — Calendar sync runs after each Slack sync, before AI pipelines. It fetches events for the configured number of days ahead from selected Google Calendars.
+
+**CLI commands:**
+- `watchtower calendar` — show upcoming events (flags: `--days N`, `--json`)
+- `watchtower calendar login` — connect Google Calendar (OAuth flow)
+- `watchtower calendar logout` — disconnect and remove token + events
+- `watchtower calendar sync` — manually sync events
+- `watchtower calendar status` — show connection status
+- `watchtower calendar list` — list synced calendars (with selection markers)
+- `watchtower calendar events` — list events (same as `calendar`)
+- `watchtower calendar select [calendar-id]` — toggle calendar selection for sync
+- `watchtower meeting-prep [event-id|next]` — generate AI meeting prep (flags: `--json`)
 
 ### Tasks
 Personal action items — what you need to do, follow up on, or react to. Unlike Tracks (which are informational narratives about ongoing initiatives), Tasks are concrete, personal to-do items with ownership and deadlines.
@@ -180,6 +218,7 @@ Fine-tune AI prompts based on your feedback. Shows quality score, feedback stats
 ## Settings
 
 **General:** Sync interval, workers, history depth, AI provider (Claude or Codex), digest model/language, briefing hour, Claude CLI path, Codex CLI path (shown when Codex provider is selected, with auto-detection indicator).
+**Google Calendar:** Connect/disconnect Google Calendar, sync days ahead picker (3/5/7/14 days). Connection status indicator (green checkmark when connected).
 **Profile:** Your role, team, manager, reports, peers, starred channels/people.
 **Notifications:** Decision alerts, daily summaries, quiet hours.
 **Daemon:** Start/stop the background sync daemon, view status.
@@ -190,13 +229,14 @@ Fine-tune AI prompts based on your feedback. Shows quality score, feedback stats
 ## Background Processes
 
 Watchtower runs a daemon (`watchtower sync --detach`) that periodically syncs Slack data. After each sync, AI pipelines run automatically:
-1. **Inbox pipeline** — detects @mentions and DMs awaiting response, AI-prioritizes new items and auto-resolves responded ones (Phase 0.5, runs before digests)
-2. **Digest pipeline** — generates per-channel summaries (MAP phase for people signals)
-3. **Tracks pipeline** — auto-creates and updates tracks from unlinked digest topics, then injects track context into rollup digests
-4. **Rollup digests** — generates daily/weekly cross-channel rollups (track-aware)
-5. **People pipeline** — builds team member profiles from extracted situations (once per day)
-6. **Briefing pipeline** — generates a personalized daily briefing from all of the above (once per day, after the configured hour)
-7. **Maintenance** — unsnoozes tasks and inbox items whose snooze date has passed, returning them to active status
+1. **Calendar sync** — fetches Google Calendar events for the configured days ahead (runs after Slack sync, before pipelines)
+2. **Inbox pipeline** — detects @mentions and DMs awaiting response, AI-prioritizes new items and auto-resolves responded ones (Phase 0.5, runs before digests)
+3. **Digest pipeline** — generates per-channel summaries (MAP phase for people signals)
+4. **Tracks pipeline** — auto-creates and updates tracks from unlinked digest topics, then injects track context into rollup digests
+5. **Rollup digests** — generates daily/weekly cross-channel rollups (track-aware)
+6. **People pipeline** — builds team member profiles from extracted situations (once per day)
+7. **Briefing pipeline** — generates a personalized daily briefing from all of the above (once per day, after the configured hour)
+8. **Maintenance** — unsnoozes tasks and inbox items whose snooze date has passed, returning them to active status
 
 ## Key Concepts
 
@@ -206,3 +246,4 @@ Watchtower runs a daemon (`watchtower sync --detach`) that periodically syncs Sl
 - **Starred items** — Star channels and people to prioritize them in analysis and filtering
 - **Muted channels** — Channels excluded from AI processing (digests, tracks, briefings). Use the Statistics tab to mute noisy or bot-heavy channels and reduce token costs
 - **Multi-provider AI** — Watchtower supports multiple AI providers: Claude (Anthropic) and Codex (OpenAI). Switch providers in chat toolbar or Settings. All pipelines (digests, tracks, people, briefings, inbox) respect the configured provider. CLI flag `--provider claude|codex` overrides per-command. Config field `ai.provider` sets the default
+- **Google Calendar** — Optional integration that syncs Google Calendar events to the local database. Enables meeting prep (AI-generated talking points, people notes, open items) and injects schedule context into briefings and AI chat. Connect via Settings or `watchtower calendar login`

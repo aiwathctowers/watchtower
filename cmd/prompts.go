@@ -215,7 +215,6 @@ func runTune(cmd *cobra.Command, args []string) error {
 
 	// Track accumulated usage across all tune calls.
 	var totalInTok, totalOutTok, totalAPITok int
-	var totalCost float64
 
 	// Wrap digest.Generator as prompts.TextGenerator, capturing usage.
 	tuneGen := prompts.GenerateFunc(func(ctx context.Context, systemPrompt, userMessage string) (string, error) {
@@ -223,7 +222,6 @@ func runTune(cmd *cobra.Command, args []string) error {
 		if usage != nil {
 			totalInTok += usage.InputTokens
 			totalOutTok += usage.OutputTokens
-			totalCost += usage.CostUSD
 			totalAPITok += usage.TotalAPITokens
 		}
 		return raw, err
@@ -245,7 +243,7 @@ func runTune(cmd *cobra.Command, args []string) error {
 			errMsg = tuneErr.Error()
 		}
 		if runID > 0 {
-			_ = database.CompletePipelineRun(runID, itemsFound, totalInTok, totalOutTok, totalCost, totalAPITok, nil, nil, errMsg)
+			_ = database.CompletePipelineRun(runID, itemsFound, totalInTok, totalOutTok, 0, totalAPITok, nil, nil, errMsg)
 		}
 	}()
 

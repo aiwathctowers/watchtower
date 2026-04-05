@@ -80,6 +80,14 @@ func (db *DB) GetUserByID(id string) (*User, error) {
 	return scanUser(row)
 }
 
+// GetUserByEmail returns a user by their email address.
+func (db *DB) GetUserByEmail(email string) (*User, error) {
+	row := db.QueryRow(`
+		SELECT id, name, display_name, real_name, email, is_bot, is_deleted, is_stub, profile_json, updated_at
+		FROM users WHERE email = ? AND email != ''`, email)
+	return scanUser(row)
+}
+
 // EnsureUser inserts a minimal stub user record if not already present.
 // Stubs are marked with is_stub=1 so syncUserProfiles can backfill them.
 // Does NOT update existing records (INSERT ON CONFLICT DO NOTHING).

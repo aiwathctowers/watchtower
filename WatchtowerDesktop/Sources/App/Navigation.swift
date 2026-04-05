@@ -4,6 +4,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
     case chat
     case briefings
     case inbox
+    case calendar
     case tasks
     case tracks
     case digests
@@ -20,6 +21,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .chat: "AI Chat"
         case .briefings: "Briefings"
         case .inbox: "Inbox"
+        case .calendar: "Calendar"
         case .tasks: "Tasks"
         case .tracks: "Tracks"
         case .digests: "Digests"
@@ -36,6 +38,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
         case .chat: "bubble.left.and.bubble.right"
         case .briefings: "sun.max"
         case .inbox: "tray"
+        case .calendar: "calendar"
         case .tasks: "checkmark.circle"
         case .tracks: "binoculars"
         case .digests: "doc.text.magnifyingglass"
@@ -49,7 +52,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable {
 
     /// Main navigation items (shown above the separator).
     static var mainItems: [Self] {
-        [.chat, .briefings, .inbox, .tasks, .tracks, .digests, .people, .statistics, .search]
+        [.chat, .briefings, .inbox, .calendar, .tasks, .tracks, .digests, .people, .statistics, .search]
     }
 
     /// Tool items (shown below the separator).
@@ -170,6 +173,8 @@ struct MainNavigationView: View {
             BriefingsListView()
         case .inbox:
             InboxListView()
+        case .calendar:
+            CalendarEventsView()
         case .tasks:
             TasksListView()
         case .tracks:
@@ -1323,7 +1328,7 @@ struct OnboardingView: View {
         case "Users":
             return (progress.userProfilesDone, progress.userProfilesTotal)
         case "Threads":
-            return (progress.threadsDone, progress.threadsTotal)
+            return (progress.threadsDone ?? 0, progress.threadsTotal ?? 0)
         default:
             return (0, 0)
         }
@@ -1374,9 +1379,9 @@ private func syncProgressView(_ progress: SyncProgressData) -> some View {
                 icon: "bubble.left.and.bubble.right",
                 phase: "Threads",
                 cur: progress.phase,
-                done: progress.threadsDone,
-                total: progress.threadsTotal,
-                detail: progress.threadsFetched > 0 ? "\(fmtNum(progress.threadsFetched)) replies" : nil
+                done: progress.threadsDone ?? 0,
+                total: progress.threadsTotal ?? 0,
+                detail: (progress.threadsFetched ?? 0) > 0 ? "\(fmtNum(progress.threadsFetched ?? 0)) replies" : nil
             )
             if progress.phase == "Done" {
                 HStack {
@@ -1466,7 +1471,7 @@ private func syncProgressView(_ progress: SyncProgressData) -> some View {
         case "Discovery": return (progress.discoveryPages, progress.discoveryTotalPages)
         case "Messages": return (progress.msgChannelsDone, progress.msgChannelsTotal)
         case "Users": return (progress.userProfilesDone, progress.userProfilesTotal)
-        case "Threads": return (progress.threadsDone, progress.threadsTotal)
+        case "Threads": return (progress.threadsDone ?? 0, progress.threadsTotal ?? 0)
         default: return (0, 0)
         }
     }

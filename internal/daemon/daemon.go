@@ -13,6 +13,7 @@ import (
 
 	gosync "sync"
 	"watchtower/internal/briefing"
+	"watchtower/internal/calendar"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
@@ -30,19 +31,20 @@ var minPollInterval = 1 * time.Second
 
 // Daemon runs periodic incremental syncs on a timer and after wake-from-sleep events.
 type Daemon struct {
-	orchestrator *sync.Orchestrator
-	config       *config.Config
-	logger       *log.Logger
-	wakeCh       <-chan struct{}
-	pidPath      string
-	db           *db.DB
-	digestPipe   *digest.Pipeline
-	tracksPipe   *tracks.Pipeline
-	peoplePipe   *guide.Pipeline
-	briefingPipe *briefing.Pipeline
-	inboxPipe    *inbox.Pipeline
-	lastPeople   time.Time // when people cards last ran (once per day)
-	lastBriefing time.Time // when briefing last ran (once per day)
+	orchestrator   *sync.Orchestrator
+	config         *config.Config
+	logger         *log.Logger
+	wakeCh         <-chan struct{}
+	pidPath        string
+	db             *db.DB
+	digestPipe     *digest.Pipeline
+	tracksPipe     *tracks.Pipeline
+	peoplePipe     *guide.Pipeline
+	briefingPipe   *briefing.Pipeline
+	inboxPipe      *inbox.Pipeline
+	calendarSyncer *calendar.Syncer
+	lastPeople     time.Time // when people cards last ran (once per day)
+	lastBriefing   time.Time // when briefing last ran (once per day)
 }
 
 // New creates a Daemon that runs incremental syncs via the given orchestrator.
@@ -82,6 +84,11 @@ func (d *Daemon) SetBriefingPipeline(p *briefing.Pipeline) {
 // SetInboxPipeline sets the inbox detection pipeline.
 func (d *Daemon) SetInboxPipeline(p *inbox.Pipeline) {
 	d.inboxPipe = p
+}
+
+// SetCalendarSyncer sets the calendar syncer for post-sync calendar fetch.
+func (d *Daemon) SetCalendarSyncer(s *calendar.Syncer) {
+	d.calendarSyncer = s
 }
 
 // SetPeoplePipeline sets the people card pipeline (REDUCE phase).
@@ -165,6 +172,16 @@ func (d *Daemon) runSync(ctx context.Context) {
 		d.logger.Printf("failed to write sync result: %v", err)
 	}
 
+	// Calendar sync — lightweight, runs after Slack sync, before pipelines.
+	if d.calendarSyncer != nil {
+		n, err := d.calendarSyncer.Sync(ctx)
+		if err != nil {
+			d.logger.Printf("calendar sync error: %v", err)
+		} else if n > 0 {
+			d.logger.Printf("calendar: %d events synced", n)
+		}
+	}
+
 	// Run pipelines even if sync had a non-fatal error (e.g. rate-limited,
 	// partial fetch). The DB still has messages that need processing.
 	// Only skip pipelines if the context itself was cancelled (shutdown).
@@ -227,11 +244,11 @@ func (d *Daemon) runSync(ctx context.Context) {
 			if err != nil {
 				errMsg = err.Error()
 			}
-			inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+			inTok, outTok, totalAPI := 0, 0, 0
 			if usage != nil {
-				inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+				inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 			}
-			_ = d.db.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+			_ = d.db.CompletePipelineRun(runID, n, inTok, outTok, 0, totalAPI, nil, nil, errMsg)
 		}
 	}
 

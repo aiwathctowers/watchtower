@@ -311,11 +311,11 @@ func TestJoinScopes(t *testing.T) {
 }
 
 func TestRandomState(t *testing.T) {
-	s1, err := randomState()
+	s1, err := RandomState()
 	require.NoError(t, err)
 	assert.Len(t, s1, 64)
 
-	s2, err := randomState()
+	s2, err := RandomState()
 	require.NoError(t, err)
 	assert.NotEqual(t, s1, s2)
 }
@@ -428,7 +428,7 @@ func TestPortFromAddr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := portFromAddr(tt.addr)
+			result := PortFromAddr(tt.addr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -438,14 +438,14 @@ func TestListenLocalTLS(t *testing.T) {
 	cert, err := generateSelfSignedCert()
 	require.NoError(t, err)
 
-	ln, err := listenLocalTLS(cert)
+	ln, err := ListenLocalTLS(cert)
 	require.NoError(t, err)
 	defer ln.Close()
 
 	addr := ln.Addr().String()
 	assert.Contains(t, addr, "127.0.0.1:")
 
-	port := portFromAddr(addr)
+	port := PortFromAddr(addr)
 	assert.NotEmpty(t, port)
 }
 
@@ -468,13 +468,13 @@ func TestListenLocalTLS_FallbackPort(t *testing.T) {
 	cert, err := generateSelfSignedCert()
 	require.NoError(t, err)
 
-	ln, err := listenLocalTLS(cert)
+	ln, err := ListenLocalTLS(cert)
 	require.NoError(t, err)
 	defer ln.Close()
 
 	// Should have gotten a random port (not one of the preferred ones)
 	addr := ln.Addr().String()
-	port := portFromAddr(addr)
+	port := PortFromAddr(addr)
 	assert.NotEmpty(t, port)
 }
 
@@ -810,7 +810,7 @@ func TestOpenBrowser_Direct(t *testing.T) {
 	// On darwin, it calls "open -n <url>" which will fail for invalid URLs
 	// but shouldn't panic. We don't want to actually open a browser,
 	// so we use a URL that will fail silently.
-	openBrowser("watchtower-test://not-a-real-url")
+	OpenBrowser("watchtower-test://not-a-real-url")
 	// No assertion needed — just verifying it doesn't panic
 }
 

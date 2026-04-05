@@ -93,60 +93,9 @@ final class PipelineHistoryViewModel {
 
     // MARK: - Aggregations
 
-    var totalCost: Double { runs.reduce(0) { $0 + $1.costUsd } }
     var totalInputTokens: Int { runs.reduce(0) { $0 + $1.inputTokens } }
     var totalOutputTokens: Int { runs.reduce(0) { $0 + $1.outputTokens } }
     var totalApiTokens: Int { runs.reduce(0) { $0 + $1.totalApiTokens } }
     var totalCalls: Int { runs.reduce(0) { $0 + $1.aiCallCount } }
 
-    struct PipelineCostShare: Identifiable {
-        let pipeline: String
-        let label: String
-        let icon: String
-        let cost: Double
-        let calls: Int
-        let inputTokens: Int
-        let outputTokens: Int
-        var id: String { pipeline }
-    }
-
-    var costByPipeline: [PipelineCostShare] {
-        var map: [String: (cost: Double, calls: Int, input: Int, output: Int)] = [:]
-        for run in runs {
-            let existing = map[run.pipeline, default: (0, 0, 0, 0)]
-            map[run.pipeline] = (
-                existing.cost + run.costUsd,
-                existing.calls + run.aiCallCount,
-                existing.input + run.inputTokens,
-                existing.output + run.outputTokens
-            )
-        }
-
-        let labels: [String: String] = [
-            "digests": "Digests",
-            "people": "People Analytics",
-            "tracks": "Tracks",
-            "briefing": "Briefing",
-            "inbox": "Inbox"
-        ]
-        let icons: [String: String] = [
-            "digests": "doc.text.magnifyingglass",
-            "people": "person.2.circle",
-            "tracks": "checklist",
-            "briefing": "sun.max",
-            "inbox": "tray"
-        ]
-
-        return map.map { key, val in
-            PipelineCostShare(
-                pipeline: key,
-                label: labels[key] ?? key.capitalized,
-                icon: icons[key] ?? "gearshape",
-                cost: val.cost,
-                calls: val.calls,
-                inputTokens: val.input,
-                outputTokens: val.output
-            )
-        }.sorted { $0.cost > $1.cost }
-    }
 }

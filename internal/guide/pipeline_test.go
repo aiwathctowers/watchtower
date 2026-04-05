@@ -27,7 +27,7 @@ type mockGenerator struct {
 
 func (m *mockGenerator) Generate(_ context.Context, _, _, _ string) (string, *digest.Usage, string, error) {
 	m.calls.Add(1)
-	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", m.err
+	return m.response, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", m.err
 }
 
 func testDB(t *testing.T) *db.DB {
@@ -440,14 +440,14 @@ func (m *multiMockGenerator) Generate(_ context.Context, sys, user, _ string) (s
 	combined := sys + user
 	// Detect batch call by looking for USERS and TEAM NORMS markers in prompt.
 	if strings.Contains(combined, "=== USERS ===") && strings.Contains(combined, "=== TEAM NORMS ===") {
-		return m.batchResponse, &digest.Usage{InputTokens: 200, OutputTokens: 100, CostUSD: 0.002}, "mock-session", m.batchErr
+		return m.batchResponse, &digest.Usage{InputTokens: 200, OutputTokens: 100, CostUSD: 0}, "mock-session", m.batchErr
 	}
 	// Detect team summary call.
 	if strings.Contains(combined, "=== PEOPLE CARDS ===") {
-		return m.teamResponse, &digest.Usage{InputTokens: 50, OutputTokens: 30, CostUSD: 0.0005}, "mock-session", nil
+		return m.teamResponse, &digest.Usage{InputTokens: 50, OutputTokens: 30, CostUSD: 0}, "mock-session", nil
 	}
 	// Default: individual card.
-	return m.individualResponse, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", nil
+	return m.individualResponse, &digest.Usage{InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", nil
 }
 
 func TestPipeline_BatchProcessing(t *testing.T) {

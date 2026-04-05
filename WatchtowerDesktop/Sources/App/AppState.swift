@@ -27,6 +27,9 @@ final class AppState {
     private(set) var chatViewModel: ChatViewModel?
     private(set) var chatHistoryViewModel: ChatHistoryViewModel?
 
+    /// Calendar ViewModel — persists across tab switches.
+    private(set) var calendarViewModel: CalendarViewModel?
+
     /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
     var analysisLegacyMode: Bool = false
 
@@ -145,6 +148,7 @@ final class AppState {
                 }
                 isLoading = false
                 loadCustomEmoji(from: manager)
+                initCalendar(dbPool: manager.dbPool)
                 startDigestWatcher(dbPool: manager.dbPool)
                 // Resume pipelines if app was closed mid-generation
                 if !needsOnboarding && !UserDefaults.standard.bool(forKey: Constants.pipelinesCompletedKey) {
@@ -234,6 +238,10 @@ final class AppState {
             try? await Task.sleep(for: .milliseconds(500))
             await daemon.startDaemon()
         }
+    }
+
+    private func initCalendar(dbPool: DatabasePool) {
+        calendarViewModel = CalendarViewModel(dbPool: dbPool)
     }
 
     private func startDigestWatcher(dbPool: DatabasePool) {

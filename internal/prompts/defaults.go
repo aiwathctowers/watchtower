@@ -22,6 +22,7 @@ var Defaults = map[string]string{
 	TracksExtractBatch: defaultTracksExtractBatch,
 	PeopleBatch:        defaultPeopleBatch,
 	TasksGenerate:      defaultTasksGenerate,
+	MeetingPrep:        defaultMeetingPrep,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -42,6 +43,7 @@ var AllIDs = []string{
 	BriefingDaily,
 	InboxPrioritize,
 	TasksGenerate,
+	MeetingPrep,
 }
 
 // DefaultVersions tracks the current version of each built-in prompt template.
@@ -60,11 +62,12 @@ var DefaultVersions = map[string]int{
 	GuidePeriod:        1,
 	PeopleReduce:       1,
 	PeopleTeam:         1,
-	BriefingDaily:      3, // v3: inbox integration
+	BriefingDaily:      4, // v4: calendar integration
 	InboxPrioritize:    3, // v3: closing signal resolution rules
 	DigestChannelBatch: 2, // v2: full decision/situation rules, 2-7 topics, 2000 char running_summary
 	PeopleBatch:        1, // v1: batch people cards for low-data users
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
+	MeetingPrep:        2, // v2: enriched attendee context, recommendations, context gaps
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
@@ -85,6 +88,7 @@ var Descriptions = map[string]string{
 	DigestChannelBatch: "Channel batch digest — multi-channel analysis for low-activity channels",
 	PeopleBatch:        "People batch cards — lightweight cards for low-data users in one AI call",
 	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
+	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -588,6 +592,13 @@ Rules:
 - team_pulse: signals from people cards. Include user_id. Flag volume changes, red flags, conflicts.
 - coaching: max 3 items. Grounded in observed patterns — not generic advice. Include related_user_id when applicable.
   - When suggesting actions, consider existing tasks. Use suggest_task=true on tracks where user should create a task.
+- CALENDAR INTEGRATION: When calendar events are present, cross-reference attendees with tracks, inbox, and people data.
+  - In "attention": flag meetings in the next 2 hours with unresolved items involving attendees.
+  - In "your_day": interleave meetings with tasks/tracks, ordered chronologically. Add prep suggestions before important meetings.
+  - In "coaching": suggest conversation points based on people cards of attendees.
+  - If a meeting attendee has a people card with red_flags, mention it in team_pulse.
+  - Do NOT list meetings as standalone items — always cross-reference with work data.
+  - If CALENDAR section is empty, ignore calendar instructions entirely.
 - Be specific: name people, channels, decisions — not vague generalities.
 - If user has reports, prioritize their signals in team_pulse.
 - %s
@@ -597,6 +608,9 @@ Rules:
 %s
 
 === INBOX (awaiting your response) ===
+%s
+
+=== CALENDAR (today's meetings) ===
 %s
 
 === ACTIVE TRACKS ===
@@ -862,3 +876,63 @@ Return ONLY valid JSON in this exact format:
     {"text": "step 2 description", "done": false}
   ]
 }`
+
+const defaultMeetingPrep = `You are preparing a meeting brief for %s ahead of "%s" at %s.
+
+CRITICAL: Everything you include MUST be relevant to this meeting's topic, agenda, or purpose. The meeting title and description define the scope. Do NOT include unrelated information just because it involves an attendee — only include data that connects to what this meeting is about.
+
+If the meeting topic is "Sprint Planning", only include tracks/tasks/situations related to sprint work. If it's "1:1 with Alice", focus on items between the user and Alice. If the topic is vague, infer the most likely purpose from the title and attendee roles, and flag the ambiguity in context_gaps.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+
+{
+  "event_id": "google-event-id",
+  "title": "Meeting title",
+  "start_time": "ISO8601",
+  "talking_points": [
+    {"text": "Topic to raise or discuss", "source_type": "track|digest|inbox|task|situation", "source_id": "123", "priority": "high|medium|low"}
+  ],
+  "open_items": [
+    {"text": "Unresolved item involving an attendee", "type": "track|inbox|task", "id": "456", "person_name": "@alice", "person_id": "U123"}
+  ],
+  "people_notes": [
+    {"user_id": "U123", "name": "@alice", "communication_tip": "Prefers data-driven arguments", "recent_context": "Leading the migration project, under deadline pressure."}
+  ],
+  "suggested_prep": [
+    "Review track #42 (blocked, involves @alice and @bob)"
+  ],
+  "recommendations": [
+    {"text": "Add a clear agenda — the meeting has no description and 5 attendees", "category": "agenda", "priority": "high"}
+  ],
+  "context_gaps": [
+    "No agenda or description found for this meeting"
+  ]
+}
+
+Rules:
+- RELEVANCE FILTER: For every item you consider including, ask: "Does this relate to what this meeting is about?" If no, skip it. An attendee's unrelated side project is noise, not signal.
+- talking_points: max 7. Only topics relevant to the meeting purpose. Prioritize: blocked items > decisions needed > FYI. Include source references.
+- open_items: only items that are relevant to the meeting topic AND involve attendees. Not every pending task for every attendee.
+- people_notes: focus on how each person relates to THIS meeting's topic. Their communication style matters; their unrelated channel activity does not. Use recent_context to summarize their stance/involvement on the meeting topic specifically.
+- suggested_prep: max 5. Specific references to review BEFORE this meeting that relate to its topic.
+- recommendations: 2-5 suggestions to improve THIS meeting. Categories: agenda, format, participants, followup, preparation.
+- context_gaps: what's missing that would help prepare better (no agenda, unclear topic, unlinked attendees).
+- If no relevant data exists for a field, return an empty array — don't pad with loosely related filler.
+- If the meeting description/agenda is empty or vague, this is a HIGH priority context_gap and recommendation.
+- %s
+- Return valid JSON only.
+
+=== MEETING DESCRIPTION / AGENDA ===
+%s
+
+=== MEETING ATTENDEES (with activity analysis) ===
+%s
+
+=== SHARED CONTEXT (tracks, situations involving multiple attendees) ===
+%s
+
+=== USER PROFILE ===
+%s
+
+=== USER NOTES ===
+%s`

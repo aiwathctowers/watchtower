@@ -126,9 +126,7 @@ struct ProgressDetailContent: View {
                         detailRow(label: "Input (+ cache)", value: formatTokens(run.totalApiTokens))
                     }
                     detailRow(label: "Output", value: formatTokens(run.outputTokens))
-                    if run.costUsd > 0 {
-                        detailRow(label: "Cost", value: String(format: "$%.4f", run.costUsd))
-                    }
+
                 }
             }
 
@@ -184,11 +182,6 @@ struct ProgressDetailContent: View {
                     .foregroundStyle(.secondary)
             }
 
-            if step.costUsd > 0 {
-                Text(String(format: "$%.4f", step.costUsd))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -420,10 +413,6 @@ struct ProgressDetailContent: View {
                     detailRow(label: "Input (+ cache)", value: formatTokens(record.totalApiTokens))
                 }
                 detailRow(label: "Output", value: formatTokens(record.outputTokens))
-            }
-
-            if record.costUsd > 0 {
-                detailRow(label: "Cost", value: String(format: "$%.4f", record.costUsd))
             }
 
             if record.durationSeconds > 0 && record.outputTokens > 0 {

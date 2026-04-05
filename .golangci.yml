@@ -72,6 +72,7 @@ linters:
         - G306 # WriteFile permissions — test scripts must be executable
         - G402 # TLS InsecureSkipVerify — used in test client for self-signed certs
         - G404 # weak random — acceptable for jitter/non-crypto use
+        - G117 # struct field name matches secret pattern — false positive on OAuth token struct field names
         - G702 # command injection via taint — CLI tool builds commands from config
         - G703 # error not checked — covered by errcheck linter
 

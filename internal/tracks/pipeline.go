@@ -542,7 +542,6 @@ func (p *Pipeline) storeTrackItems(items []aiItem, userID, channelID, channelNam
 	usage *digest.Usage, promptVersion int, from, to float64) int {
 	// Divide token cost across items.
 	var inputTokens, outputTokens int
-	var costUSD float64
 	model := "auto"
 	if usage != nil && len(items) > 0 {
 		model = usage.Model
@@ -634,7 +633,7 @@ func (p *Pipeline) storeTrackItems(items []aiItem, userID, channelID, channelNam
 			Model:            model,
 			InputTokens:      inputTokens,
 			OutputTokens:     outputTokens,
-			CostUSD:          costUSD,
+			CostUSD:          0,
 			PromptVersion:    promptVersion,
 		}
 

@@ -14,21 +14,21 @@ func TestGetDigestStats(t *testing.T) {
 		ChannelID: "C1", Type: "channel",
 		PeriodFrom: 1000000, PeriodTo: 2000000,
 		Summary: "test", Model: "haiku",
-		MessageCount: 10, InputTokens: 100, OutputTokens: 50, CostUSD: 0.01,
+		MessageCount: 10, InputTokens: 100, OutputTokens: 50, CostUSD: 0,
 	})
 	require.NoError(t, err)
 	_, err = db.UpsertDigest(Digest{
 		ChannelID: "C2", Type: "channel",
 		PeriodFrom: 1000000, PeriodTo: 2000000,
 		Summary: "test2", Model: "haiku",
-		MessageCount: 20, InputTokens: 200, OutputTokens: 100, CostUSD: 0.02,
+		MessageCount: 20, InputTokens: 200, OutputTokens: 100, CostUSD: 0,
 	})
 	require.NoError(t, err)
 	_, err = db.UpsertDigest(Digest{
 		ChannelID: "", Type: "daily",
 		PeriodFrom: 1000000, PeriodTo: 2000000,
 		Summary: "daily", Model: "haiku",
-		MessageCount: 30, InputTokens: 300, OutputTokens: 150, CostUSD: 0.03,
+		MessageCount: 30, InputTokens: 300, OutputTokens: 150, CostUSD: 0,
 	})
 	require.NoError(t, err)
 
@@ -39,7 +39,7 @@ func TestGetDigestStats(t *testing.T) {
 	assert.Equal(t, 60, stats.TotalMessages)
 	assert.Equal(t, 600, stats.InputTokens)
 	assert.Equal(t, 300, stats.OutputTokens)
-	assert.InDelta(t, 0.06, stats.CostUSD, 0.001)
+	assert.InDelta(t, 0.0, stats.CostUSD, 0.001)
 
 	// Filter by type
 	stats, err = db.GetDigestStats(DigestFilter{Type: "channel"})
@@ -148,14 +148,14 @@ func TestGetDigestStatsFilterByUnixRange(t *testing.T) {
 		ChannelID: "C1", Type: "channel",
 		PeriodFrom: 1000000, PeriodTo: 1500000,
 		Summary: "early", Model: "haiku",
-		MessageCount: 10, InputTokens: 100, OutputTokens: 50, CostUSD: 0.01,
+		MessageCount: 10, InputTokens: 100, OutputTokens: 50, CostUSD: 0,
 	})
 	require.NoError(t, err)
 	_, err = db.UpsertDigest(Digest{
 		ChannelID: "C2", Type: "channel",
 		PeriodFrom: 2000000, PeriodTo: 2500000,
 		Summary: "late", Model: "haiku",
-		MessageCount: 20, InputTokens: 200, OutputTokens: 100, CostUSD: 0.02,
+		MessageCount: 20, InputTokens: 200, OutputTokens: 100, CostUSD: 0,
 	})
 	require.NoError(t, err)
 
