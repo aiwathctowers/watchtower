@@ -244,11 +244,11 @@ func (d *Daemon) runSync(ctx context.Context) {
 			if err != nil {
 				errMsg = err.Error()
 			}
-			inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+			inTok, outTok, totalAPI := 0, 0, 0
 			if usage != nil {
-				inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+				inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 			}
-			_ = d.db.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+			_ = d.db.CompletePipelineRun(runID, n, inTok, outTok, 0, totalAPI, nil, nil, errMsg)
 		}
 	}
 

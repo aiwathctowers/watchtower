@@ -80,7 +80,7 @@ final class ConfigService {
 
             if let calendar = yaml["calendar"] as? [String: Any] {
                 calendarEnabled = (calendar["enabled"] as? Bool) ?? false
-                calendarSyncDaysAhead = (calendar["sync_days_ahead"] as? Int) ?? 7
+                calendarSyncDaysAhead = (calendar["sync_days_ahead"] as? Int) ?? 2
             }
 
             parseError = nil

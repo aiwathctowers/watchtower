@@ -50,7 +50,7 @@ enum CalendarQueries {
             db,
             sql: """
                 SELECT * FROM calendar_events
-                WHERE start_time > ?
+                WHERE start_time > ? AND is_all_day = 0
                 ORDER BY start_time ASC
                 LIMIT 1
                 """,

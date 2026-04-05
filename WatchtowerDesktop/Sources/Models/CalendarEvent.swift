@@ -4,6 +4,7 @@ import GRDB
 // MARK: - Attendee
 
 struct EventAttendee: Codable, Identifiable, Equatable {
+    // Note: uses email as identity; assumes no duplicate emails per event (standard for calendar APIs)
     var id: String { email }
     let email: String
     let displayName: String
@@ -103,6 +104,7 @@ struct CalendarEvent: FetchableRecord, Identifiable, Equatable {
 
     // MARK: - Attendees
 
+    // Note: decodes JSON each time; acceptable for current use (row rendering, attendee count)
     var parsedAttendees: [EventAttendee] {
         guard let data = attendees.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([EventAttendee].self, from: data)) ?? []

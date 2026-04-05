@@ -33,7 +33,7 @@ func (m *mockGenerator) Generate(_ context.Context, _, _, _ string) (string, *Us
 	m.mu.Lock()
 	m.calls++
 	m.mu.Unlock()
-	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", m.err
+	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", m.err
 }
 
 func testDB(t *testing.T) *db.DB {
@@ -573,7 +573,7 @@ func TestStoreDigest(t *testing.T) {
 		},
 	}
 
-	err := p.storeDigest("C1", "channel", 1000.0, 2000.0, result, 42, &Usage{InputTokens: 500, OutputTokens: 200, CostUSD: 0.005}, 0)
+	err := p.storeDigest("C1", "channel", 1000.0, 2000.0, result, 42, &Usage{InputTokens: 500, OutputTokens: 200, CostUSD: 0}, 0)
 	require.NoError(t, err)
 
 	d, err := database.GetLatestDigest("C1", "channel")
@@ -615,7 +615,7 @@ func (m *capturingGenerator) Generate(_ context.Context, systemPrompt, prompt, _
 	m.capturedPrompt = systemPrompt + "\n" + prompt // combined for backward-compatible assertions
 	m.calls++
 	m.mu.Unlock()
-	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", nil
+	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", nil
 }
 
 func TestProfileContextInjectedIntoDigestPrompt(t *testing.T) {
@@ -705,7 +705,7 @@ func (m *threadSafeMockGenerator) Generate(_ context.Context, _, prompt, _ strin
 	m.calls++
 	m.prompts = append(m.prompts, prompt)
 	m.mu.Unlock()
-	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", m.err
+	return m.response, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", m.err
 }
 
 func validDigestJSON() string {
@@ -2391,9 +2391,9 @@ func (m *multiMockGenerator) Generate(ctx context.Context, _, _, _ string) (stri
 	source := sourceFromContext(ctx)
 	m.calls[source]++
 	if resp, ok := m.responses[source]; ok {
-		return resp, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", nil
+		return resp, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", nil
 	}
-	return m.fallback, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0.001}, "mock-session", nil
+	return m.fallback, &Usage{Model: "test-model", InputTokens: 100, OutputTokens: 50, CostUSD: 0}, "mock-session", nil
 }
 
 func TestBatchDigestIntegration(t *testing.T) {

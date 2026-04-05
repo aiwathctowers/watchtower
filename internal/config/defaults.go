@@ -36,5 +36,5 @@ const (
 
 	// Calendar defaults
 	DefaultCalendarEnabled       = false
-	DefaultCalendarSyncDaysAhead = 2
+	DefaultCalendarSyncDaysAhead = 7
 )

@@ -2,8 +2,6 @@ package calendar
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -12,12 +10,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"watchtower/internal/auth"
 )
 
 const (
@@ -124,7 +122,7 @@ type PrepareResult struct {
 
 // Prepare generates an OAuth authorization URL for the desktop app flow.
 func Prepare(cfg GoogleOAuthConfig, customRedirectURI string) (*PrepareResult, error) {
-	state, err := randomState()
+	state, err := auth.RandomState()
 	if err != nil {
 		return nil, fmt.Errorf("generating state: %w", err)
 	}
@@ -210,7 +208,7 @@ type callbackResult struct {
 // openBrowserFunc can be replaced in tests.
 var (
 	openBrowserMu   sync.Mutex
-	openBrowserFunc = openBrowser
+	openBrowserFunc = auth.OpenBrowser
 )
 
 func getOpenBrowserFunc() func(string) {
@@ -220,6 +218,9 @@ func getOpenBrowserFunc() func(string) {
 }
 
 // Login performs the Google OAuth2 flow via a local HTTP callback server.
+// Plain HTTP (not TLS) is used intentionally: Google's OAuth spec for native/loopback
+// apps requires http://127.0.0.1 redirect URIs and rejects HTTPS for localhost.
+// This differs from the Slack OAuth flow (internal/auth) which uses TLS.
 func Login(ctx context.Context, cfg GoogleOAuthConfig, out io.Writer, opts ...LoginOptions) (*OAuthToken, error) {
 	var opt LoginOptions
 	if len(opts) > 0 {
@@ -233,9 +234,9 @@ func Login(ctx context.Context, cfg GoogleOAuthConfig, out io.Writer, opts ...Lo
 	defer listener.Close()
 
 	addr := listener.Addr().String()
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%s%s", portFromAddr(addr), callbackPath)
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%s%s", auth.PortFromAddr(addr), callbackPath)
 
-	state, err := randomState()
+	state, err := auth.RandomState()
 	if err != nil {
 		return nil, fmt.Errorf("generating state: %w", err)
 	}
@@ -264,6 +265,8 @@ func Login(ctx context.Context, cfg GoogleOAuthConfig, out io.Writer, opts ...Lo
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go server.Serve(listener) //nolint:errcheck
 	defer func() {
+		// Brief grace period to let the browser receive and render the success/error
+		// HTML page before the server is torn down.
 		time.Sleep(500 * time.Millisecond)
 		server.Close()
 	}()
@@ -315,38 +318,6 @@ func listenLocal() (net.Listener, error) {
 		}
 	}
 	return net.Listen("tcp", "127.0.0.1:0")
-}
-
-func portFromAddr(addr string) string {
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	return port
-}
-
-func randomState() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
-func openBrowser(u string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = "open"
-		args = []string{u}
-	case "linux":
-		cmd = "xdg-open"
-		args = []string{u}
-	default:
-		return
-	}
-	_ = exec.Command(cmd, args...).Start()
 }
 
 const callbackSuccessPage = `<!DOCTYPE html>

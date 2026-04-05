@@ -1,34 +1,70 @@
 import SwiftUI
 
-struct MeetingPrepView: View {
+// MARK: - Meeting Prep Detail Panel (right side)
+
+struct MeetingPrepDetailView: View {
     let eventID: String
-    @State private var viewModel = MeetingPrepViewModel()
-    @Environment(\.dismiss) private var dismiss
+    @Bindable var viewModel: MeetingPrepViewModel
+    @Binding var userNotes: String
+    let onClose: () -> Void
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if viewModel.isLoading {
-                    loadingView
-                } else if let result = viewModel.result {
-                    prepContent(result)
-                } else if let error = viewModel.error {
-                    errorView(error)
-                } else {
-                    loadingView
-                }
-            }
-            .navigationTitle("Meeting Prep")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
+        VStack(spacing: 0) {
+            toolbar
+            Divider()
+
+            if viewModel.isLoading {
+                loadingView
+            } else if let result = viewModel.result {
+                prepContent(result)
+            } else if let error = viewModel.error {
+                errorView(error)
+            } else {
+                loadingView
             }
         }
-        .frame(minWidth: 500, minHeight: 400)
         .onAppear {
-            viewModel.generate(eventID: eventID)
+            if viewModel.result == nil && !viewModel.isLoading {
+                viewModel.generate(eventID: eventID)
+            }
         }
+    }
+
+    // MARK: - Toolbar
+
+    private var toolbar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Meeting Prep")
+                    .font(.headline)
+                if viewModel.isCached {
+                    Text("Cached")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button {
+                viewModel.regenerate(eventID: eventID, userNotes: userNotes)
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+            .disabled(viewModel.isLoading)
+
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Content
@@ -37,9 +73,17 @@ struct MeetingPrepView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 titleHeader(result)
+
+                // Context gaps — prompt user for input
+                contextGapsSection(result.contextGaps)
+
+                // User notes input
+                userNotesSection
+
                 talkingPointsSection(result.talkingPoints)
                 openItemsSection(result.openItems)
                 peopleNotesSection(result.peopleNotes)
+                recommendationsSection(result.recommendations ?? [])
                 suggestedPrepSection(result.suggestedPrep)
             }
             .padding()
@@ -55,6 +99,67 @@ struct MeetingPrepView: View {
                 Text(result.startTime)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Context Gaps
+
+    @ViewBuilder
+    private func contextGapsSection(_ gaps: [String]?) -> some View {
+        if let gaps, !gaps.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text("Missing Context")
+                        .font(.headline)
+                }
+                ForEach(Array(gaps.enumerated()), id: \.offset) { _, gap in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.top, 2)
+                        Text(gap).font(.callout)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color.orange.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+        }
+    }
+
+    // MARK: - User Notes Input
+
+    private var userNotesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader("Your Notes", icon: "square.and.pencil")
+            TextEditor(text: $userNotes)
+                .font(.callout)
+                .frame(minHeight: 60, maxHeight: 100)
+                .padding(4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+            if !userNotes.isEmpty {
+                HStack {
+                    Spacer()
+                    Button {
+                        viewModel.regenerate(eventID: eventID, userNotes: userNotes)
+                    } label: {
+                        Label("Regenerate with notes", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(viewModel.isLoading)
+                }
             }
         }
     }
@@ -156,6 +261,33 @@ struct MeetingPrepView: View {
         }
     }
 
+    // MARK: - Recommendations
+
+    @ViewBuilder
+    private func recommendationsSection(_ recommendations: [MeetingRecommendation]) -> some View {
+        if !recommendations.isEmpty {
+            sectionHeader("Recommendations", icon: "sparkles")
+            ForEach(recommendations) { rec in
+                HStack(alignment: .top, spacing: 6) {
+                    priorityDot(rec.priority)
+                        .padding(.top, 6)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rec.text).font(.callout)
+                        Text(rec.category)
+                            .font(.caption2)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(
+                                categoryColor(rec.category).opacity(0.12),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(categoryColor(rec.category))
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Suggested Prep
 
     @ViewBuilder
@@ -202,16 +334,60 @@ struct MeetingPrepView: View {
             .foregroundStyle(color)
     }
 
+    private func categoryColor(_ category: String) -> Color {
+        switch category {
+        case "agenda": return .red
+        case "format": return .purple
+        case "participants": return .blue
+        case "followup": return .green
+        case "preparation": return .orange
+        default: return .secondary
+        }
+    }
+
     // MARK: - States
 
     private var loadingView: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-            Text("Preparing meeting context...")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.regular)
+                Text(viewModel.statusMessage.isEmpty ? "Preparing..." : viewModel.statusMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Progress steps
+            VStack(alignment: .leading, spacing: 6) {
+                progressStep("Loading event data", done: true)
+                progressStep("Analyzing attendee activity", done: !viewModel.statusMessage.contains("Gathering"))
+                progressStep("Generating meeting brief", done: false)
+            }
+            .padding()
+            .frame(maxWidth: 280)
+            .background(
+                Color.secondary.opacity(0.04),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func progressStep(_ label: String, done: Bool) -> some View {
+        HStack(spacing: 8) {
+            if done {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+            }
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(done ? .secondary : .primary)
+        }
     }
 
     private func errorView(_ message: String) -> some View {

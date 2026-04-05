@@ -5,9 +5,9 @@ struct InsightProgressData: Codable {
     let done: Int
     let total: Int
     let status: String?
-    let inputTokens: Int
-    let outputTokens: Int
-    let costUsd: Double
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let costUsd: Double?
     let error: String?
     let finished: Bool
     let itemsFound: Int?
@@ -43,9 +43,9 @@ struct InsightProgressData: Codable {
         done = try container.decode(Int.self, forKey: .done)
         total = try container.decode(Int.self, forKey: .total)
         status = try container.decodeIfPresent(String.self, forKey: .status)
-        inputTokens = try container.decode(Int.self, forKey: .inputTokens)
-        outputTokens = try container.decode(Int.self, forKey: .outputTokens)
-        costUsd = try container.decode(Double.self, forKey: .costUsd)
+        inputTokens = try container.decodeIfPresent(Int.self, forKey: .inputTokens)
+        outputTokens = try container.decodeIfPresent(Int.self, forKey: .outputTokens)
+        costUsd = try container.decodeIfPresent(Double.self, forKey: .costUsd)
         error = try container.decodeIfPresent(String.self, forKey: .error)
         finished = try container.decodeIfPresent(Bool.self, forKey: .finished) ?? false
         itemsFound = try container.decodeIfPresent(Int.self, forKey: .itemsFound)

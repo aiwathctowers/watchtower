@@ -68,7 +68,7 @@ func TestPrepareForEvent(t *testing.T) {
 	}
 	pipe := New(database, cfg, gen, nil)
 
-	result, err := pipe.PrepareForEvent(context.Background(), "evt1")
+	result, err := pipe.PrepareForEvent(context.Background(), "evt1", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -86,7 +86,7 @@ func TestPrepareForEvent_NotFound(t *testing.T) {
 	cfg := &config.Config{}
 	pipe := New(database, cfg, gen, nil)
 
-	_, err := pipe.PrepareForEvent(context.Background(), "nonexistent")
+	_, err := pipe.PrepareForEvent(context.Background(), "nonexistent", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -105,7 +105,7 @@ func TestPrepareForNext(t *testing.T) {
 	cfg := &config.Config{}
 	pipe := New(database, cfg, gen, nil)
 
-	result, err := pipe.PrepareForNext(context.Background())
+	result, err := pipe.PrepareForNext(context.Background(), "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "evt1", result.EventID)
@@ -117,7 +117,7 @@ func TestPrepareForNext_NoEvents(t *testing.T) {
 	cfg := &config.Config{}
 	pipe := New(database, cfg, gen, nil)
 
-	_, err := pipe.PrepareForNext(context.Background())
+	_, err := pipe.PrepareForNext(context.Background(), "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no upcoming meetings")
 }

@@ -12,7 +12,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var meetingPrepFlagJSON bool
+var (
+	meetingPrepFlagJSON         bool
+	meetingPrepFlagForceRefresh bool
+	meetingPrepFlagUserNotes    string
+)
 
 var meetingPrepCmd = &cobra.Command{
 	Use:   "meeting-prep [event-id|next]",
@@ -25,6 +29,8 @@ var meetingPrepCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(meetingPrepCmd)
 	meetingPrepCmd.Flags().BoolVar(&meetingPrepFlagJSON, "json", false, "output as JSON")
+	meetingPrepCmd.Flags().BoolVar(&meetingPrepFlagForceRefresh, "force-refresh", false, "regenerate even if cached result exists")
+	meetingPrepCmd.Flags().StringVar(&meetingPrepFlagUserNotes, "user-notes", "", "additional context or agenda notes from the user")
 }
 
 func runMeetingPrep(cmd *cobra.Command, args []string) error {
@@ -52,13 +58,39 @@ func runMeetingPrep(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	var result *meeting.MeetingPrepResult
 
-	if len(args) == 0 || args[0] == "next" {
-		result, err = pipe.PrepareForNext(ctx)
-	} else {
-		result, err = pipe.PrepareForEvent(ctx, args[0])
+	eventID := ""
+	if len(args) > 0 && args[0] != "next" {
+		eventID = args[0]
 	}
-	if err != nil {
-		return err
+
+	// Check cache first (unless force-refresh).
+	if eventID != "" && !meetingPrepFlagForceRefresh {
+		if cached, err := database.GetMeetingPrepCache(eventID); err == nil && cached != nil && cached.ResultJSON != "" {
+			var cachedResult meeting.MeetingPrepResult
+			if json.Unmarshal([]byte(cached.ResultJSON), &cachedResult) == nil {
+				result = &cachedResult
+			}
+		}
+	}
+
+	if result == nil {
+		if eventID == "" {
+			result, err = pipe.PrepareForNext(ctx, meetingPrepFlagUserNotes)
+		} else {
+			result, err = pipe.PrepareForEvent(ctx, eventID, meetingPrepFlagUserNotes)
+		}
+		if err != nil {
+			return err
+		}
+
+		// Cache the result.
+		if resultJSON, jsonErr := json.Marshal(result); jsonErr == nil {
+			_ = database.SaveMeetingPrepCache(db.MeetingPrepCache{
+				EventID:    result.EventID,
+				ResultJSON: string(resultJSON),
+				UserNotes:  meetingPrepFlagUserNotes,
+			})
+		}
 	}
 
 	out := cmd.OutOrStdout()

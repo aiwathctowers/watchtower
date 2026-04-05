@@ -486,14 +486,13 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 		model := digest.ModelSonnet
 		runID, runErr := database.CreatePipelineRun("tasks", "cli", model)
 		if runErr == nil {
-			inputTokens, outputTokens, costUSD, totalAPI := 0, 0, 0.0, 0
+			inputTokens, outputTokens, totalAPI := 0, 0, 0
 			if usage != nil {
 				inputTokens = usage.InputTokens
 				outputTokens = usage.OutputTokens
-				costUSD = usage.CostUSD
 				totalAPI = usage.TotalAPITokens
 			}
-			_ = database.CompletePipelineRun(runID, 1, inputTokens, outputTokens, costUSD, totalAPI, nil, nil, "")
+			_ = database.CompletePipelineRun(runID, 1, inputTokens, outputTokens, 0, totalAPI, nil, nil, "")
 		}
 		database.Close()
 	}

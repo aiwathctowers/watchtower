@@ -1,16 +1,24 @@
 import Foundation
 import GRDB
 
+struct DayEvents: Identifiable {
+    let id: Date
+    let label: String
+    let events: [CalendarEvent]
+}
+
 @MainActor
 @Observable
 final class CalendarViewModel {
-    var todayEvents: [CalendarEvent] = []
-    var tomorrowEvents: [CalendarEvent] = []
+    var dailyEvents: [DayEvents] = []
     var nextEvent: CalendarEvent?
     var isConnected: Bool = false
 
     private let dbPool: DatabasePool
     private var observationTask: Task<Void, Never>?
+
+    /// Number of days to display (including today).
+    private let daysAhead = 7
 
     init(dbPool: DatabasePool) {
         self.dbPool = dbPool
@@ -23,24 +31,39 @@ final class CalendarViewModel {
         observationTask = nil
     }
 
+    // MARK: - Convenience accessors (backward compat)
+
+    var todayEvents: [CalendarEvent] {
+        dailyEvents.first?.events ?? []
+    }
+
+    var tomorrowEvents: [CalendarEvent] {
+        dailyEvents.dropFirst().first?.events ?? []
+    }
+
     // MARK: - Data Loading
 
     func loadEvents() {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let tomorrow = today.addingTimeInterval(86400)
-        let dayAfter = tomorrow.addingTimeInterval(86400)
 
-        let result = try? dbPool.read { db -> ([CalendarEvent], [CalendarEvent], CalendarEvent?) in
-            let todayItems = try CalendarQueries.fetchEvents(db, from: today, to: tomorrow)
-            let tomorrowItems = try CalendarQueries.fetchEvents(db, from: tomorrow, to: dayAfter)
+        let result = try? dbPool.read { db -> ([DayEvents], CalendarEvent?) in
+            var days: [DayEvents] = []
+            for offset in 0..<self.daysAhead {
+                let dayStart = today.addingTimeInterval(Double(offset) * 86400)
+                let dayEnd = dayStart.addingTimeInterval(86400)
+                let items = try CalendarQueries.fetchEvents(db, from: dayStart, to: dayEnd)
+                if !items.isEmpty {
+                    let label = Self.label(for: dayStart, calendar: cal)
+                    days.append(DayEvents(id: dayStart, label: label, events: items))
+                }
+            }
             let next = try CalendarQueries.fetchNextEvent(db)
-            return (todayItems, tomorrowItems, next)
+            return (days, next)
         }
 
-        todayEvents = result?.0 ?? []
-        tomorrowEvents = result?.1 ?? []
-        nextEvent = result?.2
+        dailyEvents = result?.0 ?? []
+        nextEvent = result?.1
 
         let hasEvents = (try? dbPool.read { db in
             try CalendarQueries.eventCount(db) > 0
@@ -48,20 +71,26 @@ final class CalendarViewModel {
         isConnected = hasEvents
     }
 
+    // MARK: - Helpers
+
+    private static func label(for date: Date, calendar cal: Calendar) -> String {
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInTomorrow(date) { return "Tomorrow" }
+        let fmt = DateFormatter()
+        fmt.locale = Locale.current
+        fmt.dateFormat = "EEEE, d MMM"
+        return fmt.string(from: date)
+    }
+
     // MARK: - Observation
 
     private func startObserving() {
         observationTask = Task { [weak self] in
-            guard let self else { return }
-            let observation = ValueObservation.tracking { db -> Int in
-                try CalendarQueries.eventCount(db)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, let self else { break }
+                self.loadEvents()
             }
-            do {
-                for try await _ in observation.values(in: self.dbPool).dropFirst() {
-                    guard !Task.isCancelled else { break }
-                    self.loadEvents()
-                }
-            } catch {}
         }
     }
 }

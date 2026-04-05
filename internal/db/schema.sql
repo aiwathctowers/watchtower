@@ -687,3 +687,11 @@ CREATE TABLE IF NOT EXISTS calendar_attendee_map (
     slack_user_id  TEXT NOT NULL DEFAULT '',
     resolved_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+CREATE TABLE IF NOT EXISTS meeting_prep_cache (
+    event_id      TEXT PRIMARY KEY,
+    result_json   TEXT NOT NULL DEFAULT '',
+    user_notes    TEXT NOT NULL DEFAULT '',
+    generated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_prep_cache_generated ON meeting_prep_cache(generated_at);

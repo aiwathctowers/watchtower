@@ -146,11 +146,6 @@ final class BackgroundTaskManager {
         tasks.values.reduce(0) { $0 + ($1.progress?.outputTokens ?? 0) }
     }
 
-    /// Total cost across all tasks (from accumulated pipeline counters).
-    var totalCostUsd: Double {
-        tasks.values.reduce(0.0) { $0 + ($1.progress?.costUsd ?? 0) }
-    }
-
     /// Total API tokens (our content + CLI overhead).
     var totalApiTokens: Int {
         tasks.values.reduce(0) { $0 + ($1.progress?.totalApiTokens ?? 0) }

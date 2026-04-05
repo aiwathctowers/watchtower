@@ -68,8 +68,6 @@ struct UsageView: View {
                 } else {
                     // Day summary
                     daySummary
-                    // Cost breakdown chart
-                    costChart
                     // Chronological log
                     runsList
                 }
@@ -122,48 +120,7 @@ struct UsageView: View {
                     tooltip: "Total input tokens including cache reads and cache writes"
                 )
                 summaryItem(label: "Output", value: formatTokens(viewModel.totalOutputTokens))
-                summaryItem(label: "Cost", value: formatCost(viewModel.totalCost))
-            }
-            .padding(4)
-        }
-    }
 
-    // MARK: - Cost Chart
-
-    private var costChart: some View {
-        let shares = viewModel.costByPipeline
-        let maxCost = shares.map(\.cost).max() ?? 1
-
-        return GroupBox("Cost by Pipeline") {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(shares) { share in
-                    HStack(spacing: 8) {
-                        Image(systemName: share.icon)
-                            .frame(width: 16)
-                            .foregroundStyle(.secondary)
-                        Text(share.label)
-                            .frame(width: 110, alignment: .leading)
-                            .font(.callout)
-
-                        GeometryReader { geo in
-                            let fraction = maxCost > 0 ? share.cost / maxCost : 0
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(pipelineColor(share.pipeline))
-                                .frame(width: max(geo.size.width * fraction, 2))
-                        }
-                        .frame(height: 16)
-
-                        Text("\(share.calls) calls")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 55, alignment: .trailing)
-
-                        Text(formatCost(share.cost))
-                            .monospacedDigit()
-                            .fontWeight(.medium)
-                            .frame(width: 70, alignment: .trailing)
-                    }
-                }
             }
             .padding(4)
         }
@@ -198,17 +155,6 @@ struct UsageView: View {
                 .foregroundStyle(.secondary)
         }
         .help(tooltip ?? "")
-    }
-
-    private func pipelineColor(_ pipeline: String) -> Color {
-        switch pipeline {
-        case "digests": return .blue
-        case "tracks": return .orange
-        case "people": return .purple
-        case "briefing": return .green
-        case "inbox": return .cyan
-        default: return .gray
-        }
     }
 }
 
@@ -270,11 +216,6 @@ private struct RunRow: View {
 
                     tokenBadge("In", count: run.inputTokens)
                     tokenBadge("Out", count: run.outputTokens)
-
-                    Text(formatCost(run.costUsd))
-                        .monospacedDigit()
-                        .fontWeight(.medium)
-                        .frame(width: 70, alignment: .trailing)
 
                     Text(timeString(run.startedAt))
                         .font(.caption)
@@ -350,10 +291,6 @@ private struct RunRow: View {
                         tokenBadge("In", count: step.inputTokens, small: true)
                         tokenBadge("Out", count: step.outputTokens, small: true)
 
-                        Text(formatCost(step.costUsd))
-                            .font(.caption)
-                            .monospacedDigit()
-                            .frame(width: 60, alignment: .trailing)
                     }
                     .padding(.vertical, 1)
                 }
@@ -396,11 +333,6 @@ private func formatTokens(_ count: Int) -> String {
         return String(format: "%.1fK", Double(count) / 1_000)
     }
     return "\(count)"
-}
-
-private func formatCost(_ cost: Double) -> String {
-    if cost < 0.01 { return String(format: "$%.4f", cost) }
-    return String(format: "$%.2f", cost)
 }
 
 private func timeString(_ iso: String) -> String {

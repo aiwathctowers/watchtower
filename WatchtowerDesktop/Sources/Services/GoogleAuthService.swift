@@ -24,12 +24,18 @@ final class GoogleAuthService {
         isAuthenticating = true
         error = nil
 
+        // Store the process so cancelConnect() can terminate it
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = ["calendar", "login"]
+        process.environment = Constants.resolvedEnvironment()
+        process.currentDirectoryURL = Constants.processWorkingDirectory()
+        authProcess = process
+
         Task.detached {
-            let result = await Self.runCLI(
-                path: cliPath,
-                arguments: ["calendar", "login"]
-            )
+            let result = await Self.runProcess(process)
             await MainActor.run {
+                self.authProcess = nil
                 self.isAuthenticating = false
                 if result.exitCode == 0 {
                     self.isConnected = true
@@ -111,7 +117,13 @@ final class GoogleAuthService {
         process.arguments = arguments
         process.environment = Constants.resolvedEnvironment()
         process.currentDirectoryURL = Constants.processWorkingDirectory()
+        return await runProcess(process)
+    }
 
+    /// Runs a pre-configured Process, reading pipe data before waitUntilExit to avoid deadlock.
+    nonisolated private static func runProcess(
+        _ process: Process
+    ) async -> (exitCode: Int32, stdout: String, stderr: String) {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -123,10 +135,11 @@ final class GoogleAuthService {
             return (-1, "", error.localizedDescription)
         }
 
-        process.waitUntilExit()
-
+        // Read pipe data BEFORE waitUntilExit to prevent deadlock when output exceeds 64KB
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
         let stdout = String(data: stdoutData, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8)?

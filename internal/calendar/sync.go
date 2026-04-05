@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"time"
 
@@ -20,7 +21,11 @@ type Syncer struct {
 }
 
 // NewSyncer creates a calendar syncer.
+// If logger is nil, a no-op logger is used.
 func NewSyncer(client *Client, database *db.DB, cfg *config.Config, logger *log.Logger) *Syncer {
+	if logger == nil {
+		logger = log.New(io.Discard, "", 0)
+	}
 	return &Syncer{
 		client: client,
 		db:     database,
@@ -68,7 +73,10 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if len(calendarIDs) == 0 {
 		// Use selected calendars from DB.
 		dbIDs, err := s.db.GetSelectedCalendarIDs()
-		if err != nil || len(dbIDs) == 0 {
+		if err != nil {
+			s.logger.Printf("calendar: failed to get selected calendars from DB, falling back to primary: %v", err)
+			calendarIDs = []string{"primary"}
+		} else if len(dbIDs) == 0 {
 			calendarIDs = []string{"primary"}
 		} else {
 			calendarIDs = dbIDs
@@ -114,7 +122,7 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 			UpdatedAt:      e.UpdatedAt,
 		}
 
-		if err := s.db.UpsertCalendarEvent(dbEvent); err != nil {
+		if err := s.db.UpsertCalendarEvent(dbEvent, syncedAt); err != nil {
 			s.logger.Printf("calendar: failed to upsert event %s: %v", e.ID, err)
 			continue
 		}

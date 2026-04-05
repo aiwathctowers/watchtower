@@ -415,11 +415,11 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				errMsg = err.Error()
 			}
-			inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+			inTok, outTok, totalAPI := 0, 0, 0
 			if usage != nil {
-				inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+				inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 			}
-			_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+			_ = database.CompletePipelineRun(runID, n, inTok, outTok, 0, totalAPI, nil, nil, errMsg)
 		}
 		return nil
 	}
@@ -452,11 +452,11 @@ func runDigestGenerate(cmd *cobra.Command, args []string) error {
 
 	// Complete run in DB
 	if runID > 0 {
-		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+		inTok, outTok, totalAPI := 0, 0, 0
 		if usage != nil {
-			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+			inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 		}
-		_ = database.CompletePipelineRun(runID, n, inTok, outTok, cost, totalAPI, nil, nil, "")
+		_ = database.CompletePipelineRun(runID, n, inTok, outTok, 0, totalAPI, nil, nil, "")
 	}
 
 	if n == 0 {
@@ -623,14 +623,14 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			errMsg = err.Error()
 		}
-		inTok, outTok, cost, totalAPI := 0, 0, 0.0, 0
+		inTok, outTok, totalAPI := 0, 0, 0
 		if usage != nil {
-			inTok, outTok, cost, totalAPI = usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.TotalAPITokens
+			inTok, outTok, totalAPI = usage.InputTokens, usage.OutputTokens, usage.TotalAPITokens
 		}
 		fromUnix := float64(from.Unix())
 		toUnix := float64(to.Unix())
 		if runID > 0 {
-			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, cost, totalAPI, &fromUnix, &toUnix, errMsg)
+			_ = database.CompletePipelineRun(runID, 1, inTok, outTok, 0, totalAPI, &fromUnix, &toUnix, errMsg)
 		}
 	}
 

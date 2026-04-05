@@ -16,9 +16,9 @@ struct SyncProgressData: Decodable {
     let msgChannelsTotal: Int
     let msgChannelsDone: Int
     let messagesFetched: Int
-    let threadsTotal: Int
-    let threadsDone: Int
-    let threadsFetched: Int
+    let threadsTotal: Int?
+    let threadsDone: Int?
+    let threadsFetched: Int?
     let error: String?
 
     enum CodingKeys: String, CodingKey {

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 56"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 57"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2565,6 +2565,34 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v56: %w", err)
 		}
 		version = 56
+	}
+
+	if version < 57 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v57: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS meeting_prep_cache (
+			event_id      TEXT PRIMARY KEY,
+			result_json   TEXT NOT NULL DEFAULT '',
+			user_notes    TEXT NOT NULL DEFAULT '',
+			generated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v57 create meeting_prep_cache: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_meeting_prep_cache_generated ON meeting_prep_cache(generated_at)`); err != nil {
+			return fmt.Errorf("migration v57 create idx_meeting_prep_cache_generated: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 57"); err != nil {
+			return fmt.Errorf("setting schema version v57: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v57: %w", err)
+		}
+		version = 57
 	}
 
 	_ = version // silence unused variable if this is the last migration

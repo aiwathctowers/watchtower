@@ -578,6 +578,14 @@ type CalendarEventFilter struct {
 	Limit      int
 }
 
+// MeetingPrepCache stores a cached meeting prep result for an event.
+type MeetingPrepCache struct {
+	EventID     string
+	ResultJSON  string
+	UserNotes   string
+	GeneratedAt string
+}
+
 // PromptHistory records a snapshot of a prompt at a specific version.
 type PromptHistory struct {
 	ID        int

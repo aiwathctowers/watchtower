@@ -13,10 +13,10 @@ import (
 
 const (
 	calendarAPIBase = "https://www.googleapis.com/calendar/v3"
-	tokenEndpoint   = "https://oauth2.googleapis.com/token"
 )
 
 // Client wraps Google Calendar API calls using raw net/http.
+// Client is not safe for concurrent use.
 type Client struct {
 	hc           *http.Client
 	accessToken  string
@@ -47,7 +47,7 @@ func (c *Client) refreshAccessToken(ctx context.Context) error {
 		"client_secret": {c.oauthCfg.ClientSecret},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleTokenEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {
 		return err
 	}
@@ -59,15 +59,15 @@ func (c *Client) refreshAccessToken(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("token refresh failed (%d): %s", resp.StatusCode, body)
 	}
 
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return fmt.Errorf("decoding token response: %w", err)
 	}
 	c.accessToken = result.AccessToken

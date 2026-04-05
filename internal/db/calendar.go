@@ -65,28 +65,61 @@ func (db *DB) SetCalendarSelected(id string, selected bool) error {
 }
 
 // UpsertCalendarEvent inserts or replaces a calendar event.
-func (db *DB) UpsertCalendarEvent(ev CalendarEvent) error {
+// syncedAt is an ISO8601 timestamp used to track when the event was last synced.
+// If empty, the current time from SQLite is used as a fallback.
+func (db *DB) UpsertCalendarEvent(ev CalendarEvent, syncedAt ...string) error {
+	sa := "strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+	args := []any{
+		ev.ID, ev.CalendarID, ev.Title, ev.Description, ev.Location,
+		ev.StartTime, ev.EndTime, ev.OrganizerEmail, ev.Attendees,
+		ev.IsRecurring, ev.IsAllDay, ev.EventStatus, ev.EventType,
+		ev.HTMLLink, ev.RawJSON,
+	}
+	if len(syncedAt) > 0 && syncedAt[0] != "" {
+		sa = "?"
+		args = append(args, syncedAt[0])
+	}
+	args = append(args, ev.UpdatedAt)
 	_, err := db.Exec(`INSERT OR REPLACE INTO calendar_events
 		(id, calendar_id, title, description, location, start_time, end_time,
 		 organizer_email, attendees, is_recurring, is_all_day, event_status,
 		 event_type, html_link, raw_json, synced_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)`,
-		ev.ID, ev.CalendarID, ev.Title, ev.Description, ev.Location,
-		ev.StartTime, ev.EndTime, ev.OrganizerEmail, ev.Attendees,
-		ev.IsRecurring, ev.IsAllDay, ev.EventStatus, ev.EventType,
-		ev.HTMLLink, ev.RawJSON, ev.UpdatedAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+sa+`, ?)`,
+		args...)
 	if err != nil {
 		return fmt.Errorf("upserting calendar event %s: %w", ev.ID, err)
 	}
 	return nil
 }
 
-// UpsertCalendarEvents inserts or replaces multiple calendar events.
+// UpsertCalendarEvents inserts or replaces multiple calendar events in a single transaction.
 func (db *DB) UpsertCalendarEvents(events []CalendarEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning calendar events tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	for _, ev := range events {
-		if err := db.UpsertCalendarEvent(ev); err != nil {
-			return err
+		_, err := tx.Exec(`INSERT OR REPLACE INTO calendar_events
+			(id, calendar_id, title, description, location, start_time, end_time,
+			 organizer_email, attendees, is_recurring, is_all_day, event_status,
+			 event_type, html_link, raw_json, synced_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?)`,
+			ev.ID, ev.CalendarID, ev.Title, ev.Description, ev.Location,
+			ev.StartTime, ev.EndTime, ev.OrganizerEmail, ev.Attendees,
+			ev.IsRecurring, ev.IsAllDay, ev.EventStatus, ev.EventType,
+			ev.HTMLLink, ev.RawJSON, ev.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("upserting calendar event %s: %w", ev.ID, err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing calendar events tx: %w", err)
 	}
 	return nil
 }
@@ -145,7 +178,12 @@ func (db *DB) GetCalendarEventByID(id string) (*CalendarEvent, error) {
 // GetNextEvent returns the next upcoming event from now.
 func (db *DB) GetNextEvent() (*CalendarEvent, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	events, err := db.GetCalendarEvents(CalendarEventFilter{FromTime: now, Limit: 1})
+	query := `SELECT id, calendar_id, title, description, location, start_time, end_time,
+		organizer_email, attendees, is_recurring, is_all_day, event_status,
+		event_type, html_link, raw_json, synced_at, updated_at
+		FROM calendar_events WHERE end_time >= ? AND is_all_day = 0
+		ORDER BY start_time LIMIT 1`
+	events, err := db.queryCalendarEvents(query, now)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +254,37 @@ func (db *DB) GetSlackUserIDByEmail(email string) (string, error) {
 		return "", err
 	}
 	return uid, nil
+}
+
+// GetMeetingPrepCache returns a cached meeting prep result for the given event.
+func (db *DB) GetMeetingPrepCache(eventID string) (*MeetingPrepCache, error) {
+	var c MeetingPrepCache
+	err := db.QueryRow(`SELECT event_id, result_json, user_notes, generated_at FROM meeting_prep_cache WHERE event_id = ?`, eventID).
+		Scan(&c.EventID, &c.ResultJSON, &c.UserNotes, &c.GeneratedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// SaveMeetingPrepCache upserts a meeting prep result for the given event.
+func (db *DB) SaveMeetingPrepCache(c MeetingPrepCache) error {
+	_, err := db.Exec(`INSERT OR REPLACE INTO meeting_prep_cache (event_id, result_json, user_notes, generated_at)
+		VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
+		c.EventID, c.ResultJSON, c.UserNotes)
+	if err != nil {
+		return fmt.Errorf("saving meeting prep cache for %s: %w", c.EventID, err)
+	}
+	return nil
+}
+
+// DeleteMeetingPrepCache removes a cached meeting prep result.
+func (db *DB) DeleteMeetingPrepCache(eventID string) error {
+	_, err := db.Exec(`DELETE FROM meeting_prep_cache WHERE event_id = ?`, eventID)
+	if err != nil {
+		return fmt.Errorf("deleting meeting prep cache for %s: %w", eventID, err)
+	}
+	return nil
 }
 
 func (db *DB) queryCalendarEvents(query string, args ...any) ([]CalendarEvent, error) {

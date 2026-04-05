@@ -553,7 +553,7 @@ func (p *Pipeline) storeBatchCard(stats db.UserStats, result *BatchCardResult, f
 		PromptVersion:      pv,
 		InputTokens:        inTok,
 		OutputTokens:       outTok,
-		CostUSD:            cost,
+		CostUSD:            0,
 	}
 	_, err := p.db.UpsertPeopleCard(card)
 	return err
