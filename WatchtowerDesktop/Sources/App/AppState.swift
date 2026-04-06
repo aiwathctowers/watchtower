@@ -56,7 +56,7 @@ final class AppState {
         guard let db = databaseManager, chatViewModel == nil else { return }
         let configProvider = ConfigService().aiProvider
         let provider: AIProvider = configProvider == "codex" ? .codex : .claude
-        let service = ChatViewModel.createService(for: provider)
+        let service = WatchtowerAIService()
         let cvm = ChatViewModel(aiService: service, dbManager: db, provider: provider)
         let hvm = ChatHistoryViewModel(dbManager: db)
         hvm.load { [weak self, weak cvm, weak hvm] in
