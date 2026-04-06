@@ -145,7 +145,7 @@ func Prepare(cfg JiraOAuthConfig, customRedirectURI string) (*PrepareResult, err
 
 	redirectURI := customRedirectURI
 	if redirectURI == "" {
-		redirectURI = fmt.Sprintf("http://127.0.0.1:%d%s", defaultRedirectPort, callbackPath)
+		redirectURI = fmt.Sprintf("http://localhost:%d%s", defaultRedirectPort, callbackPath)
 	}
 
 	authorizeURL := buildAuthURL(cfg, redirectURI, state)
@@ -161,13 +161,13 @@ func buildAuthURL(cfg JiraOAuthConfig, redirectURI, state string) string {
 	params := url.Values{
 		"audience":      {"api.atlassian.com"},
 		"client_id":     {cfg.ClientID},
-		"scope":         {"read:jira-work read:jira-user offline_access"},
+		"scope":         {"read:jira-work read:jira-user"},
 		"redirect_uri":  {redirectURI},
 		"state":         {state},
 		"response_type": {"code"},
 		"prompt":        {"consent"},
 	}
-	return jiraAuthEndpoint + "?" + params.Encode()
+	return jiraAuthEndpoint + "?" + strings.ReplaceAll(params.Encode(), "+", "%20")
 }
 
 // exchangeCode exchanges an authorization code for tokens via raw HTTP POST.
@@ -334,7 +334,7 @@ func Login(ctx context.Context, cfg JiraOAuthConfig, out io.Writer, opts ...Logi
 	defer listener.Close()
 
 	addr := listener.Addr().String()
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%s%s", auth.PortFromAddr(addr), callbackPath)
+	redirectURI := fmt.Sprintf("http://localhost:%s%s", auth.PortFromAddr(addr), callbackPath)
 
 	state, err := auth.RandomState()
 	if err != nil {
