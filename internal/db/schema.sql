@@ -695,3 +695,68 @@ CREATE TABLE IF NOT EXISTS meeting_prep_cache (
     generated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_prep_cache_generated ON meeting_prep_cache(generated_at);
+
+-- Jira boards
+CREATE TABLE IF NOT EXISTS jira_boards (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL, project_key TEXT NOT NULL DEFAULT '',
+    board_type TEXT NOT NULL DEFAULT '', is_selected INTEGER NOT NULL DEFAULT 0,
+    issue_count INTEGER NOT NULL DEFAULT 0, synced_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Jira issues
+CREATE TABLE IF NOT EXISTS jira_issues (
+    key TEXT PRIMARY KEY, id TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL,
+    board_id INTEGER,
+    summary TEXT NOT NULL, description_text TEXT NOT NULL DEFAULT '',
+    issue_type TEXT NOT NULL DEFAULT '', issue_type_category TEXT NOT NULL DEFAULT '',
+    is_bug INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL, status_category TEXT NOT NULL,
+    status_category_changed_at TEXT NOT NULL DEFAULT '',
+    assignee_account_id TEXT NOT NULL DEFAULT '', assignee_email TEXT NOT NULL DEFAULT '',
+    assignee_display_name TEXT NOT NULL DEFAULT '', assignee_slack_id TEXT NOT NULL DEFAULT '',
+    reporter_account_id TEXT NOT NULL DEFAULT '', reporter_email TEXT NOT NULL DEFAULT '',
+    reporter_display_name TEXT NOT NULL DEFAULT '', reporter_slack_id TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT '', story_points REAL,
+    due_date TEXT NOT NULL DEFAULT '', sprint_id INTEGER, sprint_name TEXT NOT NULL DEFAULT '',
+    epic_key TEXT NOT NULL DEFAULT '',
+    labels TEXT NOT NULL DEFAULT '[]', components TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '',
+    raw_json TEXT NOT NULL DEFAULT '', synced_at TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_project ON jira_issues(project_key);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_assignee ON jira_issues(assignee_account_id);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_status_cat ON jira_issues(status_category);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_sprint ON jira_issues(sprint_id);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_epic ON jira_issues(epic_key);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_updated ON jira_issues(updated_at);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_due ON jira_issues(due_date);
+CREATE INDEX IF NOT EXISTS idx_jira_issues_board ON jira_issues(board_id);
+
+-- Jira sprints
+CREATE TABLE IF NOT EXISTS jira_sprints (
+    id INTEGER PRIMARY KEY, board_id INTEGER NOT NULL, name TEXT NOT NULL,
+    state TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '',
+    start_date TEXT NOT NULL DEFAULT '', end_date TEXT NOT NULL DEFAULT '',
+    complete_date TEXT NOT NULL DEFAULT '', synced_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Jira issue links
+CREATE TABLE IF NOT EXISTS jira_issue_links (
+    id TEXT PRIMARY KEY, source_key TEXT NOT NULL, target_key TEXT NOT NULL,
+    link_type TEXT NOT NULL, synced_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Jira user mapping
+CREATE TABLE IF NOT EXISTS jira_user_map (
+    jira_account_id TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '',
+    slack_user_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '',
+    match_method TEXT NOT NULL DEFAULT '', match_confidence REAL NOT NULL DEFAULT 0,
+    resolved_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Jira sync state
+CREATE TABLE IF NOT EXISTS jira_sync_state (
+    project_key TEXT PRIMARY KEY, last_synced_at TEXT NOT NULL DEFAULT '',
+    issues_synced INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+    last_error_at TEXT NOT NULL DEFAULT ''
+);

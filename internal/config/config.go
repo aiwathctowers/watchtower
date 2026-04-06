@@ -68,6 +68,17 @@ type CalendarConfig struct {
 	SyncDaysAhead     int      `mapstructure:"sync_days_ahead"`    // days ahead to fetch (default: 2)
 }
 
+// JiraConfig holds Jira Cloud integration settings.
+type JiraConfig struct {
+	Enabled          bool              `mapstructure:"enabled"`
+	CloudID          string            `mapstructure:"cloud_id"`
+	SiteURL          string            `mapstructure:"site_url"`
+	UserDisplayName  string            `mapstructure:"user_display_name"`
+	SelectedBoards   []int             `mapstructure:"selected_boards"`
+	SyncIntervalMins int               `mapstructure:"sync_interval_mins"`
+	UserMap          map[string]string `mapstructure:"user_map"`
+}
+
 // AnalysisConfig holds settings for the people analysis pipeline.
 type AnalysisConfig struct {
 	LegacyMode bool `mapstructure:"legacy_mode"` // enable legacy people analytics (default: false)
@@ -83,6 +94,7 @@ type Config struct {
 	Inbox           InboxConfig                 `mapstructure:"inbox"`
 	Tracks          TracksConfig                `mapstructure:"tracks"`
 	Calendar        CalendarConfig              `mapstructure:"calendar"`
+	Jira            JiraConfig                  `mapstructure:"jira"`
 	Analysis        AnalysisConfig              `mapstructure:"analysis"`
 	ClaudePath      string                      `mapstructure:"claude_path"`
 	CodexPath       string                      `mapstructure:"codex_path"`
@@ -119,6 +131,8 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("tracks.min_messages", DefaultTracksMinMsgs)
 	v.SetDefault("calendar.enabled", DefaultCalendarEnabled)
 	v.SetDefault("calendar.sync_days_ahead", DefaultCalendarSyncDaysAhead)
+	v.SetDefault("jira.enabled", DefaultJiraEnabled)
+	v.SetDefault("jira.sync_interval_mins", DefaultJiraSyncIntervalMins)
 	// Config file
 	v.SetConfigFile(configPath)
 

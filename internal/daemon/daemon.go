@@ -19,6 +19,7 @@ import (
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	"watchtower/internal/inbox"
+	"watchtower/internal/jira"
 
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -43,6 +44,8 @@ type Daemon struct {
 	briefingPipe   *briefing.Pipeline
 	inboxPipe      *inbox.Pipeline
 	calendarSyncer *calendar.Syncer
+	jiraSyncer     *jira.Syncer
+	lastJira       time.Time
 	lastPeople     time.Time // when people cards last ran (once per day)
 	lastBriefing   time.Time // when briefing last ran (once per day)
 }
@@ -89,6 +92,11 @@ func (d *Daemon) SetInboxPipeline(p *inbox.Pipeline) {
 // SetCalendarSyncer sets the calendar syncer for post-sync calendar fetch.
 func (d *Daemon) SetCalendarSyncer(s *calendar.Syncer) {
 	d.calendarSyncer = s
+}
+
+// SetJiraSyncer sets the Jira syncer for periodic sync.
+func (d *Daemon) SetJiraSyncer(s *jira.Syncer) {
+	d.jiraSyncer = s
 }
 
 // SetPeoplePipeline sets the people card pipeline (REDUCE phase).
@@ -179,6 +187,23 @@ func (d *Daemon) runSync(ctx context.Context) {
 			d.logger.Printf("calendar sync error: %v", err)
 		} else if n > 0 {
 			d.logger.Printf("calendar: %d events synced", n)
+		}
+	}
+
+	// Jira sync — runs after calendar sync, before pipelines.
+	if d.jiraSyncer != nil {
+		interval := time.Duration(d.config.Jira.SyncIntervalMins) * time.Minute
+		if interval <= 0 {
+			interval = time.Duration(config.DefaultJiraSyncIntervalMins) * time.Minute
+		}
+		if d.lastJira.IsZero() || time.Since(d.lastJira) >= interval {
+			n, err := d.jiraSyncer.Sync(ctx)
+			if err != nil {
+				d.logger.Printf("jira sync error: %v", err)
+			} else if n > 0 {
+				d.logger.Printf("jira: %d issues synced", n)
+			}
+			d.lastJira = time.Now()
 		}
 	}
 

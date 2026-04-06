@@ -58,6 +58,20 @@ struct SidebarView: View {
                 .padding(.vertical, 4)
             }
 
+            // Jira connection indicator
+            if JiraQueries.isConnected() {
+                HStack(spacing: 4) {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .foregroundStyle(.blue)
+                        .frame(width: 16)
+                    Text("Jira connected")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
+
             // Update available indicator
             if appState.updateService.isUpdateAvailable {
                 Button {

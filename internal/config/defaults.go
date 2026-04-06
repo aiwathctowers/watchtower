@@ -37,4 +37,8 @@ const (
 	// Calendar defaults
 	DefaultCalendarEnabled       = false
 	DefaultCalendarSyncDaysAhead = 7
+
+	// Jira defaults
+	DefaultJiraEnabled          = false
+	DefaultJiraSyncIntervalMins = 15
 )

@@ -44,6 +44,7 @@ struct GeneralSettings: View {
     @State private var slackReconnectSuccess = false
     @State private var slackAuthProcess: Process?
     @State private var googleAuth = GoogleAuthService()
+    @State private var jiraAuth = JiraAuthService()
 
     var body: some View {
         Form {
@@ -53,6 +54,7 @@ struct GeneralSettings: View {
             briefingSection
             aiSection
             calendarSettingsSection
+            jiraSettingsSection
 
             if let error = config.parseError {
                 Section("Parse Error") {
@@ -355,6 +357,67 @@ struct GeneralSettings: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var jiraSettingsSection: some View {
+        Section("Jira") {
+            if jiraAuth.isConnected {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Connected")
+                        if let site = jiraAuth.siteURL {
+                            Text(site)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let user = jiraAuth.userDisplayName {
+                            Text(user)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Disconnect") {
+                        jiraAuth.disconnect()
+                    }
+                }
+            } else {
+                HStack {
+                    Image(systemName: "bolt.horizontal.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Not connected")
+                    Spacer()
+
+                    if jiraAuth.isAuthenticating {
+                        ProgressView().controlSize(.small)
+                        Button("Cancel") {
+                            jiraAuth.cancelConnect()
+                        }
+                    } else {
+                        Button("Connect") { jiraAuth.connect() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+
+            if let err = jiraAuth.error {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+
+        if jiraAuth.isConnected {
+            JiraBoardsSettingsView()
+                .environment(appState)
+            JiraUserMappingSettingsView()
+                .environment(appState)
+            JiraSyncInfoView()
+                .environment(appState)
         }
     }
 

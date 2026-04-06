@@ -586,6 +586,97 @@ type MeetingPrepCache struct {
 	GeneratedAt string
 }
 
+// JiraBoard represents a Jira agile board stored locally.
+type JiraBoard struct {
+	ID         int
+	Name       string
+	ProjectKey string
+	BoardType  string
+	IsSelected bool
+	IssueCount int
+	SyncedAt   string
+}
+
+// JiraIssue represents a Jira issue stored locally.
+type JiraIssue struct {
+	Key                     string
+	ID                      string
+	ProjectKey              string
+	BoardID                 int
+	Summary                 string
+	DescriptionText         string
+	IssueType               string
+	IssueTypeCategory       string
+	IsBug                   bool
+	Status                  string
+	StatusCategory          string
+	StatusCategoryChangedAt string
+	AssigneeAccountID       string
+	AssigneeEmail           string
+	AssigneeDisplayName     string
+	AssigneeSlackID         string
+	ReporterAccountID       string
+	ReporterEmail           string
+	ReporterDisplayName     string
+	ReporterSlackID         string
+	Priority                string
+	StoryPoints             *float64
+	DueDate                 string
+	SprintID                int
+	SprintName              string
+	EpicKey                 string
+	Labels                  string // JSON array
+	Components              string // JSON array
+	CreatedAt               string
+	UpdatedAt               string
+	ResolvedAt              string
+	RawJSON                 string
+	SyncedAt                string
+	IsDeleted               bool
+}
+
+// JiraSprint represents a Jira sprint stored locally.
+type JiraSprint struct {
+	ID           int
+	BoardID      int
+	Name         string
+	State        string
+	Goal         string
+	StartDate    string
+	EndDate      string
+	CompleteDate string
+	SyncedAt     string
+}
+
+// JiraIssueLink represents a link between two Jira issues.
+type JiraIssueLink struct {
+	ID        string
+	SourceKey string
+	TargetKey string
+	LinkType  string
+	SyncedAt  string
+}
+
+// JiraUserMap maps a Jira account to a Slack user.
+type JiraUserMap struct {
+	JiraAccountID   string
+	Email           string
+	SlackUserID     string
+	DisplayName     string
+	MatchMethod     string
+	MatchConfidence float64
+	ResolvedAt      string
+}
+
+// JiraSyncState tracks the sync state for a Jira project.
+type JiraSyncState struct {
+	ProjectKey   string
+	LastSyncedAt string
+	IssuesSynced int
+	LastError    string
+	LastErrorAt  string
+}
+
 // PromptHistory records a snapshot of a prompt at a specific version.
 type PromptHistory struct {
 	ID        int
