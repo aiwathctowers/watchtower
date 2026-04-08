@@ -6,6 +6,7 @@ struct TasksListView: View {
     @State private var selectedItemID: Int?
     @State private var showCreateSheet = false
     @State private var searchText = ""
+    @State private var jiraConnected = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -31,6 +32,7 @@ struct TasksListView: View {
         .animation(.easeInOut(duration: 0.25), value: selectedItemID)
         .onAppear {
             initViewModel()
+            jiraConnected = JiraQueries.isConnected()
             if let id = appState.pendingTaskID {
                 selectedItemID = id
                 appState.pendingTaskID = nil
@@ -174,6 +176,21 @@ struct TasksListView: View {
                 }
             }
 
+            Menu("Source") {
+                ForEach(sourceFilterOptions, id: \.self) { filter in
+                    Button {
+                        vm.sourceFilter = filter; vm.load()
+                    } label: {
+                        HStack {
+                            Text(filter.rawValue)
+                            if vm.sourceFilter == filter {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+
         } label: {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(hasActiveFilter(vm) ? .blue : .secondary)
@@ -182,9 +199,19 @@ struct TasksListView: View {
         .fixedSize()
     }
 
+    private var sourceFilterOptions: [TasksViewModel.SourceFilter] {
+        var options: [TasksViewModel.SourceFilter] = [.all]
+        if jiraConnected {
+            options.append(.jira)
+        }
+        options.append(contentsOf: [.slack, .manual])
+        return options
+    }
+
     private func hasActiveFilter(_ vm: TasksViewModel) -> Bool {
         vm.priorityFilter != nil
             || vm.showDone
+            || vm.sourceFilter != .all
     }
 
     // MARK: - Sections
@@ -272,7 +299,9 @@ struct TasksListView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        if task.sourceType != "manual" {
+                        if task.sourceType == "jira" {
+                            jiraBadge(task)
+                        } else if task.sourceType != "manual" {
                             Image(systemName: sourceIcon(task))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
@@ -405,7 +434,23 @@ struct TasksListView: View {
         case "digest": return "doc.text.magnifyingglass"
         case "briefing": return "sun.max"
         case "chat": return "bubble.left.and.bubble.right"
+        case "jira": return "tray.full"
         default: return "square.and.pencil"
         }
+    }
+
+    @ViewBuilder
+    private func jiraBadge(_ task: TaskItem) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "tray.full")
+                .font(.caption2)
+            Text(task.sourceID)
+                .font(.caption2)
+                .fontWeight(.medium)
+        }
+        .foregroundStyle(.blue)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1)
+        .background(.blue.opacity(0.1), in: Capsule())
     }
 }

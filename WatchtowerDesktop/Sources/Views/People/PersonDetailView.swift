@@ -11,8 +11,11 @@ struct PersonDetailView: View {
     var interactions: [UserInteraction] = []
     var onUpdateConnections: (([String], [String], String) -> Void)?
     var allCards: [PeopleCard] = []
+    var dbManager: DatabaseManager?
 
     @State private var selectedTab = 0  // 0 = Overview, 1 = Connections
+    @State private var deliveryStats: JiraDeliveryStats?
+    @State private var jiraConnected = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,10 +61,14 @@ struct PersonDetailView: View {
                 tacticsSection
                 redFlagsSection
                 highlightsSection
+                deliverySection
                 activityHoursChart
                 historySection
             }
             .padding(20)
+        }
+        .task(id: card.userID) {
+            loadDeliveryStats()
         }
     }
 
@@ -310,6 +317,124 @@ struct PersonDetailView: View {
                 Label("Highlights", systemImage: "star")
                     .foregroundStyle(.green)
             }
+        }
+    }
+
+    // MARK: - Delivery (Jira)
+
+    @ViewBuilder
+    private var deliverySection: some View {
+        if jiraConnected, let stats = deliveryStats,
+           stats.issuesClosed > 0
+            || stats.openIssues > 0
+            || stats.storyPointsCompleted > 0 {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    deliveryMetricsGrid(stats)
+                    expertiseTags(stats)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(4)
+            } label: {
+                Label("Delivery", systemImage: "shippingbox")
+                    .foregroundStyle(.indigo)
+            }
+        }
+    }
+
+    private func deliveryMetricsGrid(
+        _ stats: JiraDeliveryStats
+    ) -> some View {
+        LazyVGrid(columns: [
+            GridItem(.flexible()),
+            GridItem(.flexible()),
+            GridItem(.flexible()),
+            GridItem(.flexible())
+        ], spacing: 10) {
+            StatCard(
+                title: "Issues Closed",
+                value: "\(stats.issuesClosed)",
+                detail: "last 30d"
+            )
+            StatCard(
+                title: "Cycle Time",
+                value: stats.avgCycleTimeDays > 0
+                    ? String(format: "%.1fd", stats.avgCycleTimeDays)
+                    : "-",
+                detail: "avg days"
+            )
+            StatCard(
+                title: "Velocity",
+                value: stats.storyPointsCompleted > 0
+                    ? String(
+                        format: "%.0f",
+                        stats.storyPointsCompleted
+                    )
+                    : "-",
+                detail: "story pts"
+            )
+            StatCard(
+                title: "Open Issues",
+                value: "\(stats.openIssues)",
+                detail: stats.overdueIssues > 0
+                    ? "\(stats.overdueIssues) overdue"
+                    : nil,
+                detailColor: stats.overdueIssues > 0
+                    ? .red : .secondary
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func expertiseTags(
+        _ stats: JiraDeliveryStats
+    ) -> some View {
+        let tags = stats.components + stats.labels
+        if !tags.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Expertise")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                FlowLayout(spacing: 6) {
+                    ForEach(tags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Color.indigo.opacity(0.1),
+                                in: RoundedRectangle(
+                                    cornerRadius: 6
+                                )
+                            )
+                            .foregroundStyle(.indigo)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadDeliveryStats() {
+        jiraConnected = JiraQueries.isConnected()
+        guard jiraConnected, let db = dbManager else {
+            deliveryStats = nil
+            return
+        }
+        let now = Date()
+        let thirtyDaysAgo = Calendar.current.date(
+            byAdding: .day, value: -30, to: now
+        ) ?? now
+        do {
+            deliveryStats = try db.dbPool.read { database in
+                try JiraQueries.fetchDeliveryStats(
+                    database,
+                    slackID: card.userID,
+                    from: thirtyDaysAgo,
+                    to: now
+                )
+            }
+        } catch {
+            deliveryStats = nil
         }
     }
 

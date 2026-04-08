@@ -8,6 +8,7 @@ struct TrackDetailView: View {
     @State private var chatVM: TrackChatViewModel?
     @State private var showCreateTask = false
     @State private var linkedTasks: [TaskItem] = []
+    @State private var jiraIssues: [JiraIssue] = []
 
     var body: some View {
         VSplitView {
@@ -25,6 +26,7 @@ struct TrackDetailView: View {
                     sourceRefsSection
                     relatedDigestsSection
                     linkedTasksSection
+                    jiraIssuesSection
                     dueDateSection
                     tagsSection
                     actionsSection
@@ -46,6 +48,7 @@ struct TrackDetailView: View {
                     track: track, viewModel: viewModel, dbManager: db
                 )
                 loadLinkedTasks(db: db)
+                loadJiraIssues(db: db)
             }
         }
         .onChange(of: showCreateTask) { _, isShowing in
@@ -509,6 +512,84 @@ struct TrackDetailView: View {
                 )
             }
         }
+    }
+
+    // MARK: - Jira Issues
+
+    @ViewBuilder
+    private var jiraIssuesSection: some View {
+        if !jiraIssues.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Linked Jira Issues")
+                    .font(.headline)
+
+                ForEach(jiraIssues, id: \.key) { issue in
+                    HStack(spacing: 10) {
+                        JiraBadgeView(
+                            issue: issue,
+                            siteURL: viewModel.jiraSiteURL,
+                            isExpanded: true
+                        )
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(issue.summary)
+                                .font(.subheadline)
+                                .lineLimit(2)
+
+                            HStack(spacing: 8) {
+                                if !issue.sprintName.isEmpty {
+                                    Label(issue.sprintName, systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                if let dueText = jiraIssueDueText(issue) {
+                                    Label(dueText, systemImage: "calendar")
+                                        .font(.caption2)
+                                        .foregroundStyle(
+                                            isJiraIssueOverdue(issue) ? .red : .secondary
+                                        )
+                                }
+                            }
+                        }
+
+                        Spacer()
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.indigo.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    private func loadJiraIssues(db: DatabaseManager) {
+        jiraIssues = (try? db.dbPool.read { database in
+            try JiraQueries.fetchIssuesForTrack(database, trackID: track.id)
+        }) ?? []
+    }
+
+    private func jiraIssueDueText(_ issue: JiraIssue) -> String? {
+        guard !issue.dueDate.isEmpty else { return nil }
+        // dueDate is typically "YYYY-MM-DD" or ISO8601
+        let dateStr = String(issue.dueDate.prefix(10))
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: dateStr) else { return dateStr }
+        let relative = DateFormatter()
+        relative.dateStyle = .medium
+        relative.timeStyle = .none
+        return relative.string(from: date)
+    }
+
+    private func isJiraIssueOverdue(_ issue: JiraIssue) -> Bool {
+        guard !issue.dueDate.isEmpty,
+              issue.statusCategory != "done" else { return false }
+        let dateStr = String(issue.dueDate.prefix(10))
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: dateStr) else { return false }
+        return date < Date()
     }
 
     // MARK: - Linked Tasks

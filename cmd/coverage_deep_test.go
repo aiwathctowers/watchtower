@@ -369,7 +369,7 @@ func TestPrintTracks_AllFields(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printTracks(&buf, items, database)
+	printTracks(&buf, items, database, false)
 	output := buf.String()
 
 	assert.Contains(t, output, "#1")
@@ -529,7 +529,7 @@ func TestPrintDigest_ChannelNotInDB(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	printDigest(&buf, d, database)
+	printDigest(&buf, d, database, nil)
 	output := buf.String()
 	// Should fallback to channel ID since channel not in DB
 	assert.Contains(t, output, "C999")

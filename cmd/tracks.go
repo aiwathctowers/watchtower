@@ -11,6 +11,7 @@ import (
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
+	"watchtower/internal/jira"
 	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
 
@@ -24,6 +25,8 @@ var (
 	tracksFlagChannel     string
 	tracksFlagUpdates     bool
 	tracksFlagDismissed   bool
+	tracksFlagJira        bool
+	tracksFlagNoJira      bool
 	tracksGenFlagProgress bool
 )
 
@@ -80,6 +83,8 @@ func init() {
 	tracksCmd.Flags().StringVar(&tracksFlagChannel, "channel", "", "filter by channel name")
 	tracksCmd.Flags().BoolVar(&tracksFlagUpdates, "updates", false, "show only tracks with updates")
 	tracksCmd.Flags().BoolVar(&tracksFlagDismissed, "dismissed", false, "show dismissed tracks")
+	tracksCmd.Flags().BoolVar(&tracksFlagJira, "jira", false, "show only tracks with Jira links")
+	tracksCmd.Flags().BoolVar(&tracksFlagNoJira, "no-jira", false, "show only tracks without Jira links")
 	tracksGenerateCmd.Flags().BoolVar(&tracksGenFlagProgress, "progress-json", false, "output progress as JSON lines")
 }
 
@@ -125,6 +130,12 @@ func runTracks(cmd *cobra.Command, args []string) error {
 		channelIDFilter = ch.ID
 	}
 
+	jiraEnabled := jira.IsFeatureEnabled(cfg, "track_linking")
+
+	if (tracksFlagJira || tracksFlagNoJira) && !jiraEnabled {
+		fmt.Fprintln(out, "Jira track linking is not enabled. Ignoring --jira/--no-jira flags.")
+	}
+
 	f := db.TrackFilter{
 		Priority:         tracksFlagPriority,
 		Ownership:        tracksFlagOwnership,
@@ -134,6 +145,15 @@ func runTracks(cmd *cobra.Command, args []string) error {
 	if tracksFlagUpdates {
 		v := true
 		f.HasUpdates = &v
+	}
+	if jiraEnabled {
+		if tracksFlagJira {
+			v := true
+			f.HasJira = &v
+		} else if tracksFlagNoJira {
+			v := false
+			f.HasJira = &v
+		}
 	}
 
 	items, err := database.GetTracks(f)
@@ -148,13 +168,13 @@ func runTracks(cmd *cobra.Command, args []string) error {
 
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "## Tracks (%d)\n\n", len(items))
-	printTracks(&buf, items, database)
+	printTracks(&buf, items, database, jiraEnabled)
 
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
 	return nil
 }
 
-func printTracks(w io.Writer, items []db.Track, database *db.DB) {
+func printTracks(w io.Writer, items []db.Track, database *db.DB, jiraEnabled bool) {
 	priorityIcon := map[string]string{
 		"high":   "!",
 		"medium": "-",
@@ -193,7 +213,19 @@ func printTracks(w io.Writer, items []db.Track, database *db.DB) {
 			catLabel = " (" + item.Category + ")"
 		}
 
-		fmt.Fprintf(w, "%s #%d %s%s **%s**%s%s\n", icon, item.ID, badge, catLabel, item.Text, updateBadge, readBadge)
+		// Jira badges
+		jiraBadges := ""
+		if jiraEnabled {
+			if issues, err := database.GetJiraIssuesForTrack(item.ID); err == nil && len(issues) > 0 {
+				var badges []string
+				for _, issue := range issues {
+					badges = append(badges, jira.FormatJiraBadge(issue))
+				}
+				jiraBadges = " " + strings.Join(badges, " ")
+			}
+		}
+
+		fmt.Fprintf(w, "%s #%d %s%s **%s**%s%s%s\n", icon, item.ID, badge, catLabel, item.Text, jiraBadges, updateBadge, readBadge)
 
 		// Show channels
 		var channelIDs []string
@@ -225,9 +257,20 @@ func runTracksShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid track ID %q: must be a positive integer", args[0])
 	}
 
-	database, err := openTracksDB()
+	cfg, err := config.Load(flagConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
 	}
 	defer database.Close()
 
@@ -372,6 +415,27 @@ func runTracksShow(cmd *cobra.Command, args []string) error {
 	var tags []string
 	if json.Unmarshal([]byte(track.Tags), &tags) == nil && len(tags) > 0 {
 		fmt.Fprintf(out, "Tags: %s\n", strings.Join(tags, ", "))
+	}
+
+	// Linked Jira Issues
+	if jira.IsFeatureEnabled(cfg, "track_linking") {
+		issues, jiraErr := database.GetJiraIssuesForTrack(track.ID)
+		if jiraErr == nil && len(issues) > 0 {
+			fmt.Fprintf(out, "\nLinked Jira Issues:\n")
+			now := time.Now()
+			for _, issue := range issues {
+				overdue := ""
+				if issue.DueDate != "" && !strings.EqualFold(issue.StatusCategory, "done") {
+					if due, parseErr := time.Parse("2006-01-02", issue.DueDate); parseErr == nil {
+						if due.Before(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())) {
+							overdue = " *** OVERDUE ***"
+						}
+					}
+				}
+				line := jira.BuildIssueListForCLI([]db.JiraIssue{issue})
+				fmt.Fprintf(out, "  %s%s\n", line, overdue)
+			}
+		}
 	}
 
 	return nil

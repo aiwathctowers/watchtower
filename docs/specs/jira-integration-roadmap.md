@@ -105,7 +105,7 @@ Jira is connected, boards are selected and analyzed, issues are syncing, Slack m
 ### What we do
 Existing Watchtower features start showing Jira data. No new screens — we enrich what already exists.
 
-### 1.1 — Track → Jira linking
+### 1.1 — Track → Jira linking ✅ DONE
 
 > See [feature-map: Tracks](jira-integration-feature-map.md#2-tracks)
 
@@ -117,7 +117,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - No duplication: one track = one issue
 - AI takes Jira context into account during extraction
 
-### 1.1b — Track ↔ Jira out-of-sync detection (TODO: design needed)
+### 1.1b — Track ↔ Jira out-of-sync detection (DEFERRED — design needed)
 
 > Dependency: 1.1
 
@@ -129,7 +129,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - Which direction is source of truth? (Jira → Watchtower? bidirectional?)
 - Threshold: how long out-of-sync before flagging?
 
-### 1.2 — Briefing → Jira signals
+### 1.2 — Briefing → Jira signals ✅ DONE
 
 > See [feature-map: Daily Briefing](jira-integration-feature-map.md#1-daily-briefing)
 
@@ -153,7 +153,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - **Desktop App:** Jira items in Briefing with Jira icon, clickable keys
 - Graceful: Jira off → Briefing as before, no empty sections
 
-### 1.3 — Digests → Jira enrichment
+### 1.3 — Digests → Jira enrichment ✅ DONE
 
 > See [feature-map: Digests](jira-integration-feature-map.md#6-channel-digests)
 
@@ -162,7 +162,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - Action items with Jira status (overdue/stale highlighted)
 - **If "Without Jira detection" on:** warning icon on discussions not linked to Jira
 
-### 1.4 — Meeting Prep → Jira context
+### 1.4 — Meeting Prep → Jira context ✅ DONE
 
 > See [feature-map: Meeting Prep](jira-integration-feature-map.md#4-meeting-prep)
 
@@ -173,7 +173,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - Adaptation by meeting type: 1:1/standup/planning/review
 - Context gaps: "PROJ-142 overdue but not discussed — bring it up?"
 
-### 1.5 — People Cards → delivery metrics
+### 1.5 — People Cards → delivery metrics ✅ DONE
 
 > See [feature-map: People Cards](jira-integration-feature-map.md#5-people-cards)
 
@@ -184,7 +184,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - Accomplishments from Jira in Highlights
 - Communication guide and Tactics enriched with workload context
 
-### 1.6 — Tasks → unified view
+### 1.6 — Tasks → unified view ✅ DONE
 
 > See [feature-map: Tasks](jira-integration-feature-map.md#3-tasks)
 
@@ -195,7 +195,7 @@ Existing Watchtower features start showing Jira data. No new screens — we enri
 - Filters: "All" / "Jira" / "Slack" / "Manual"
 - Due date from Jira, overdue highlighted
 
-### 1.7 — AI Chat → Jira awareness
+### 1.7 — AI Chat → Jira awareness ✅ DONE
 
 > See [feature-map: AI Chat](jira-integration-feature-map.md#7-ai-chat)
 

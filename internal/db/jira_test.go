@@ -376,3 +376,261 @@ func TestClearJiraData_IncludesSlackLinks(t *testing.T) {
 	links, _ := db.GetJiraSlackLinksByIssue("P-1")
 	assert.Empty(t, links)
 }
+
+// --- Phase 1 query tests ---
+
+func seedIssue(t *testing.T, db *DB, key, projectKey, status, statusCat, assigneeSlackID, priority string) {
+	t.Helper()
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: key, ProjectKey: projectKey, Summary: "Summary " + key,
+		Status: status, StatusCategory: statusCat,
+		AssigneeSlackID: assigneeSlackID, Priority: priority,
+		Labels: `[]`, Components: `[]`,
+		CreatedAt: "2026-04-01T00:00:00Z", UpdatedAt: "2026-04-01T12:00:00Z", SyncedAt: "2026-04-01T12:00:00Z",
+	}))
+}
+
+func TestGetJiraIssuesForTrack(t *testing.T) {
+	db := openTestDB(t)
+
+	seedIssue(t, db, "P-1", "P", "Open", "todo", "U1", "High")
+	seedIssue(t, db, "P-2", "P", "Open", "todo", "U2", "Low")
+
+	trackID := 10
+	require.NoError(t, db.UpsertJiraSlackLink(JiraSlackLink{IssueKey: "P-1", ChannelID: "C1", MessageTS: "100", TrackID: &trackID, LinkType: "mention"}))
+	require.NoError(t, db.UpsertJiraSlackLink(JiraSlackLink{IssueKey: "P-2", ChannelID: "C1", MessageTS: "200", TrackID: &trackID, LinkType: "mention"}))
+
+	issues, err := db.GetJiraIssuesForTrack(10)
+	require.NoError(t, err)
+	assert.Len(t, issues, 2)
+}
+
+func TestGetJiraIssuesForTrack_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	issues, err := db.GetJiraIssuesForTrack(999)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestGetJiraIssuesForDigest(t *testing.T) {
+	db := openTestDB(t)
+
+	seedIssue(t, db, "P-1", "P", "Done", "done", "U1", "Medium")
+
+	digestID := 5
+	require.NoError(t, db.UpsertJiraSlackLink(JiraSlackLink{IssueKey: "P-1", ChannelID: "C1", MessageTS: "100", DigestID: &digestID, LinkType: "mention"}))
+
+	issues, err := db.GetJiraIssuesForDigest(5)
+	require.NoError(t, err)
+	assert.Len(t, issues, 1)
+	assert.Equal(t, "P-1", issues[0].Key)
+}
+
+func TestGetJiraIssuesForDigest_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	issues, err := db.GetJiraIssuesForDigest(999)
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestGetJiraIssuesByAssigneeSlackID(t *testing.T) {
+	db := openTestDB(t)
+
+	seedIssue(t, db, "P-1", "P", "In Progress", "in_progress", "U1", "High")
+	seedIssue(t, db, "P-2", "P", "Open", "todo", "U1", "Low")
+	seedIssue(t, db, "P-3", "P", "Done", "done", "U1", "Medium") // excluded
+
+	issues, err := db.GetJiraIssuesByAssigneeSlackID("U1")
+	require.NoError(t, err)
+	assert.Len(t, issues, 2)
+	// High priority should come first.
+	assert.Equal(t, "P-1", issues[0].Key)
+}
+
+func TestGetJiraIssuesByAssigneeSlackID_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	issues, err := db.GetJiraIssuesByAssigneeSlackID("NONEXIST")
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestGetJiraIssuesByKeys(t *testing.T) {
+	db := openTestDB(t)
+
+	seedIssue(t, db, "A-1", "A", "Open", "todo", "", "Medium")
+	seedIssue(t, db, "A-2", "A", "Open", "todo", "", "Medium")
+	seedIssue(t, db, "B-1", "B", "Open", "todo", "", "Medium")
+
+	issues, err := db.GetJiraIssuesByKeys([]string{"A-1", "B-1"})
+	require.NoError(t, err)
+	assert.Len(t, issues, 2)
+}
+
+func TestGetJiraIssuesByKeys_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	issues, err := db.GetJiraIssuesByKeys([]string{})
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+
+	issues, err = db.GetJiraIssuesByKeys([]string{"NONEXIST-1"})
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestGetJiraActiveSprintStats(t *testing.T) {
+	db := openTestDB(t)
+
+	require.NoError(t, db.UpsertJiraSprint(JiraSprint{
+		ID: 1, BoardID: 10, Name: "Sprint 5", State: "active",
+		StartDate: "2026-04-01", EndDate: "2026-12-31", SyncedAt: "now",
+	}))
+
+	// Issues in the sprint.
+	for _, tc := range []struct{ key, cat string }{
+		{"P-1", "done"}, {"P-2", "done"},
+		{"P-3", "in_progress"},
+		{"P-4", "todo"}, {"P-5", "todo"},
+	} {
+		require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+			Key: tc.key, ProjectKey: "P", Summary: "S", Status: "X",
+			StatusCategory: tc.cat, SprintID: 1,
+			Labels: `[]`, Components: `[]`,
+			CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+		}))
+	}
+
+	stats, err := db.GetJiraActiveSprintStats(10)
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, "Sprint 5", stats.SprintName)
+	assert.Equal(t, 5, stats.Total)
+	assert.Equal(t, 2, stats.Done)
+	assert.Equal(t, 1, stats.InProgress)
+	assert.Equal(t, 2, stats.Todo)
+	assert.True(t, stats.DaysLeft > 0)
+}
+
+func TestGetJiraActiveSprintStats_NoSprint(t *testing.T) {
+	db := openTestDB(t)
+
+	stats, err := db.GetJiraActiveSprintStats(999)
+	require.NoError(t, err)
+	assert.Nil(t, stats)
+}
+
+func TestGetJiraIssuesForUser(t *testing.T) {
+	db := openTestDB(t)
+
+	seedIssue(t, db, "P-1", "P", "In Progress", "in_progress", "U1", "Medium")
+	seedIssue(t, db, "P-2", "P", "Done", "done", "U1", "Medium")
+	seedIssue(t, db, "P-3", "P", "Open", "todo", "U1", "Medium")
+
+	// All issues for user.
+	issues, err := db.GetJiraIssuesForUser("U1", "")
+	require.NoError(t, err)
+	assert.Len(t, issues, 3)
+
+	// Filtered by status.
+	issues, err = db.GetJiraIssuesForUser("U1", "in_progress")
+	require.NoError(t, err)
+	assert.Len(t, issues, 1)
+	assert.Equal(t, "P-1", issues[0].Key)
+}
+
+func TestGetJiraIssuesForUser_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	issues, err := db.GetJiraIssuesForUser("NONEXIST", "")
+	require.NoError(t, err)
+	assert.Empty(t, issues)
+}
+
+func TestGetJiraSlackLinksByTrackID(t *testing.T) {
+	db := openTestDB(t)
+
+	trackID := 42
+	require.NoError(t, db.UpsertJiraSlackLink(JiraSlackLink{IssueKey: "P-1", ChannelID: "C1", MessageTS: "100", TrackID: &trackID, LinkType: "mention"}))
+	require.NoError(t, db.UpsertJiraSlackLink(JiraSlackLink{IssueKey: "P-2", ChannelID: "C1", MessageTS: "200", TrackID: &trackID, LinkType: "mention"}))
+
+	links, err := db.GetJiraSlackLinksByTrackID(42)
+	require.NoError(t, err)
+	assert.Len(t, links, 2)
+}
+
+func TestGetJiraSlackLinksByTrackID_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	links, err := db.GetJiraSlackLinksByTrackID(999)
+	require.NoError(t, err)
+	assert.Empty(t, links)
+}
+
+func TestGetJiraDeliveryStats(t *testing.T) {
+	db := openTestDB(t)
+
+	// Closed issue with story points.
+	sp := 5.0
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: "P-1", ProjectKey: "P", Summary: "Done task",
+		Status: "Done", StatusCategory: "done",
+		AssigneeSlackID: "U1", Priority: "Medium",
+		StoryPoints: &sp,
+		Labels:      `["backend"]`,
+		Components:  `["core"]`,
+		CreatedAt:   "2026-03-25T00:00:00Z",
+		UpdatedAt:   "2026-04-02T00:00:00Z",
+		ResolvedAt:  "2026-04-02T00:00:00Z",
+		SyncedAt:    "now",
+	}))
+
+	// Open issue (overdue).
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: "P-2", ProjectKey: "P", Summary: "Open task",
+		Status: "Open", StatusCategory: "todo",
+		AssigneeSlackID: "U1", Priority: "High",
+		DueDate:    "2026-01-01",
+		Labels:     `[]`,
+		Components: `[]`,
+		CreatedAt:  "2026-03-01T00:00:00Z",
+		UpdatedAt:  "2026-04-01T00:00:00Z",
+		SyncedAt:   "now",
+	}))
+
+	stats, err := db.GetJiraDeliveryStats("U1", "2026-04-01", "2026-04-30")
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.IssuesClosed)
+	assert.True(t, stats.AvgCycleTimeDays > 0)
+	assert.Equal(t, 5.0, stats.StoryPointsCompleted)
+	assert.Equal(t, 1, stats.OpenIssues) // P-2
+	assert.Equal(t, 1, stats.OverdueIssues)
+	assert.Contains(t, stats.Components, "core")
+	assert.Contains(t, stats.Labels, "backend")
+}
+
+func TestGetJiraDeliveryStats_NoData(t *testing.T) {
+	db := openTestDB(t)
+
+	stats, err := db.GetJiraDeliveryStats("NONEXIST", "2026-01-01", "2026-12-31")
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 0, stats.IssuesClosed)
+	assert.Equal(t, 0, stats.OpenIssues)
+}
+
+func TestTaskSourceTypeJira(t *testing.T) {
+	db := openTestDB(t)
+
+	// Verify 'jira' is accepted as source_type in tasks.
+	_, err := db.Exec(`INSERT INTO tasks (text, source_type) VALUES ('from jira', 'jira')`)
+	require.NoError(t, err)
+
+	var st string
+	err = db.QueryRow(`SELECT source_type FROM tasks WHERE text = 'from jira'`).Scan(&st)
+	require.NoError(t, err)
+	assert.Equal(t, "jira", st)
+}

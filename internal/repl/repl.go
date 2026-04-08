@@ -157,6 +157,11 @@ func (r *REPL) runAIQuery(question string) {
 	var systemPrompt string
 	if r.sessionID == "" {
 		systemPrompt = ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema, cfg.Digest.Language)
+
+		// Inject Jira context if enabled
+		if cfg.Jira.Enabled {
+			systemPrompt += ai.JiraPromptSection()
+		}
 	}
 	userMessage := ai.AssembleUserMessage(question, timeHints)
 

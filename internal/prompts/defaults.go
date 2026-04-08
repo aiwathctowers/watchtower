@@ -62,12 +62,12 @@ var DefaultVersions = map[string]int{
 	GuidePeriod:        1,
 	PeopleReduce:       1,
 	PeopleTeam:         1,
-	BriefingDaily:      4, // v4: calendar integration
+	BriefingDaily:      5, // v5: jira integration
 	InboxPrioritize:    3, // v3: closing signal resolution rules
 	DigestChannelBatch: 2, // v2: full decision/situation rules, 2-7 topics, 2000 char running_summary
 	PeopleBatch:        1, // v1: batch people cards for low-data users
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
-	MeetingPrep:        2, // v2: enriched attendee context, recommendations, context gaps
+	MeetingPrep:        3, // v3: Jira context for attendees (workload, shared issues)
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
@@ -599,6 +599,12 @@ Rules:
   - If a meeting attendee has a people card with red_flags, mention it in team_pulse.
   - Do NOT list meetings as standalone items — always cross-reference with work data.
   - If CALENDAR section is empty, ignore calendar instructions entirely.
+- JIRA INTEGRATION: When JIRA CONTEXT is provided, incorporate Jira signals:
+  - In "attention": flag stale issues (in_progress >7 days), blocked issues, and overdue issues. Use source_type="jira" and source_id=issue key.
+  - In "your_day": include assigned Jira issues and awaiting-input items. Cross-reference with Slack tracks/digests when the same topic appears in both.
+  - In "team_pulse": mention team workload signals if sprint progress data is available.
+  - Each Jira signal should include Slack context if the same issue key appears in digests or tracks.
+  - If JIRA CONTEXT section is empty, ignore Jira instructions entirely.
 - Be specific: name people, channels, decisions — not vague generalities.
 - If user has reports, prioritize their signals in team_pulse.
 - %s
@@ -629,6 +635,9 @@ Rules:
 %s
 
 === USER PROFILE ===
+%s
+
+=== JIRA CONTEXT ===
 %s`
 
 const defaultInboxPrioritize = `You are prioritizing Slack messages that may need the user's response.
@@ -929,6 +938,9 @@ Rules:
 %s
 
 === SHARED CONTEXT (tracks, situations involving multiple attendees) ===
+%s
+
+=== JIRA CONTEXT ===
 %s
 
 === USER PROFILE ===

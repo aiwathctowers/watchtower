@@ -16,6 +16,25 @@ final class TasksViewModel {
     var priorityFilter: String?
     var ownershipFilter: String?
     var showDone: Bool = false
+    var sourceFilter: SourceFilter = .all
+
+    enum SourceFilter: String, CaseIterable {
+        case all = "All"
+        case jira = "Jira"
+        case slack = "Slack"
+        case manual = "Manual"
+
+        func matches(_ sourceType: String) -> Bool {
+            switch self {
+            case .all: return true
+            case .jira: return sourceType == "jira"
+            case .slack:
+                return ["track", "digest", "briefing", "chat", "inbox"]
+                    .contains(sourceType)
+            case .manual: return sourceType == "manual"
+            }
+        }
+    }
 
     private let dbManager: DatabaseManager
     private var observationTask: Task<Void, Never>?
@@ -60,14 +79,19 @@ final class TasksViewModel {
             activeCount = result.1.active
             overdueCount = result.1.overdue
 
+            // Apply source filter
+            let filtered = sourceFilter == .all
+                ? tasks
+                : tasks.filter { sourceFilter.matches($0.sourceType) }
+
             // Today: overdue + due today + high priority active
-            todayTasks = tasks.filter { task in
+            todayTasks = filtered.filter { task in
                 task.isActive && (task.isOverdue || task.isDueToday || task.priority == "high")
             }
 
             // All: everything else (excluding what's in today)
             let todayIDs = Set(todayTasks.map(\.id))
-            allTasks = tasks.filter { !todayIDs.contains($0.id) }
+            allTasks = filtered.filter { !todayIDs.contains($0.id) }
 
             errorMessage = nil
         } catch {
@@ -248,6 +272,13 @@ final class TasksViewModel {
             load()
         } catch {
             errorMessage = "Failed to delete: \(error.localizedDescription)"
+        }
+    }
+
+    func fetchJiraIssue(key: String) -> JiraIssue? {
+        guard !key.isEmpty else { return nil }
+        return try? dbManager.dbPool.read { db in
+            try JiraQueries.fetchIssueByKey(db, key: key)
         }
     }
 

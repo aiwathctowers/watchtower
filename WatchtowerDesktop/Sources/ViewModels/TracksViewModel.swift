@@ -12,13 +12,25 @@ final class TracksViewModel {
     var updatedCount: Int = 0
     var trackTaskCounts: [Int: Int] = [:]
 
+    // Jira data
+    var isJiraConnected: Bool = false
+    var jiraSiteURL: String?
+    var trackJiraIssues: [Int: [JiraIssue]] = [:]
+
     // Filters
     var priorityFilter: String?
     var channelFilter: String?
     var tagFilter: String?
     var ownershipFilter: String?
+    var jiraFilter: JiraFilter = .all
     var showRead: Bool = false
     var showDismissed: Bool = false
+
+    enum JiraFilter: String, CaseIterable {
+        case all = "All"
+        case withJira = "With Jira"
+        case withoutJira = "Without Jira"
+    }
 
     private(set) var workspaceDomain: String?
     private(set) var workspaceTeamID: String?
@@ -34,6 +46,7 @@ final class TracksViewModel {
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+        refreshJiraStatus()
     }
 
     /// Start observing the tracks table for live updates.
@@ -75,9 +88,25 @@ final class TracksViewModel {
             trackTaskCounts = result.4
 
             var tracks = result.2
+
+            // Load Jira issues for all tracks in a single read
+            if isJiraConnected {
+                loadJiraData(trackIDs: tracks.map(\.id))
+            }
+
             // Apply tag filter in memory (tags is JSON array)
             if let tagFilter, !tagFilter.isEmpty {
                 tracks = tracks.filter { $0.decodedTags.contains(tagFilter) }
+            }
+
+            // Apply Jira filter
+            switch jiraFilter {
+            case .all:
+                break
+            case .withJira:
+                tracks = tracks.filter { !(trackJiraIssues[$0.id]?.isEmpty ?? true) }
+            case .withoutJira:
+                tracks = tracks.filter { trackJiraIssues[$0.id]?.isEmpty ?? true }
             }
 
             updatedTracks = tracks.filter { $0.hasUpdates }
@@ -223,6 +252,43 @@ final class TracksViewModel {
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Jira
+
+    func refreshJiraStatus() {
+        isJiraConnected = JiraQueries.isConnected()
+        if isJiraConnected {
+            let auth = JiraAuthService()
+            jiraSiteURL = auth.siteURL
+        } else {
+            jiraSiteURL = nil
+            trackJiraIssues = [:]
+        }
+    }
+
+    func jiraIssues(for trackID: Int) -> [JiraIssue] {
+        trackJiraIssues[trackID] ?? []
+    }
+
+    private func loadJiraData(trackIDs: [Int]) {
+        do {
+            let issueMap = try dbManager.dbPool.read { db in
+                var map: [Int: [JiraIssue]] = [:]
+                for trackID in trackIDs {
+                    let issues = try JiraQueries.fetchIssuesForTrack(
+                        db, trackID: trackID
+                    )
+                    if !issues.isEmpty {
+                        map[trackID] = issues
+                    }
+                }
+                return map
+            }
+            trackJiraIssues = issueMap
+        } catch {
+            trackJiraIssues = [:]
         }
     }
 

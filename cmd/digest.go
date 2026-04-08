@@ -6,12 +6,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
+	"watchtower/internal/jira"
 	"watchtower/internal/tracks"
 	"watchtower/internal/ui"
 
@@ -144,7 +146,7 @@ func runDigest(cmd *cobra.Command, args []string) error {
 
 	var buf strings.Builder
 	for _, d := range digests {
-		printDigest(&buf, d, database)
+		printDigest(&buf, d, database, cfg)
 	}
 
 	fmt.Fprint(out, ui.RenderMarkdown(buf.String()))
@@ -152,7 +154,7 @@ func runDigest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func printDigest(w io.Writer, d db.Digest, database *db.DB) {
+func printDigest(w io.Writer, d db.Digest, database *db.DB, cfg *config.Config) {
 	periodFrom := time.Unix(int64(d.PeriodFrom), 0)
 	periodTo := time.Unix(int64(d.PeriodTo), 0)
 
@@ -178,20 +180,26 @@ func printDigest(w io.Writer, d db.Digest, database *db.DB) {
 	// Summary
 	fmt.Fprintf(w, "%s\n\n", d.Summary)
 
+	// Load Jira issues linked to this digest (graceful: empty map if Jira disabled or no links).
+	jiraIssueMap := loadJiraIssueMap(database, cfg, d.ID)
+
 	// Try topic-structured data first
 	topics, _ := database.GetDigestTopics(d.ID)
 	if len(topics) > 0 {
-		printDigestTopics(w, topics)
+		printDigestTopics(w, topics, cfg, jiraIssueMap)
 	} else {
 		// Fallback to old flat fields for legacy digests
-		printDigestLegacy(w, d)
+		printDigestLegacy(w, d, cfg, jiraIssueMap)
 	}
 
 	fmt.Fprintln(w, "---")
 }
 
 // printDigestTopics renders structured topics with nested decisions and action items.
-func printDigestTopics(w io.Writer, topics []db.DigestTopic) {
+func printDigestTopics(w io.Writer, topics []db.DigestTopic, cfg *config.Config, jiraIssueMap map[string]db.JiraIssue) {
+	showBadges := jira.IsFeatureEnabled(cfg, "track_linking")
+	showWithoutJira := jira.IsFeatureEnabled(cfg, "without_jira")
+
 	for _, t := range topics {
 		fmt.Fprintf(w, "### %s\n\n", t.Title)
 		if t.Summary != "" {
@@ -204,10 +212,11 @@ func printDigestTopics(w io.Writer, topics []db.DigestTopic) {
 		}
 		if err := json.Unmarshal([]byte(t.Decisions), &decisions); err == nil && len(decisions) > 0 {
 			for _, dec := range decisions {
+				badge := jiraBadgeForText(dec.Text, jiraIssueMap, showBadges)
 				if dec.By != "" {
-					fmt.Fprintf(w, "- **Decision:** %s (by %s)\n", dec.Text, dec.By)
+					fmt.Fprintf(w, "- **Decision:** %s (by %s)%s\n", dec.Text, dec.By, badge)
 				} else {
-					fmt.Fprintf(w, "- **Decision:** %s\n", dec.Text)
+					fmt.Fprintf(w, "- **Decision:** %s%s\n", dec.Text, badge)
 				}
 			}
 		}
@@ -223,7 +232,12 @@ func printDigestTopics(w io.Writer, topics []db.DigestTopic) {
 				if a.Assignee != "" {
 					assignee = " -> " + a.Assignee
 				}
-				fmt.Fprintf(w, "- [%s] %s%s\n", a.Status, a.Text, assignee)
+				badge := jiraBadgeForText(a.Text, jiraIssueMap, showBadges)
+				warning := ""
+				if badge == "" && showWithoutJira {
+					warning = " ⚠ Not tracked in Jira"
+				}
+				fmt.Fprintf(w, "- [%s] %s%s%s%s\n", a.Status, a.Text, assignee, badge, warning)
 			}
 		}
 		fmt.Fprintln(w)
@@ -231,7 +245,10 @@ func printDigestTopics(w io.Writer, topics []db.DigestTopic) {
 }
 
 // printDigestLegacy renders old-style flat digest fields (topics as string array, flat decisions/actions).
-func printDigestLegacy(w io.Writer, d db.Digest) {
+func printDigestLegacy(w io.Writer, d db.Digest, cfg *config.Config, jiraIssueMap map[string]db.JiraIssue) {
+	showBadges := jira.IsFeatureEnabled(cfg, "track_linking")
+	showWithoutJira := jira.IsFeatureEnabled(cfg, "without_jira")
+
 	var topicNames []string
 	if err := json.Unmarshal([]byte(d.Topics), &topicNames); err == nil && len(topicNames) > 0 {
 		fmt.Fprintf(w, "**Topics:** %s\n\n", joinTopics(topicNames))
@@ -245,10 +262,11 @@ func printDigestLegacy(w io.Writer, d db.Digest) {
 		fmt.Fprintln(w, "**Decisions:**")
 		fmt.Fprintln(w)
 		for _, dec := range decisions {
+			badge := jiraBadgeForText(dec.Text, jiraIssueMap, showBadges)
 			if dec.By != "" {
-				fmt.Fprintf(w, "- %s (by %s)\n", dec.Text, dec.By)
+				fmt.Fprintf(w, "- %s (by %s)%s\n", dec.Text, dec.By, badge)
 			} else {
-				fmt.Fprintf(w, "- %s\n", dec.Text)
+				fmt.Fprintf(w, "- %s%s\n", dec.Text, badge)
 			}
 		}
 		fmt.Fprintln(w)
@@ -267,7 +285,12 @@ func printDigestLegacy(w io.Writer, d db.Digest) {
 			if a.Assignee != "" {
 				assignee = " -> " + a.Assignee
 			}
-			fmt.Fprintf(w, "- [%s] %s%s\n", a.Status, a.Text, assignee)
+			badge := jiraBadgeForText(a.Text, jiraIssueMap, showBadges)
+			warning := ""
+			if badge == "" && showWithoutJira {
+				warning = " ⚠ Not tracked in Jira"
+			}
+			fmt.Fprintf(w, "- [%s] %s%s%s%s\n", a.Status, a.Text, assignee, badge, warning)
 		}
 		fmt.Fprintln(w)
 	}
@@ -678,6 +701,53 @@ func runDigestSummary(cmd *cobra.Command, args []string) error {
 
 func joinTopics(topics []string) string {
 	return strings.Join(topics, ", ")
+}
+
+// digestJiraKeyPattern matches Jira issue keys like "PROJ-123" in text.
+var digestJiraKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9_]+-\d+)\b`)
+
+// loadJiraIssueMap loads Jira issues linked to a digest and returns them as a map keyed by issue key.
+// Returns an empty map if Jira is disabled or no issues are found.
+func loadJiraIssueMap(database *db.DB, cfg *config.Config, digestID int) map[string]db.JiraIssue {
+	if cfg == nil || !cfg.Jira.Enabled {
+		return nil
+	}
+	issues, err := database.GetJiraIssuesForDigest(digestID)
+	if err != nil || len(issues) == 0 {
+		return nil
+	}
+	m := make(map[string]db.JiraIssue, len(issues))
+	for _, issue := range issues {
+		m[issue.Key] = issue
+	}
+	return m
+}
+
+// jiraBadgeForText scans text for Jira issue keys and returns a formatted badge string.
+// Returns "" if no matching issues are found, badges are disabled, or the issue map is empty.
+func jiraBadgeForText(text string, issueMap map[string]db.JiraIssue, showBadges bool) string {
+	if !showBadges || len(issueMap) == 0 {
+		return ""
+	}
+	keys := digestJiraKeyPattern.FindAllString(text, -1)
+	if len(keys) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	var badges []string
+	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if issue, ok := issueMap[key]; ok {
+			badges = append(badges, jira.FormatJiraBadge(issue))
+		}
+	}
+	if len(badges) == 0 {
+		return ""
+	}
+	return " " + strings.Join(badges, " ")
 }
 
 func runDigestResetContext(cmd *cobra.Command, args []string) error {

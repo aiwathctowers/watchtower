@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 59, v)
+	assert.Equal(t, 60, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -533,7 +533,7 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 59, v)
+	assert.Equal(t, 60, v)
 
 	// v45 drops old tracks and recreates with hybrid v2 schema.
 	// Verify new tracks table exists with v2 columns.

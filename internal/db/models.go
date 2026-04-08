@@ -696,6 +696,27 @@ type JiraSyncState struct {
 	LastErrorAt  string
 }
 
+// SprintStats holds aggregated issue counts for an active sprint.
+type SprintStats struct {
+	SprintName string
+	Total      int
+	Done       int
+	InProgress int
+	Todo       int
+	DaysLeft   int
+}
+
+// DeliveryStats holds delivery metrics for a user over a time range.
+type DeliveryStats struct {
+	IssuesClosed         int
+	AvgCycleTimeDays     float64
+	StoryPointsCompleted float64
+	OpenIssues           int
+	OverdueIssues        int
+	Components           []string
+	Labels               []string
+}
+
 // PromptHistory records a snapshot of a prompt at a specific version.
 type PromptHistory struct {
 	ID        int

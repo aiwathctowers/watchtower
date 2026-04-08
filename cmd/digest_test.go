@@ -237,7 +237,7 @@ func TestPrintDigest_Channel(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	printDigest(buf, d, database)
+	printDigest(buf, d, database, nil)
 
 	output := buf.String()
 	assert.Contains(t, output, "#general")
@@ -270,7 +270,7 @@ func TestPrintDigest_Daily(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	printDigest(buf, d, database)
+	printDigest(buf, d, database, nil)
 	assert.Contains(t, buf.String(), "Daily Digest")
 }
 
@@ -294,7 +294,7 @@ func TestPrintDigest_Weekly(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	printDigest(buf, d, database)
+	printDigest(buf, d, database, nil)
 	assert.Contains(t, buf.String(), "Weekly Trends")
 }
 

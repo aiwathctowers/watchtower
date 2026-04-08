@@ -84,6 +84,11 @@ func runAsk(cmd *cobra.Command, args []string) error {
 	dbPath := cfg.DBPath()
 	systemPrompt := ai.BuildSystemPrompt(ws.Name, ws.Domain, ws.ID, dbPath, db.Schema, cfg.Digest.Language)
 
+	// Inject Jira context if enabled
+	if cfg.Jira.Enabled {
+		systemPrompt += ai.JiraPromptSection()
+	}
+
 	// Inject digest context if available
 	if digestCtx := buildDigestContext(database); digestCtx != "" {
 		systemPrompt += "\n\n=== RECENT DIGEST SUMMARIES ===\n" +

@@ -153,6 +153,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	peopleCardsCtx := p.gatherPeopleCards()
 	peopleSummaryCtx := p.gatherPeopleSummary()
 	profileCtx := formatUserProfile(profile)
+	jiraCtx := p.gatherJiraContext(currentUserID)
 
 	// Check we have some data (suggestion text alone doesn't count).
 	hasData := digestsCtx != "" || dailyDigestCtx != "" || hasRealTracks || hasRealTasks || hasRealInbox
@@ -190,6 +191,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 		peopleCardsCtx,
 		peopleSummaryCtx,
 		profileCtx,
+		jiraCtx,
 	)
 
 	// Generate.

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -179,6 +180,115 @@ func (db *DB) UnsnoozeExpiredTasks() (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// CreateTaskFromJiraIssue creates a task from a Jira issue with dedup.
+// If a task with source_type='jira' and source_id=issue.Key already exists,
+// it returns the existing task without creating a duplicate.
+func (db *DB) CreateTaskFromJiraIssue(issue JiraIssue) (*Task, error) {
+	// Dedup: check if task already exists for this Jira issue.
+	row := db.QueryRow(`SELECT `+taskSelectCols+` FROM tasks WHERE source_type = 'jira' AND source_id = ?`, issue.Key)
+	existing, err := scanTask(row)
+	if err == nil {
+		return existing, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("checking existing jira task %s: %w", issue.Key, err)
+	}
+
+	// Map Jira priority to task priority.
+	priority := jiraPriorityToTaskPriority(issue.Priority)
+
+	t := Task{
+		Text:       issue.Summary,
+		Status:     "todo",
+		Priority:   priority,
+		Ownership:  "mine",
+		DueDate:    issue.DueDate,
+		SourceType: "jira",
+		SourceID:   issue.Key,
+		Tags:       "[]",
+		SubItems:   "[]",
+	}
+
+	id, err := db.CreateTask(t)
+	if err != nil {
+		return nil, fmt.Errorf("creating task from jira issue %s: %w", issue.Key, err)
+	}
+	t.ID = int(id)
+
+	created, err := db.GetTaskByID(int(id))
+	if err != nil {
+		return &t, err
+	}
+	return created, nil
+}
+
+// jiraPriorityToTaskPriority maps Jira priority names to task priority levels.
+func jiraPriorityToTaskPriority(jiraPriority string) string {
+	switch strings.ToLower(jiraPriority) {
+	case "highest", "high":
+		return "high"
+	case "medium":
+		return "medium"
+	case "low", "lowest":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+// SyncJiraTaskStatuses synchronizes task statuses from linked Jira issues.
+// For each active task with source_type='jira', it checks the corresponding
+// Jira issue status and updates the task accordingly:
+//   - issue StatusCategory='done' → task status='done'
+//   - issue StatusCategory='in_progress' and task status='todo' → task status='in_progress'
+//
+// Returns the number of tasks updated. This function is idempotent.
+func (db *DB) SyncJiraTaskStatuses() (int, error) {
+	rows, err := db.Query(`SELECT ` + taskSelectCols + ` FROM tasks WHERE source_type = 'jira' AND status NOT IN ('done', 'dismissed')`)
+	if err != nil {
+		return 0, fmt.Errorf("querying jira tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return 0, fmt.Errorf("scanning jira task: %w", err)
+		}
+		tasks = append(tasks, *t)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	synced := 0
+	for _, t := range tasks {
+		issue, err := db.GetJiraIssueByKey(t.SourceID)
+		if err != nil || issue == nil {
+			// Issue not found or error — skip gracefully.
+			continue
+		}
+
+		cat := strings.ToLower(issue.StatusCategory)
+		var newStatus string
+		switch {
+		case cat == "done":
+			newStatus = "done"
+		case cat == "in_progress" && t.Status == "todo":
+			newStatus = "in_progress"
+		default:
+			continue
+		}
+
+		if err := db.UpdateTaskStatus(t.ID, newStatus); err != nil {
+			continue
+		}
+		synced++
+	}
+	return synced, nil
 }
 
 // GetTasksForBriefing returns active tasks relevant for the daily briefing.

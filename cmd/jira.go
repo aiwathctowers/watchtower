@@ -138,6 +138,7 @@ func init() {
 	jiraFeaturesCmd.AddCommand(jiraFeaturesResetCmd)
 
 	jiraLoginCmd.Flags().Bool("no-open", false, "don't open the browser automatically")
+	jiraLoginCmd.Flags().String("site", "", "select Jira site by URL (e.g. https://mysite.atlassian.net)")
 	jiraFeaturesCmd.Flags().Bool("json", false, "output as JSON (for Swift integration)")
 	jiraBoardsAnalyzeCmd.Flags().Bool("force", false, "re-analyze even if config hash unchanged")
 	jiraBoardsOverrideCmd.Flags().String("stale", "", "stale thresholds (e.g. 'Code Review=1,QA=2')")
@@ -180,8 +181,39 @@ func runJiraLogin(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Use the first site.
-	site := resources[0]
+	// Select site — flag, auto if one, prompt if multiple.
+	var site jira.CloudResource
+	siteFlag, _ := cmd.Flags().GetString("site")
+	if siteFlag != "" {
+		found := false
+		for _, r := range resources {
+			if strings.Contains(r.URL, siteFlag) || strings.Contains(r.Name, siteFlag) {
+				site = r
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintln(out, "Available sites:")
+			for _, r := range resources {
+				fmt.Fprintf(out, "  - %s (%s)\n", r.Name, r.URL)
+			}
+			return fmt.Errorf("site %q not found", siteFlag)
+		}
+	} else if len(resources) == 1 {
+		site = resources[0]
+	} else {
+		fmt.Fprintln(out, "\nAvailable Jira Cloud sites:")
+		for i, r := range resources {
+			fmt.Fprintf(out, "  [%d] %s (%s)\n", i+1, r.Name, r.URL)
+		}
+		fmt.Fprintf(out, "\nSelect site [1-%d]: ", len(resources))
+		var choice int
+		if _, err := fmt.Fscan(cmd.InOrStdin(), &choice); err != nil || choice < 1 || choice > len(resources) {
+			return fmt.Errorf("invalid selection")
+		}
+		site = resources[choice-1]
+	}
 
 	// Persist Jira config so downstream commands (boards, sync) can find cloud_id.
 	v := viper.New()

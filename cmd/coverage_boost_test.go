@@ -388,7 +388,7 @@ func TestPrintDigest_EmptyActionsAndDecisions(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	printDigest(buf, d, database)
+	printDigest(buf, d, database, nil)
 
 	output := buf.String()
 	assert.Contains(t, output, "Quiet channel")
@@ -417,7 +417,7 @@ func TestPrintDigest_ActionWithNoAssigneeField(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	printDigest(buf, d, database)
+	printDigest(buf, d, database, nil)
 
 	output := buf.String()
 	assert.Contains(t, output, "Decision without by field")

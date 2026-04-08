@@ -2,7 +2,11 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+	"time"
 )
 
 // UpsertJiraBoard inserts or updates a Jira board. Profile columns are NOT overwritten on conflict.
@@ -425,4 +429,380 @@ func (db *DB) ClearJiraData() error {
 		}
 	}
 	return nil
+}
+
+// jiraIssueColumns is the common column list for scanning JiraIssue rows (unqualified, for single-table queries).
+const jiraIssueColumns = `key, id, project_key, board_id, summary, description_text,
+	issue_type, issue_type_category, is_bug, status, status_category, status_category_changed_at,
+	assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
+	reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
+	priority, story_points, due_date, sprint_id, sprint_name, epic_key,
+	labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted`
+
+// jiraIssueColumnsQualified is the same column list but qualified with table name (for JOINs).
+const jiraIssueColumnsQualified = `jira_issues.key, jira_issues.id, jira_issues.project_key, jira_issues.board_id,
+	jira_issues.summary, jira_issues.description_text,
+	jira_issues.issue_type, jira_issues.issue_type_category, jira_issues.is_bug,
+	jira_issues.status, jira_issues.status_category, jira_issues.status_category_changed_at,
+	jira_issues.assignee_account_id, jira_issues.assignee_email, jira_issues.assignee_display_name, jira_issues.assignee_slack_id,
+	jira_issues.reporter_account_id, jira_issues.reporter_email, jira_issues.reporter_display_name, jira_issues.reporter_slack_id,
+	jira_issues.priority, jira_issues.story_points, jira_issues.due_date, jira_issues.sprint_id, jira_issues.sprint_name, jira_issues.epic_key,
+	jira_issues.labels, jira_issues.components, jira_issues.created_at, jira_issues.updated_at, jira_issues.resolved_at,
+	jira_issues.raw_json, jira_issues.synced_at, jira_issues.is_deleted`
+
+func scanJiraIssue(scanner interface{ Scan(dest ...any) error }) (JiraIssue, error) {
+	var issue JiraIssue
+	err := scanner.Scan(&issue.Key, &issue.ID, &issue.ProjectKey, &issue.BoardID,
+		&issue.Summary, &issue.DescriptionText,
+		&issue.IssueType, &issue.IssueTypeCategory, &issue.IsBug,
+		&issue.Status, &issue.StatusCategory, &issue.StatusCategoryChangedAt,
+		&issue.AssigneeAccountID, &issue.AssigneeEmail, &issue.AssigneeDisplayName, &issue.AssigneeSlackID,
+		&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
+		&issue.Priority, &issue.StoryPoints, &issue.DueDate,
+		&issue.SprintID, &issue.SprintName, &issue.EpicKey,
+		&issue.Labels, &issue.Components,
+		&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
+		&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted)
+	return issue, err
+}
+
+// GetJiraIssuesForTrack returns Jira issues linked to a track via jira_slack_links.
+func (db *DB) GetJiraIssuesForTrack(trackID int) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT DISTINCT `+jiraIssueColumnsQualified+`
+		FROM jira_issues
+		JOIN jira_slack_links ON jira_slack_links.issue_key = jira_issues.key
+		WHERE jira_slack_links.track_id = ?
+		ORDER BY jira_issues.updated_at DESC`, trackID)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues for track %d: %w", trackID, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue for track %d: %w", trackID, err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraIssuesForDigest returns Jira issues linked to a digest via jira_slack_links.
+func (db *DB) GetJiraIssuesForDigest(digestID int) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT DISTINCT `+jiraIssueColumnsQualified+`
+		FROM jira_issues
+		JOIN jira_slack_links ON jira_slack_links.issue_key = jira_issues.key
+		WHERE jira_slack_links.digest_id = ?
+		ORDER BY jira_issues.updated_at DESC`, digestID)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues for digest %d: %w", digestID, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue for digest %d: %w", digestID, err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraIssuesByAssigneeSlackID returns non-done issues assigned to a Slack user, ordered by priority.
+func (db *DB) GetJiraIssuesByAssigneeSlackID(slackID string) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category != 'done' AND is_deleted = 0
+		ORDER BY CASE priority
+			WHEN 'Highest' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3
+			WHEN 'Low' THEN 4 WHEN 'Lowest' THEN 5 ELSE 6 END,
+			updated_at DESC`, slackID)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues by assignee slack id %s: %w", slackID, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue by assignee: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraIssuesByKeys returns Jira issues matching the given keys.
+func (db *DB) GetJiraIssuesByKeys(keys []string) ([]JiraIssue, error) {
+	if len(keys) == 0 {
+		return []JiraIssue{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(keys))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues WHERE key IN (`+placeholders+`) ORDER BY key`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues by keys: %w", err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue by key: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraActiveSprintStats returns aggregated stats for the active sprint of a board.
+// Returns nil if no active sprint exists.
+func (db *DB) GetJiraActiveSprintStats(boardID int) (*SprintStats, error) {
+	// Find the active sprint.
+	var sprintName, endDate string
+	var sprintID int
+	err := db.QueryRow(`SELECT id, name, end_date FROM jira_sprints
+		WHERE board_id = ? AND state = 'active' ORDER BY start_date LIMIT 1`, boardID).
+		Scan(&sprintID, &sprintName, &endDate)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying active sprint for board %d: %w", boardID, err)
+	}
+
+	stats := &SprintStats{SprintName: sprintName}
+
+	// Count issues by status_category.
+	rows, err := db.Query(`SELECT status_category, COUNT(*) FROM jira_issues
+		WHERE sprint_id = ? AND is_deleted = 0 GROUP BY status_category`, sprintID)
+	if err != nil {
+		return nil, fmt.Errorf("querying sprint stats for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cat string
+		var cnt int
+		if err := rows.Scan(&cat, &cnt); err != nil {
+			return nil, fmt.Errorf("scanning sprint stats: %w", err)
+		}
+		stats.Total += cnt
+		switch cat {
+		case "done":
+			stats.Done += cnt
+		case "in_progress":
+			stats.InProgress += cnt
+		default: // "todo", "new", etc.
+			stats.Todo += cnt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Calculate days left.
+	if endDate != "" {
+		// Try multiple date formats.
+		var endTime time.Time
+		for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05.000Z", "2006-01-02"} {
+			if t, e := time.Parse(layout, endDate); e == nil {
+				endTime = t
+				break
+			}
+		}
+		if !endTime.IsZero() {
+			days := time.Until(endTime).Hours() / 24
+			stats.DaysLeft = int(math.Ceil(days))
+			if stats.DaysLeft < 0 {
+				stats.DaysLeft = 0
+			}
+		}
+	}
+
+	return stats, nil
+}
+
+// GetJiraIssuesForUser returns issues assigned to a Slack user, optionally filtered by status category.
+func (db *DB) GetJiraIssuesForUser(slackID string, statusCategory string) ([]JiraIssue, error) {
+	var rows *sql.Rows
+	var err error
+	if statusCategory != "" {
+		rows, err = db.Query(`SELECT `+jiraIssueColumns+`
+			FROM jira_issues
+			WHERE assignee_slack_id = ? AND status_category = ? AND is_deleted = 0
+			ORDER BY updated_at DESC`, slackID, statusCategory)
+	} else {
+		rows, err = db.Query(`SELECT `+jiraIssueColumns+`
+			FROM jira_issues
+			WHERE assignee_slack_id = ? AND is_deleted = 0
+			ORDER BY updated_at DESC`, slackID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues for user %s: %w", slackID, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue for user: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraSlackLinksByTrackID returns all Jira-Slack links for a given track ID.
+func (db *DB) GetJiraSlackLinksByTrackID(trackID int) ([]JiraSlackLink, error) {
+	rows, err := db.Query(`SELECT id, issue_key, channel_id, message_ts, track_id, digest_id, link_type, detected_at
+		FROM jira_slack_links WHERE track_id = ? ORDER BY detected_at DESC`, trackID)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira slack links by track %d: %w", trackID, err)
+	}
+	defer rows.Close()
+
+	var links []JiraSlackLink
+	for rows.Next() {
+		var l JiraSlackLink
+		if err := rows.Scan(&l.ID, &l.IssueKey, &l.ChannelID, &l.MessageTS, &l.TrackID, &l.DigestID, &l.LinkType, &l.DetectedAt); err != nil {
+			return nil, fmt.Errorf("scanning jira slack link by track: %w", err)
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
+// GetJiraDeliveryStats returns delivery metrics for a user in a date range.
+// from/to are ISO8601 date strings (e.g. "2026-04-01").
+func (db *DB) GetJiraDeliveryStats(slackID string, from, to string) (*DeliveryStats, error) {
+	stats := &DeliveryStats{}
+
+	// Issues closed in range.
+	err := db.QueryRow(`SELECT COUNT(*) FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND resolved_at >= ? AND resolved_at <= ? AND is_deleted = 0`,
+		slackID, from, to).Scan(&stats.IssuesClosed)
+	if err != nil {
+		return nil, fmt.Errorf("counting closed issues: %w", err)
+	}
+
+	// Average cycle time (days from created_at to resolved_at) for closed issues.
+	var avgCycle sql.NullFloat64
+	err = db.QueryRow(`SELECT AVG(
+			(julianday(resolved_at) - julianday(created_at))
+		) FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND resolved_at >= ? AND resolved_at <= ?
+			AND resolved_at != '' AND is_deleted = 0`,
+		slackID, from, to).Scan(&avgCycle)
+	if err != nil {
+		return nil, fmt.Errorf("computing avg cycle time: %w", err)
+	}
+	if avgCycle.Valid {
+		stats.AvgCycleTimeDays = avgCycle.Float64
+	}
+
+	// Story points completed.
+	var sp sql.NullFloat64
+	err = db.QueryRow(`SELECT COALESCE(SUM(story_points), 0) FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND resolved_at >= ? AND resolved_at <= ? AND is_deleted = 0`,
+		slackID, from, to).Scan(&sp)
+	if err != nil {
+		return nil, fmt.Errorf("summing story points: %w", err)
+	}
+	if sp.Valid {
+		stats.StoryPointsCompleted = sp.Float64
+	}
+
+	// Open issues (non-done).
+	err = db.QueryRow(`SELECT COUNT(*) FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category != 'done' AND is_deleted = 0`,
+		slackID).Scan(&stats.OpenIssues)
+	if err != nil {
+		return nil, fmt.Errorf("counting open issues: %w", err)
+	}
+
+	// Overdue issues (due_date < today, not done).
+	today := time.Now().Format("2006-01-02")
+	err = db.QueryRow(`SELECT COUNT(*) FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category != 'done' AND due_date != '' AND due_date < ? AND is_deleted = 0`,
+		slackID, today).Scan(&stats.OverdueIssues)
+	if err != nil {
+		return nil, fmt.Errorf("counting overdue issues: %w", err)
+	}
+
+	// Distinct components from closed issues.
+	compRows, err := db.Query(`SELECT DISTINCT components FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND resolved_at >= ? AND resolved_at <= ?
+			AND components != '[]' AND is_deleted = 0`,
+		slackID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("querying components: %w", err)
+	}
+	defer compRows.Close()
+
+	compSet := make(map[string]bool)
+	for compRows.Next() {
+		var raw string
+		if err := compRows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scanning components: %w", err)
+		}
+		var arr []string
+		if json.Unmarshal([]byte(raw), &arr) == nil {
+			for _, c := range arr {
+				compSet[c] = true
+			}
+		}
+	}
+	if err := compRows.Err(); err != nil {
+		return nil, err
+	}
+	for c := range compSet {
+		stats.Components = append(stats.Components, c)
+	}
+
+	// Distinct labels from closed issues.
+	labelRows, err := db.Query(`SELECT DISTINCT labels FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND resolved_at >= ? AND resolved_at <= ?
+			AND labels != '[]' AND is_deleted = 0`,
+		slackID, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("querying labels: %w", err)
+	}
+	defer labelRows.Close()
+
+	labelSet := make(map[string]bool)
+	for labelRows.Next() {
+		var raw string
+		if err := labelRows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scanning labels: %w", err)
+		}
+		var arr []string
+		if json.Unmarshal([]byte(raw), &arr) == nil {
+			for _, l := range arr {
+				labelSet[l] = true
+			}
+		}
+	}
+	if err := labelRows.Err(); err != nil {
+		return nil, err
+	}
+	for l := range labelSet {
+		stats.Labels = append(stats.Labels, l)
+	}
+
+	return stats, nil
 }

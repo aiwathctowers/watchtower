@@ -191,6 +191,12 @@ func (r *REPL) runCatchup() {
 	}
 
 	systemPrompt := ai.BuildSystemPrompt(r.deps.Workspace, r.deps.Domain, r.deps.TeamID, r.deps.DBPath, db.Schema, cfg.Digest.Language)
+
+	// Inject Jira context if enabled
+	if cfg.Jira.Enabled {
+		systemPrompt += ai.JiraPromptSection()
+	}
+
 	timeHints := ai.FormatTimeHints(pq)
 	question := "What happened since I was last here? Give me a structured catchup summary."
 	if lang := cfg.Digest.Language; lang != "" && !strings.EqualFold(lang, "English") {

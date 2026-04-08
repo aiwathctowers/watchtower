@@ -204,6 +204,15 @@ func (d *Daemon) runSync(ctx context.Context) {
 				d.logger.Printf("jira: %d issues synced", n)
 			}
 			d.lastJira = time.Now()
+
+			// Sync task statuses from Jira issues after successful sync.
+			if err == nil && d.db != nil {
+				if synced, serr := d.db.SyncJiraTaskStatuses(); serr != nil {
+					d.logger.Printf("jira task status sync warning: %v", serr)
+				} else if synced > 0 {
+					d.logger.Printf("jira-tasks: synced %d task status(es)", synced)
+				}
+			}
 		}
 	}
 

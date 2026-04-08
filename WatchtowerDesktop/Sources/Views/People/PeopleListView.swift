@@ -39,7 +39,8 @@ struct PeopleListView: View {
                                     manager: manager
                                 )
                             },
-                            allCards: vm.cards
+                            allCards: vm.cards,
+                            dbManager: appState.databaseManager
                         )
                         .id(userID)
                         .frame(minWidth: 400, idealWidth: 500)

@@ -67,6 +67,19 @@ struct TracksListView: View {
 
                     Spacer()
 
+                    // Jira filter (hidden if not connected)
+                    if vm.isJiraConnected {
+                        Picker("Jira", selection: Bindable(vm).jiraFilter) {
+                            ForEach(
+                                TracksViewModel.JiraFilter.allCases,
+                                id: \.self
+                            ) { filter in
+                                Text(filter.rawValue).tag(filter)
+                            }
+                        }
+                        .frame(maxWidth: 120)
+                    }
+
                     // Priority filter
                     Picker("Priority", selection: Bindable(vm).priorityFilter) {
                         Text("All").tag(String?.none)
@@ -114,6 +127,7 @@ struct TracksListView: View {
             .padding()
             .onChange(of: vm.priorityFilter) { vm.load() }
             .onChange(of: vm.ownershipFilter) { vm.load() }
+            .onChange(of: vm.jiraFilter) { vm.load() }
 
             Divider()
 
@@ -317,6 +331,24 @@ struct TrackRow: View {
 
                 // Ownership badge
                 ownershipBadge
+            }
+
+            // Jira badges
+            let jiraIssues = viewModel.jiraIssues(for: track.id)
+            if !jiraIssues.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(jiraIssues.prefix(3), id: \.key) { issue in
+                        JiraBadgeView(
+                            issue: issue,
+                            siteURL: viewModel.jiraSiteURL
+                        )
+                    }
+                    if jiraIssues.count > 3 {
+                        Text("+\(jiraIssues.count - 3)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
             }
 
             // Tags + participants on one line

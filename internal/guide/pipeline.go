@@ -435,6 +435,13 @@ func (p *Pipeline) processUser(ctx context.Context, stats db.UserStats, from, to
 		rawMsgsBlock,
 	)
 
+	// Append Jira delivery context if available.
+	if jiraCtx, jerr := gatherJiraDelivery(p.db, p.cfg, stats.UserID, fromStr, toStr); jerr != nil {
+		p.logger.Printf("people: jira delivery warning for %s: %v", stats.UserID, jerr)
+	} else if jiraCtx != "" {
+		prompt += "\n\n" + jiraCtx + jiraDeliveryInstruction
+	}
+
 	peopleSys, peopleUser := digest.SplitPromptAtData(prompt)
 	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "people.reduce"), peopleSys, peopleUser, "")
 	if err != nil {
@@ -576,6 +583,12 @@ func (p *Pipeline) generateBatchCards(ctx context.Context, entries []batchUserEn
 		} else {
 			usersBlock.WriteString("Situations: (none)\n")
 		}
+		// Append Jira delivery context per user.
+		if jiraCtx, jerr := gatherJiraDelivery(p.db, p.cfg, entry.stats.UserID, fromStr, toStr); jerr != nil {
+			p.logger.Printf("people: jira delivery warning for %s: %v", entry.stats.UserID, jerr)
+		} else if jiraCtx != "" {
+			usersBlock.WriteString(jiraCtx)
+		}
 		usersBlock.WriteString("\n")
 	}
 
@@ -590,6 +603,11 @@ func (p *Pipeline) generateBatchCards(ctx context.Context, entries []batchUserEn
 		normsBlock,
 		usersBlock.String(),
 	)
+
+	// If any user had Jira delivery data, add the instruction.
+	if strings.Contains(usersBlock.String(), "=== JIRA DELIVERY ===") {
+		prompt += "\n" + jiraDeliveryInstruction
+	}
 
 	sys, user := digest.SplitPromptAtData(prompt)
 	raw, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "people.batch"), sys, user, "")

@@ -7,6 +7,7 @@ struct BriefingDetailView: View {
     @State private var taskPrefillText = ""
     @State private var taskPrefillIntent = ""
     @State private var calendarEvents: [CalendarEvent] = []
+    @State private var jiraAuth = JiraAuthService()
 
     var body: some View {
         ScrollView {
@@ -122,8 +123,14 @@ struct BriefingDetailView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    if let sourceType = item.sourceType {
-                        sourceLabel(type: sourceType)
+                    HStack(spacing: 4) {
+                        if let sourceType = item.sourceType {
+                            sourceLabel(type: sourceType)
+                        }
+                        jiraKeyBadges(in: item.text)
+                        if let reason = item.reason {
+                            jiraKeyBadges(in: reason)
+                        }
                     }
                 }
 
@@ -224,6 +231,7 @@ struct BriefingDetailView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        jiraKeyBadges(in: item.text)
                     }
                 }
 
@@ -556,5 +564,37 @@ struct BriefingDetailView: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(Color.pink.opacity(0.12), in: Capsule())
+    }
+
+    // MARK: - Jira Helpers
+
+    @ViewBuilder
+    private func jiraKeyBadges(in text: String) -> some View {
+        let keys = text.extractJiraKeys()
+        if jiraAuth.isConnected, !keys.isEmpty,
+           let baseURL = jiraAuth.siteURL {
+            ForEach(keys, id: \.self) { key in
+                if let url = URL(
+                    string: "\(baseURL)/browse/\(key)"
+                ) {
+                    Link(destination: url) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "link")
+                                .font(.system(size: 8))
+                            Text(key)
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Color.blue.opacity(0.12),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(.blue)
+                    }
+                }
+            }
+        }
     }
 }

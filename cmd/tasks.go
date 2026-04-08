@@ -11,6 +11,7 @@ import (
 	"watchtower/internal/config"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
+	"watchtower/internal/jira"
 	"watchtower/internal/prompts"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,7 @@ var (
 	tasksFlagTags       string
 	tasksFlagBallOn     string
 	tasksFlagBlocking   string
+	tasksFlagSource     string
 )
 
 var tasksCmd = &cobra.Command{
@@ -96,6 +98,7 @@ func init() {
 	tasksCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "", "filter by ownership (mine, delegated, watching)")
 	tasksCmd.Flags().BoolVar(&tasksFlagAll, "all", false, "include done and dismissed tasks")
 	tasksCmd.Flags().BoolVar(&tasksFlagJSON, "json", false, "output as JSON")
+	tasksCmd.Flags().StringVar(&tasksFlagSource, "source", "", "filter by source (all, jira, slack, manual, track, digest, inbox)")
 
 	tasksCreateCmd.Flags().StringVar(&tasksFlagText, "text", "", "task text (required)")
 	tasksCreateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "task intent/context")
@@ -130,10 +133,16 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 
+	sourceFilter := tasksFlagSource
+	if sourceFilter == "all" {
+		sourceFilter = ""
+	}
+
 	f := db.TaskFilter{
 		Status:      tasksFlagStatus,
 		Priority:    tasksFlagPriority,
 		Ownership:   tasksFlagOwnership,
+		SourceType:  sourceFilter,
 		IncludeDone: tasksFlagAll,
 	}
 
@@ -180,6 +189,16 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 		}
 
 		line := fmt.Sprintf(" %s  [#%d] %s", pLabel, item.ID, item.Text)
+
+		// Jira badge for tasks sourced from Jira.
+		if item.SourceType == "jira" && item.SourceID != "" {
+			issue, err := database.GetJiraIssueByKey(item.SourceID)
+			if err == nil && issue != nil {
+				line += "  " + jira.FormatJiraBadge(*issue)
+			} else {
+				line += fmt.Sprintf("  [%s]", item.SourceID)
+			}
+		}
 
 		if item.DueDate != "" {
 			line += fmt.Sprintf("    due: %s", item.DueDate)

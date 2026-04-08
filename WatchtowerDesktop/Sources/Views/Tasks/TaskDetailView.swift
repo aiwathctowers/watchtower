@@ -17,6 +17,8 @@ struct TaskDetailView: View {
     @State private var newSubItemText: String = ""
     @State private var editingSubItemIndex: Int? = nil
     @State private var editingSubItemText: String = ""
+    @State private var jiraIssue: JiraIssue?
+    @State private var jiraAuth = JiraAuthService()
 
     var body: some View {
         ScrollView {
@@ -29,12 +31,13 @@ struct TaskDetailView: View {
                 subItemsSection
                 metaSection
                 sourceSection
+                jiraIssueSection
                 actionsSection
             }
             .padding()
         }
-        .onAppear { syncState() }
-        .onChange(of: task.id) { syncState() }
+        .onAppear { syncState(); loadJiraIssue() }
+        .onChange(of: task.id) { syncState(); loadJiraIssue() }
     }
 
     private func syncState() {
@@ -482,6 +485,7 @@ struct TaskDetailView: View {
         case "digest": return "doc.text.magnifyingglass"
         case "briefing": return "sun.max"
         case "chat": return "bubble.left.and.bubble.right"
+        case "jira": return "tray.full"
         default: return "square.and.pencil"
         }
     }
@@ -510,6 +514,107 @@ struct TaskDetailView: View {
         }
     }
 
+    // MARK: - Jira Issue
+
+    @ViewBuilder
+    private var jiraIssueSection: some View {
+        if task.sourceType == "jira", let issue = jiraIssue {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Jira Issue")
+                    .font(.headline)
+
+                // Clickable key -> opens in browser
+                Button {
+                    openJiraIssue()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "tray.full")
+                            .foregroundStyle(.blue)
+                        Text(issue.key)
+                            .font(.callout)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.blue)
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Status with color indicator
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(jiraStatusColor(issue.statusCategory))
+                        .frame(width: 8, height: 8)
+                    Text(issue.status)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Assignee
+                if !issue.assigneeDisplayName.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Assignee:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(issue.assigneeDisplayName)
+                            .font(.callout)
+                    }
+                }
+
+                // Sprint
+                if !issue.sprintName.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Sprint:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(issue.sprintName)
+                            .font(.callout)
+                    }
+                }
+
+                // Due date
+                if !issue.dueDate.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Due:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(issue.dueDate)
+                            .font(.callout)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadJiraIssue() {
+        if task.sourceType == "jira" {
+            jiraIssue = viewModel.fetchJiraIssue(key: task.sourceID)
+        } else {
+            jiraIssue = nil
+        }
+    }
+
+    private func openJiraIssue() {
+        guard let siteURL = jiraAuth.siteURL,
+              !siteURL.isEmpty else { return }
+        let urlString = "\(siteURL)/browse/\(task.sourceID)"
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func jiraStatusColor(
+        _ statusCategory: String
+    ) -> Color {
+        switch statusCategory {
+        case "done": return .green
+        case "in_progress": return .blue
+        case "todo": return .secondary
+        default: return .secondary
+        }
+    }
+
     private func navigateToSource() {
         switch task.sourceType {
         case "track":
@@ -520,6 +625,8 @@ struct TaskDetailView: View {
             }
         case "briefing":
             appState.selectedDestination = .briefings
+        case "jira":
+            openJiraIssue()
         default:
             break
         }

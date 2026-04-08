@@ -23,6 +23,7 @@ final class ConfigService {
     var codexPath: String?
     var calendarEnabled: Bool = false
     var calendarSyncDaysAhead: Int = 2
+    var jiraFeatures: [String: Bool] = [:]
     var parseError: String?
 
     private let configPath: String
@@ -81,6 +82,13 @@ final class ConfigService {
             if let calendar = yaml["calendar"] as? [String: Any] {
                 calendarEnabled = (calendar["enabled"] as? Bool) ?? false
                 calendarSyncDaysAhead = (calendar["sync_days_ahead"] as? Int) ?? 2
+            }
+
+            if let jira = yaml["jira"] as? [String: Any],
+               let features = jira["features"] as? [String: Bool] {
+                jiraFeatures = features
+            } else {
+                jiraFeatures = [:]
             }
 
             parseError = nil

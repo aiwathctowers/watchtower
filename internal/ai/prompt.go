@@ -138,6 +138,115 @@ func BuildSystemPrompt(workspaceName, domain, teamID, dbPath, schema, language s
 	)
 }
 
+// JiraPromptSection returns the Jira schema and query patterns section to
+// append to the system prompt. Call only when Jira integration is enabled.
+func JiraPromptSection() string {
+	return `
+
+=== JIRA TABLES ===
+The workspace has Jira Cloud integration. You can query these tables:
+
+CREATE TABLE jira_issues (
+    key TEXT PRIMARY KEY,              -- e.g. "PROJ-123"
+    project_key TEXT NOT NULL,
+    board_id INTEGER,
+    summary TEXT NOT NULL,
+    description_text TEXT NOT NULL DEFAULT '',
+    issue_type TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    status_category TEXT NOT NULL,      -- "todo", "in_progress", "done"
+    assignee_account_id TEXT NOT NULL DEFAULT '',
+    assignee_display_name TEXT NOT NULL DEFAULT '',
+    assignee_slack_id TEXT NOT NULL DEFAULT '',
+    reporter_display_name TEXT NOT NULL DEFAULT '',
+    reporter_slack_id TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL DEFAULT '',  -- "Highest","High","Medium","Low","Lowest"
+    story_points REAL,
+    due_date TEXT NOT NULL DEFAULT '',  -- ISO date or empty
+    sprint_id INTEGER,
+    sprint_name TEXT NOT NULL DEFAULT '',
+    epic_key TEXT NOT NULL DEFAULT '',
+    labels TEXT NOT NULL DEFAULT '[]',  -- JSON array
+    components TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT '',
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE jira_sprints (
+    id INTEGER PRIMARY KEY,
+    board_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    state TEXT NOT NULL,               -- "active", "closed", "future"
+    goal TEXT NOT NULL DEFAULT '',
+    start_date TEXT NOT NULL DEFAULT '',
+    end_date TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE jira_issue_links (
+    id TEXT PRIMARY KEY,
+    source_key TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    link_type TEXT NOT NULL             -- e.g. "Blocks", "is blocked by"
+);
+
+CREATE TABLE jira_user_map (
+    jira_account_id TEXT PRIMARY KEY,
+    slack_user_id TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE jira_slack_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_key TEXT NOT NULL,
+    channel_id TEXT NOT NULL DEFAULT '',
+    message_ts TEXT NOT NULL DEFAULT '',
+    track_id INTEGER,
+    digest_id INTEGER,
+    link_type TEXT NOT NULL DEFAULT 'mention'
+);
+
+CREATE TABLE jira_boards (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    project_key TEXT NOT NULL DEFAULT '',
+    board_type TEXT NOT NULL DEFAULT ''
+);
+
+=== JIRA QUERY PATTERNS ===
+
+-- My open issues (use current user's Slack ID)
+SELECT key, summary, status, priority, due_date FROM jira_issues WHERE assignee_slack_id = '{user_slack_id}' AND status_category != 'done' AND is_deleted = 0 ORDER BY priority, due_date;
+
+-- Issues linked to a Slack channel or track
+SELECT ji.key, ji.summary, ji.status, ji.priority FROM jira_issues ji JOIN jira_slack_links jsl ON ji.key = jsl.issue_key WHERE jsl.track_id = ?;
+
+-- Blocked issues
+SELECT ji.key, ji.summary, jil.link_type, jil.target_key FROM jira_issues ji JOIN jira_issue_links jil ON ji.key = jil.source_key WHERE jil.link_type LIKE '%lock%' AND ji.is_deleted = 0;
+
+-- Sprint progress
+SELECT status_category, COUNT(*) as cnt FROM jira_issues WHERE sprint_id = ? AND is_deleted = 0 GROUP BY status_category;
+
+-- Active sprint overview
+SELECT js.name, js.goal, js.start_date, js.end_date, ji.status_category, COUNT(*) as cnt FROM jira_sprints js JOIN jira_issues ji ON ji.sprint_id = js.id WHERE js.state = 'active' AND ji.is_deleted = 0 GROUP BY js.id, ji.status_category;
+
+-- Overdue issues
+SELECT key, summary, due_date, assignee_display_name FROM jira_issues WHERE due_date < date('now') AND due_date != '' AND status_category != 'done' AND is_deleted = 0 ORDER BY due_date;
+
+-- Issues mentioned in Slack
+SELECT ji.key, ji.summary, ji.status, c.name as channel, jsl.detected_at FROM jira_issues ji JOIN jira_slack_links jsl ON ji.key = jsl.issue_key JOIN channels c ON jsl.channel_id = c.id ORDER BY jsl.detected_at DESC LIMIT 20;
+
+-- Cross-reference: Slack user's Jira issues
+SELECT ji.key, ji.summary, ji.status FROM jira_issues ji JOIN jira_user_map jum ON ji.assignee_account_id = jum.jira_account_id WHERE jum.slack_user_id = (SELECT id FROM users WHERE name = 'alice') AND ji.status_category != 'done' AND ji.is_deleted = 0;
+
+Notes:
+- assignee_slack_id links directly to users.id when available
+- jira_user_map maps Jira account IDs to Slack user IDs for cross-referencing
+- Use is_deleted = 0 to exclude deleted issues
+- due_date can be empty string — filter with due_date != '' for overdue queries`
+}
+
 // FormatTimeHints formats time range information from a parsed query as hints
 // for the AI, including Unix timestamps ready for SQL WHERE clauses.
 func FormatTimeHints(pq ParsedQuery) string {

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 59"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 60"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2740,6 +2740,79 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v59: %w", err)
 		}
 		version = 59
+	}
+
+	if version < 60 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v60 tx: %w", err)
+		}
+		defer tx.Rollback()
+
+		// New indexes for jira_slack_links and jira_issues.
+		indexes := []string{
+			`CREATE INDEX IF NOT EXISTS idx_jira_slack_links_digest ON jira_slack_links(digest_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_jira_issues_assignee_slack ON jira_issues(assignee_slack_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_jira_issues_assignee_status ON jira_issues(assignee_slack_id, status_category)`,
+		}
+		for _, stmt := range indexes {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("migration v60 create index: %w", err)
+			}
+		}
+
+		// Expand tasks.source_type CHECK to include 'jira'.
+		// SQLite does not support ALTER TABLE to modify CHECK constraints, so we recreate the table.
+		if _, err := tx.Exec(`CREATE TABLE tasks_new (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			text            TEXT NOT NULL,
+			intent          TEXT NOT NULL DEFAULT '',
+			status          TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
+			priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
+			ownership       TEXT NOT NULL DEFAULT 'mine' CHECK(ownership IN ('mine','delegated','watching')),
+			ball_on         TEXT NOT NULL DEFAULT '',
+			due_date        TEXT NOT NULL DEFAULT '',
+			snooze_until    TEXT NOT NULL DEFAULT '',
+			blocking        TEXT NOT NULL DEFAULT '',
+			tags            TEXT NOT NULL DEFAULT '[]',
+			sub_items       TEXT NOT NULL DEFAULT '[]',
+			source_type     TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('track','digest','briefing','manual','chat','inbox','jira')),
+			source_id       TEXT NOT NULL DEFAULT '',
+			created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v60 create tasks_new: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO tasks_new SELECT * FROM tasks`); err != nil {
+			return fmt.Errorf("migration v60 copy tasks: %w", err)
+		}
+		if _, err := tx.Exec(`DROP TABLE tasks`); err != nil {
+			return fmt.Errorf("migration v60 drop tasks: %w", err)
+		}
+		if _, err := tx.Exec(`ALTER TABLE tasks_new RENAME TO tasks`); err != nil {
+			return fmt.Errorf("migration v60 rename tasks: %w", err)
+		}
+		// Recreate indexes on tasks.
+		taskIndexes := []string{
+			`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_type, source_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)`,
+		}
+		for _, stmt := range taskIndexes {
+			if _, err := tx.Exec(stmt); err != nil {
+				return fmt.Errorf("migration v60 create task index: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 60"); err != nil {
+			return fmt.Errorf("setting schema version v60: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v60: %w", err)
+		}
+		version = 60
 	}
 
 	_ = version // silence unused variable if this is the last migration

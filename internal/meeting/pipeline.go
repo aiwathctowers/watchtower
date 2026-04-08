@@ -166,6 +166,15 @@ func (p *Pipeline) prepareForEvent(ctx context.Context, event db.CalendarEvent, 
 	// Gather shared context (tracks, digests involving attendees).
 	sharedCtx := p.gatherSharedContext(attendees)
 
+	// Jira context for attendees.
+	var attendeeSlackIDs []string
+	for _, a := range attendees {
+		if a.SlackUserID != "" {
+			attendeeSlackIDs = append(attendeeSlackIDs, a.SlackUserID)
+		}
+	}
+	jiraCtx, _ := gatherJiraMeetingContext(p.db, p.cfg, attendeeSlackIDs)
+
 	// User profile context.
 	profileCtx := ""
 	if currentUserID != "" {
@@ -195,7 +204,7 @@ func (p *Pipeline) prepareForEvent(ctx context.Context, event db.CalendarEvent, 
 		userNotesCtx = userNotes
 	}
 
-	// Args: 1=userName, 2=title, 3=meetingTime, 4=language, 5=meetingDesc, 6=attendees, 7=sharedContext, 8=profile, 9=userNotes
+	// Args: 1=userName, 2=title, 3=meetingTime, 4=language, 5=meetingDesc, 6=attendees, 7=sharedContext, 8=jiraContext, 9=profile, 10=userNotes
 	systemPrompt := fmt.Sprintf(promptTmpl,
 		userName,
 		event.Title,
@@ -204,6 +213,7 @@ func (p *Pipeline) prepareForEvent(ctx context.Context, event db.CalendarEvent, 
 		meetingDesc,
 		attendeesCtx,
 		sharedCtx,
+		jiraCtx,
 		profileCtx,
 		userNotesCtx,
 	)
