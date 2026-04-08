@@ -622,6 +622,148 @@ func TestGetJiraDeliveryStats_NoData(t *testing.T) {
 	assert.Equal(t, 0, stats.OpenIssues)
 }
 
+func TestCreateTaskFromJiraIssue(t *testing.T) {
+	db := openTestDB(t)
+
+	issue := JiraIssue{
+		Key:            "PROJ-10",
+		ProjectKey:     "PROJ",
+		Summary:        "Implement feature X",
+		Priority:       "High",
+		DueDate:        "2026-05-01",
+		Status:         "Open",
+		StatusCategory: "todo",
+		Labels:         `[]`,
+		Components:     `[]`,
+		CreatedAt:      "now",
+		UpdatedAt:      "now",
+		SyncedAt:       "now",
+	}
+
+	// First call creates the task.
+	task, err := db.CreateTaskFromJiraIssue(issue)
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	assert.Equal(t, "Implement feature X", task.Text)
+	assert.Equal(t, "todo", task.Status)
+	assert.Equal(t, "high", task.Priority)
+	assert.Equal(t, "mine", task.Ownership)
+	assert.Equal(t, "jira", task.SourceType)
+	assert.Equal(t, "PROJ-10", task.SourceID)
+	assert.Equal(t, "2026-05-01", task.DueDate)
+	firstID := task.ID
+
+	// Second call returns existing task (dedup).
+	task2, err := db.CreateTaskFromJiraIssue(issue)
+	require.NoError(t, err)
+	require.NotNil(t, task2)
+	assert.Equal(t, firstID, task2.ID, "should return existing task, not create duplicate")
+
+	// Verify only one task exists.
+	tasks, err := db.GetTasks(TaskFilter{SourceType: "jira", SourceID: "PROJ-10", IncludeDone: true})
+	require.NoError(t, err)
+	assert.Len(t, tasks, 1)
+}
+
+func TestCreateTaskFromJiraIssue_PriorityMapping(t *testing.T) {
+	db := openTestDB(t)
+
+	cases := []struct {
+		jiraPriority string
+		expected     string
+	}{
+		{"Highest", "high"},
+		{"High", "high"},
+		{"Medium", "medium"},
+		{"Low", "low"},
+		{"Lowest", "low"},
+		{"Unknown", "medium"},
+		{"", "medium"},
+	}
+
+	for _, tc := range cases {
+		issue := JiraIssue{
+			Key: "MAP-" + tc.jiraPriority, ProjectKey: "MAP", Summary: "Test " + tc.jiraPriority,
+			Priority: tc.jiraPriority, Status: "Open", StatusCategory: "todo",
+			Labels: `[]`, Components: `[]`, CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+		}
+		task, err := db.CreateTaskFromJiraIssue(issue)
+		require.NoError(t, err, "priority=%s", tc.jiraPriority)
+		assert.Equal(t, tc.expected, task.Priority, "jira priority %q should map to %q", tc.jiraPriority, tc.expected)
+	}
+}
+
+func TestSyncJiraTaskStatuses(t *testing.T) {
+	db := openTestDB(t)
+
+	// Seed Jira issues with different statuses.
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: "S-1", ProjectKey: "S", Summary: "Done in Jira",
+		Status: "Done", StatusCategory: "done",
+		Labels: `[]`, Components: `[]`, CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+	}))
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: "S-2", ProjectKey: "S", Summary: "In progress in Jira",
+		Status: "In Progress", StatusCategory: "in_progress",
+		Labels: `[]`, Components: `[]`, CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+	}))
+	require.NoError(t, db.UpsertJiraIssue(JiraIssue{
+		Key: "S-3", ProjectKey: "S", Summary: "Still todo in Jira",
+		Status: "Open", StatusCategory: "todo",
+		Labels: `[]`, Components: `[]`, CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+	}))
+
+	// Create tasks linked to these issues.
+	t1, err := db.CreateTaskFromJiraIssue(JiraIssue{Key: "S-1", Summary: "Done in Jira", Priority: "Medium"})
+	require.NoError(t, err)
+	t2, err := db.CreateTaskFromJiraIssue(JiraIssue{Key: "S-2", Summary: "In progress in Jira", Priority: "Medium"})
+	require.NoError(t, err)
+	t3, err := db.CreateTaskFromJiraIssue(JiraIssue{Key: "S-3", Summary: "Still todo in Jira", Priority: "Medium"})
+	require.NoError(t, err)
+
+	// All tasks start as 'todo'.
+	assert.Equal(t, "todo", t1.Status)
+	assert.Equal(t, "todo", t2.Status)
+	assert.Equal(t, "todo", t3.Status)
+
+	// Sync.
+	synced, err := db.SyncJiraTaskStatuses()
+	require.NoError(t, err)
+	assert.Equal(t, 2, synced, "should update S-1 to done and S-2 to in_progress")
+
+	// Verify statuses.
+	task1, _ := db.GetTaskByID(t1.ID)
+	assert.Equal(t, "done", task1.Status)
+
+	task2, _ := db.GetTaskByID(t2.ID)
+	assert.Equal(t, "in_progress", task2.Status)
+
+	task3, _ := db.GetTaskByID(t3.ID)
+	assert.Equal(t, "todo", task3.Status, "todo in Jira should stay todo")
+
+	// Idempotent: running again should update 0 (S-1 is done/excluded, S-2 is already in_progress, S-3 is still todo).
+	synced2, err := db.SyncJiraTaskStatuses()
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced2, "idempotent run should update nothing")
+}
+
+func TestSyncJiraTaskStatuses_MissingIssue(t *testing.T) {
+	db := openTestDB(t)
+
+	// Create a task with source_type=jira but no corresponding Jira issue in DB.
+	_, err := db.CreateTask(Task{
+		Text: "Orphan task", Status: "todo", Priority: "medium",
+		Ownership: "mine", SourceType: "jira", SourceID: "GONE-1",
+		Tags: "[]", SubItems: "[]",
+	})
+	require.NoError(t, err)
+
+	// Should not fail — just skip the missing issue.
+	synced, err := db.SyncJiraTaskStatuses()
+	require.NoError(t, err)
+	assert.Equal(t, 0, synced)
+}
+
 func TestTaskSourceTypeJira(t *testing.T) {
 	db := openTestDB(t)
 

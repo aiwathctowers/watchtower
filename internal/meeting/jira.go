@@ -7,14 +7,13 @@ import (
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
-	"watchtower/internal/jira"
 )
 
 // gatherJiraMeetingContext builds a Jira context section for the meeting prep prompt.
 // It loads open issues for each attendee, computes workload stats, and finds shared issues.
 // Returns empty string if Jira is disabled or no attendees have Jira data.
 func gatherJiraMeetingContext(database *db.DB, cfg *config.Config, attendeeSlackIDs []string) (string, error) {
-	if !jira.IsFeatureEnabled(cfg, "track_linking") {
+	if cfg == nil || !cfg.Jira.Enabled {
 		return "", nil
 	}
 

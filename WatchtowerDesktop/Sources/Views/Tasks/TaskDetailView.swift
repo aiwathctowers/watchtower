@@ -18,7 +18,8 @@ struct TaskDetailView: View {
     @State private var editingSubItemIndex: Int? = nil
     @State private var editingSubItemText: String = ""
     @State private var jiraIssue: JiraIssue?
-    @State private var jiraAuth = JiraAuthService()
+    @State private var jiraConnected = false
+    @State private var jiraSiteURL: String?
 
     var body: some View {
         ScrollView {
@@ -36,7 +37,12 @@ struct TaskDetailView: View {
             }
             .padding()
         }
-        .onAppear { syncState(); loadJiraIssue() }
+        .onAppear {
+            jiraConnected = JiraQueries.isConnected()
+            jiraSiteURL = JiraConfigHelper.readSiteURL()
+            syncState()
+            loadJiraIssue()
+        }
         .onChange(of: task.id) { syncState(); loadJiraIssue() }
     }
 
@@ -596,7 +602,7 @@ struct TaskDetailView: View {
     }
 
     private func openJiraIssue() {
-        guard let siteURL = jiraAuth.siteURL,
+        guard let siteURL = jiraSiteURL,
               !siteURL.isEmpty else { return }
         let urlString = "\(siteURL)/browse/\(task.sourceID)"
         if let url = URL(string: urlString) {

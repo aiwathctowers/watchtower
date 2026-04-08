@@ -24,6 +24,14 @@ struct JiraDeliveryStats {
 
 enum JiraQueries {
 
+    // MARK: - Shared Formatters
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt
+    }()
+
     // MARK: - Connection Status
 
     /// Check if jira_token.json exists in any workspace directory.
@@ -173,6 +181,36 @@ enum JiraQueries {
         )
     }
 
+    /// Batch-fetch issues for multiple tracks in a single query.
+    static func fetchIssuesForTracks(
+        _ db: Database,
+        trackIDs: [Int]
+    ) throws -> [Int: [JiraIssue]] {
+        guard !trackIDs.isEmpty else { return [:] }
+
+        let placeholders = trackIDs.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+            SELECT DISTINCT ji.*, jsl.track_id AS _track_id
+            FROM jira_issues ji
+            JOIN jira_slack_links jsl ON jsl.issue_key = ji.key
+            WHERE jsl.track_id IN (\(placeholders)) AND ji.is_deleted = 0
+            ORDER BY ji.updated_at DESC
+            """
+        let rows = try Row.fetchAll(
+            db,
+            sql: sql,
+            arguments: StatementArguments(trackIDs)
+        )
+
+        var result: [Int: [JiraIssue]] = [:]
+        for row in rows {
+            guard let trackID: Int = row["_track_id"] else { continue }
+            let issue = try JiraIssue(row: row)
+            result[trackID, default: []].append(issue)
+        }
+        return result
+    }
+
     /// Fetch all issues linked to a digest via jira_slack_links.
     static func fetchIssuesForDigest(
         _ db: Database,
@@ -250,9 +288,11 @@ enum JiraQueries {
             return nil
         }
 
-        let sprintID: Int = row["id"]
-        let sprintName: String = row["name"]
-        let endDateStr: String = row["end_date"]
+        guard let sprintID: Int = row["id"],
+              let sprintName: String = row["name"] else {
+            return nil
+        }
+        let endDateStr: String = row["end_date"] ?? ""
 
         // Count issues by status category.
         let total = try Int.fetchOne(
@@ -292,12 +332,7 @@ enum JiraQueries {
         // Calculate days left.
         var daysLeft = 0
         if !endDateStr.isEmpty {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [
-                .withInternetDateTime,
-                .withFractionalSeconds
-            ]
-            if let endDate = formatter.date(from: endDateStr)
+            if let endDate = isoFormatter.date(from: endDateStr)
                 ?? ISO8601DateFormatter().date(from: endDateStr) {
                 let remaining = Calendar.current.dateComponents(
                     [.day],
@@ -327,9 +362,8 @@ enum JiraQueries {
         from: Date,
         to: Date
     ) throws -> JiraDeliveryStats {
-        let formatter = ISO8601DateFormatter()
-        let fromStr = formatter.string(from: from)
-        let toStr = formatter.string(from: to)
+        let fromStr = isoFormatter.string(from: from)
+        let toStr = isoFormatter.string(from: to)
 
         // Issues closed in the period.
         let issuesClosed = try Int.fetchOne(
@@ -390,7 +424,7 @@ enum JiraQueries {
         ) ?? 0
 
         // Overdue issues.
-        let nowStr = formatter.string(from: Date())
+        let nowStr = isoFormatter.string(from: Date())
         let overdueIssues = try Int.fetchOne(
             db,
             sql: """

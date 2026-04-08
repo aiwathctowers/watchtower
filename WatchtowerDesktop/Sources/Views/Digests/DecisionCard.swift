@@ -77,36 +77,12 @@ struct DecisionCard: View {
 
     // MARK: - Jira Badges
 
-    @ViewBuilder
     private var jiraBadgesForDecision: some View {
-        let keys = decision.text.extractJiraKeys()
-        if !keys.isEmpty {
-            ForEach(keys, id: \.self) { key in
-                if let issue = jiraIssues[key] {
-                    JiraBadgeView(
-                        issue: issue,
-                        siteURL: jiraSiteURL
-                    )
-                } else if let siteURL = jiraSiteURL,
-                          let url = URL(
-                              string: "\(siteURL)/browse/\(key)"
-                          ) {
-                    Link(destination: url) {
-                        Text(key)
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundStyle(.blue)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                Color.blue.opacity(0.10),
-                                in: Capsule()
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open \(key) in Jira")
-                }
-            }
-        }
+        JiraKeyBadgesView(
+            text: decision.text,
+            issues: jiraIssues,
+            siteURL: jiraSiteURL,
+            isConnected: !jiraIssues.isEmpty || jiraSiteURL != nil
+        )
     }
 }

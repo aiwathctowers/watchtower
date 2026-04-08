@@ -100,7 +100,7 @@ func BuildDeliveryContext(stats db.DeliveryStats) string {
 		stats.IssuesClosed, stats.AvgCycleTimeDays, stats.StoryPointsCompleted,
 		stats.OpenIssues, stats.OverdueIssues)
 
-	expertise := mergeUnique(stats.Components, stats.Labels)
+	expertise := MergeUnique(stats.Components, stats.Labels)
 	if len(expertise) > 0 {
 		fmt.Fprintf(&b, "\nExpertise: [%s]", strings.Join(expertise, ", "))
 	}
@@ -189,8 +189,8 @@ func formatShortDate(t time.Time) string {
 	return t.Format("Jan 2")
 }
 
-// mergeUnique combines two string slices, deduplicating entries (case-sensitive).
-func mergeUnique(a, b []string) []string {
+// MergeUnique combines two string slices, deduplicating entries (case-sensitive).
+func MergeUnique(a, b []string) []string {
 	seen := make(map[string]struct{}, len(a)+len(b))
 	var result []string
 	for _, s := range a {

@@ -52,32 +52,21 @@ func gatherJiraDelivery(database *db.DB, cfg *config.Config, userSlackID, from, 
 	fmt.Fprintf(&b, "Open issues: %d, Overdue: %d\n", stats.OpenIssues, stats.OverdueIssues)
 
 	// Expertise tags from components + labels.
-	expertise := mergeUnique(stats.Components, stats.Labels)
+	expertise := jira.MergeUnique(stats.Components, stats.Labels)
 	if len(expertise) > 0 {
 		fmt.Fprintf(&b, "Expertise: [%s]\n", strings.Join(expertise, ", "))
 	}
 
-	// Recent accomplishments: resolved issues within the period.
-	resolved, err := database.GetJiraIssuesForUser(userSlackID, "done")
-	if err == nil && len(resolved) > 0 {
-		var accomplishments []db.JiraIssue
-		for _, issue := range resolved {
-			if issue.ResolvedAt >= from && issue.ResolvedAt <= to {
-				accomplishments = append(accomplishments, issue)
+	// Recent accomplishments: resolved issues within the period (bounded query).
+	accomplishments, err := database.GetJiraResolvedIssuesForUser(userSlackID, from, to, maxAccomplishments)
+	if err == nil && len(accomplishments) > 0 {
+		b.WriteString("\nRecent accomplishments:\n")
+		for _, issue := range accomplishments {
+			resolvedDate := issue.ResolvedAt
+			if len(resolvedDate) > 10 {
+				resolvedDate = resolvedDate[:10]
 			}
-			if len(accomplishments) >= maxAccomplishments {
-				break
-			}
-		}
-		if len(accomplishments) > 0 {
-			b.WriteString("\nRecent accomplishments:\n")
-			for _, issue := range accomplishments {
-				resolvedDate := issue.ResolvedAt
-				if len(resolvedDate) > 10 {
-					resolvedDate = resolvedDate[:10]
-				}
-				fmt.Fprintf(&b, "- Resolved %s %q (%s)\n", issue.Key, issue.Summary, resolvedDate)
-			}
+			fmt.Fprintf(&b, "- Resolved %s %q (%s)\n", issue.Key, issue.Summary, resolvedDate)
 		}
 	}
 
@@ -114,23 +103,4 @@ func buildWorkloadSignals(stats *db.DeliveryStats) []string {
 	}
 
 	return signals
-}
-
-// mergeUnique combines two string slices, deduplicating entries (case-sensitive).
-func mergeUnique(a, b []string) []string {
-	seen := make(map[string]struct{}, len(a)+len(b))
-	var result []string
-	for _, s := range a {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			result = append(result, s)
-		}
-	}
-	for _, s := range b {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			result = append(result, s)
-		}
-	}
-	return result
 }

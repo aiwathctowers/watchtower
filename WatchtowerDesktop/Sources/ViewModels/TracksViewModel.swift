@@ -275,16 +275,7 @@ final class TracksViewModel {
     private func loadJiraData(trackIDs: [Int]) {
         do {
             let issueMap = try dbManager.dbPool.read { db in
-                var map: [Int: [JiraIssue]] = [:]
-                for trackID in trackIDs {
-                    let issues = try JiraQueries.fetchIssuesForTrack(
-                        db, trackID: trackID
-                    )
-                    if !issues.isEmpty {
-                        map[trackID] = issues
-                    }
-                }
-                return map
+                try JiraQueries.fetchIssuesForTracks(db, trackIDs: trackIDs)
             }
             trackJiraIssues = issueMap
         } catch {

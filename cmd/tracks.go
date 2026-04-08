@@ -187,6 +187,19 @@ func printTracks(w io.Writer, items []db.Track, database *db.DB, jiraEnabled boo
 		"watching":  "[watching]",
 	}
 
+	// Batch-load all Jira issues for tracks in a single query.
+	var jiraByTrack map[int][]db.JiraIssue
+	if jiraEnabled {
+		trackIDs := make([]int, len(items))
+		for i, item := range items {
+			trackIDs[i] = item.ID
+		}
+		jiraByTrack, _ = database.GetJiraIssuesForTracks(trackIDs)
+		if jiraByTrack == nil {
+			jiraByTrack = make(map[int][]db.JiraIssue)
+		}
+	}
+
 	for _, item := range items {
 		icon := priorityIcon[item.Priority]
 		if icon == "" {
@@ -216,7 +229,7 @@ func printTracks(w io.Writer, items []db.Track, database *db.DB, jiraEnabled boo
 		// Jira badges
 		jiraBadges := ""
 		if jiraEnabled {
-			if issues, err := database.GetJiraIssuesForTrack(item.ID); err == nil && len(issues) > 0 {
+			if issues := jiraByTrack[item.ID]; len(issues) > 0 {
 				var badges []string
 				for _, issue := range issues {
 					badges = append(badges, jira.FormatJiraBadge(issue))

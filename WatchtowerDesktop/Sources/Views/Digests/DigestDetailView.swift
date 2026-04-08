@@ -14,7 +14,8 @@ struct DigestDetailView: View {
     @State private var taskPrefillText = ""
     @State private var taskPrefillSourceType = "digest"
     @State private var jiraIssues: [String: JiraIssue] = [:]
-    @State private var jiraAuth = JiraAuthService()
+    @State private var jiraConnected = false
+    @State private var jiraSiteURL: String?
     @State private var withoutJiraEnabled = false
 
     var body: some View {
@@ -65,13 +66,17 @@ struct DigestDetailView: View {
         }
         .navigationTitle(channelName.map { "#\($0)" } ?? "Digest")
         .task {
+            jiraConnected = JiraQueries.isConnected()
+            jiraSiteURL = JiraConfigHelper.readSiteURL()
+            withoutJiraEnabled = JiraConfigHelper.readWithoutJiraDetection()
+
             if let dbManager = appState.databaseManager {
                 digestTopics = (try? dbManager.dbPool.read { db in
                     try DigestQueries.fetchTopics(db, digestID: digest.id)
                 }) ?? []
 
                 // Load Jira issues linked to this digest
-                if jiraAuth.isConnected {
+                if jiraConnected {
                     let issues = (try? dbManager.dbPool.read { db in
                         try JiraQueries.fetchIssuesForDigest(
                             db, digestID: digest.id
@@ -84,12 +89,6 @@ struct DigestDetailView: View {
                     jiraIssues = map
                 }
             }
-
-            // Read without_jira_detection feature toggle
-            let cfg = ConfigService()
-            withoutJiraEnabled = cfg.jiraFeatures[
-                "without_jira_detection"
-            ] ?? false
         }
     }
 
@@ -271,7 +270,7 @@ struct DigestDetailView: View {
                                 feedbackEntityID: "\(digest.id):\(topic.idx):\(idx)",
                                 dbManager: appState.databaseManager,
                                 jiraIssues: jiraIssues,
-                                jiraSiteURL: jiraAuth.siteURL
+                                jiraSiteURL: jiraSiteURL
                             )
                         }
                     }
@@ -379,7 +378,7 @@ struct DigestDetailView: View {
                                 feedbackEntityID: "\(digest.id):\(idx)",
                                 dbManager: appState.databaseManager,
                                 jiraIssues: jiraIssues,
-                                jiraSiteURL: jiraAuth.siteURL
+                                jiraSiteURL: jiraSiteURL
                             )
                             HStack {
                                 Spacer()
@@ -451,34 +450,14 @@ struct DigestDetailView: View {
         for text: String
     ) -> some View {
         let keys = text.extractJiraKeys()
-        if jiraAuth.isConnected {
+        if jiraConnected {
             if !keys.isEmpty {
-                ForEach(keys, id: \.self) { key in
-                    if let issue = jiraIssues[key] {
-                        JiraBadgeView(
-                            issue: issue,
-                            siteURL: jiraAuth.siteURL
-                        )
-                    } else if let siteURL = jiraAuth.siteURL,
-                              let url = URL(
-                                  string: "\(siteURL)/browse/\(key)"
-                              ) {
-                        Link(destination: url) {
-                            Text(key)
-                                .font(.caption2)
-                                .fontWeight(.medium)
-                                .foregroundStyle(.blue)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Color.blue.opacity(0.10),
-                                    in: Capsule()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open \(key) in Jira")
-                    }
-                }
+                JiraKeyBadgesView(
+                    text: text,
+                    issues: jiraIssues,
+                    siteURL: jiraSiteURL,
+                    isConnected: jiraConnected
+                )
             } else if withoutJiraEnabled {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.caption2)

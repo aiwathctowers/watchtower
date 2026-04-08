@@ -489,6 +489,54 @@ func (db *DB) GetJiraIssuesForTrack(trackID int) ([]JiraIssue, error) {
 	return issues, rows.Err()
 }
 
+// GetJiraIssuesForTracks returns Jira issues linked to multiple tracks in a single query.
+// Results are grouped by track ID. Tracks with no linked issues are omitted from the map.
+func (db *DB) GetJiraIssuesForTracks(trackIDs []int) (map[int][]JiraIssue, error) {
+	if len(trackIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(trackIDs))
+	args := make([]interface{}, len(trackIDs))
+	for i, id := range trackIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	rows, err := db.Query(`SELECT jira_slack_links.track_id, `+jiraIssueColumnsQualified+`
+		FROM jira_issues
+		JOIN jira_slack_links ON jira_slack_links.issue_key = jira_issues.key
+		WHERE jira_slack_links.track_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY jira_issues.updated_at DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues for tracks: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int][]JiraIssue)
+	for rows.Next() {
+		var trackID int
+		var issue JiraIssue
+		err := rows.Scan(&trackID,
+			&issue.Key, &issue.ID, &issue.ProjectKey, &issue.BoardID,
+			&issue.Summary, &issue.DescriptionText,
+			&issue.IssueType, &issue.IssueTypeCategory, &issue.IsBug,
+			&issue.Status, &issue.StatusCategory, &issue.StatusCategoryChangedAt,
+			&issue.AssigneeAccountID, &issue.AssigneeEmail, &issue.AssigneeDisplayName, &issue.AssigneeSlackID,
+			&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
+			&issue.Priority, &issue.StoryPoints, &issue.DueDate,
+			&issue.SprintID, &issue.SprintName, &issue.EpicKey,
+			&issue.Labels, &issue.Components,
+			&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
+			&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue for tracks batch: %w", err)
+		}
+		result[trackID] = append(result[trackID], issue)
+	}
+	return result, rows.Err()
+}
+
 // GetJiraIssuesForDigest returns Jira issues linked to a digest via jira_slack_links.
 func (db *DB) GetJiraIssuesForDigest(digestID int) ([]JiraIssue, error) {
 	rows, err := db.Query(`SELECT DISTINCT `+jiraIssueColumnsQualified+`
@@ -661,6 +709,32 @@ func (db *DB) GetJiraIssuesForUser(slackID string, statusCategory string) ([]Jir
 		issue, err := scanJiraIssue(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning jira issue for user: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraResolvedIssuesForUser returns resolved issues for a user within a time
+// window, limited to at most `limit` rows. The from/to parameters are compared
+// against resolved_at (ISO-8601 date or datetime strings).
+func (db *DB) GetJiraResolvedIssuesForUser(slackID, from, to string, limit int) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues
+		WHERE assignee_slack_id = ? AND status_category = 'done' AND is_deleted = 0
+			AND resolved_at >= ? AND resolved_at <= ?
+		ORDER BY resolved_at DESC
+		LIMIT ?`, slackID, from, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira resolved issues for user %s: %w", slackID, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira resolved issue for user: %w", err)
 		}
 		issues = append(issues, issue)
 	}

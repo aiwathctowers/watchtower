@@ -2,6 +2,7 @@ package briefing
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -17,18 +18,25 @@ func (p *Pipeline) gatherJiraContext(userSlackID string) string {
 		return ""
 	}
 
+	// Load assigned issues once — reused by multiple sub-functions (C2 fix).
+	assignedIssues, err := p.db.GetJiraIssuesByAssigneeSlackID(userSlackID)
+	if err != nil {
+		p.logger.Printf("briefing: error loading Jira issues for user: %v", err)
+		assignedIssues = nil
+	}
+
 	var sections []string
 
 	// My Issues — issues assigned to user.
 	if jira.IsFeatureEnabled(p.cfg, "my_issues") {
-		if ctx := p.gatherMyIssues(userSlackID); ctx != "" {
+		if ctx := formatMyIssues(assignedIssues); ctx != "" {
 			sections = append(sections, "=== MY JIRA ISSUES ===\n"+ctx)
 		}
 	}
 
 	// Awaiting My Input — issues reported by user still in progress, or blocked issues assigned to user.
 	if jira.IsFeatureEnabled(p.cfg, "awaiting_input") {
-		if ctx := p.gatherAwaitingInput(userSlackID); ctx != "" {
+		if ctx := p.gatherAwaitingInput(userSlackID, assignedIssues); ctx != "" {
 			sections = append(sections, "=== AWAITING MY INPUT ===\n"+ctx)
 		}
 	}
@@ -41,7 +49,7 @@ func (p *Pipeline) gatherJiraContext(userSlackID string) string {
 	}
 
 	// Always include stale and overdue issues when Jira is enabled.
-	if ctx := p.gatherStaleAndOverdue(userSlackID); ctx != "" {
+	if ctx := gatherStaleAndOverdue(assignedIssues, p.logger); ctx != "" {
 		sections = append(sections, ctx)
 	}
 
@@ -52,13 +60,8 @@ func (p *Pipeline) gatherJiraContext(userSlackID string) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// gatherMyIssues returns formatted issues assigned to the user.
-func (p *Pipeline) gatherMyIssues(userSlackID string) string {
-	issues, err := p.db.GetJiraIssuesByAssigneeSlackID(userSlackID)
-	if err != nil {
-		p.logger.Printf("briefing: error loading Jira issues for user: %v", err)
-		return ""
-	}
+// formatMyIssues returns formatted issues assigned to the user.
+func formatMyIssues(issues []db.JiraIssue) string {
 	if len(issues) == 0 {
 		return ""
 	}
@@ -68,7 +71,7 @@ func (p *Pipeline) gatherMyIssues(userSlackID string) string {
 // gatherAwaitingInput returns issues where the user is the reporter and
 // the issue is still in todo/in_progress (they may need to follow up),
 // plus blocked issues assigned to the user.
-func (p *Pipeline) gatherAwaitingInput(userSlackID string) string {
+func (p *Pipeline) gatherAwaitingInput(userSlackID string, assignedIssues []db.JiraIssue) string {
 	var parts []string
 
 	// Issues reported by user that are still active (todo or in_progress).
@@ -79,21 +82,16 @@ func (p *Pipeline) gatherAwaitingInput(userSlackID string) string {
 	}
 
 	// Blocked issues assigned to the user.
-	assigned, err := p.db.GetJiraIssuesByAssigneeSlackID(userSlackID)
-	if err != nil {
-		p.logger.Printf("briefing: error loading assigned Jira issues: %v", err)
-	} else {
-		var blocked []db.JiraIssue
-		for _, issue := range assigned {
-			if strings.EqualFold(issue.Status, "blocked") ||
-				strings.Contains(strings.ToLower(issue.Status), "block") {
-				blocked = append(blocked, issue)
-			}
+	var blocked []db.JiraIssue
+	for _, issue := range assignedIssues {
+		if strings.EqualFold(issue.Status, "blocked") ||
+			strings.Contains(strings.ToLower(issue.Status), "block") {
+			blocked = append(blocked, issue)
 		}
-		if len(blocked) > 0 {
-			parts = append(parts, "Blocked (assigned to you):")
-			parts = append(parts, jira.BuildIssueContext(blocked))
-		}
+	}
+	if len(blocked) > 0 {
+		parts = append(parts, "Blocked (assigned to you):")
+		parts = append(parts, jira.BuildIssueContext(blocked))
 	}
 
 	return strings.Join(parts, "\n")
@@ -169,24 +167,27 @@ func (p *Pipeline) gatherSprintProgress() string {
 
 // gatherStaleAndOverdue returns issues that are stale (in_progress for >7 days
 // without status change) or overdue (past due date, not done).
-func (p *Pipeline) gatherStaleAndOverdue(userSlackID string) string {
-	issues, err := p.db.GetJiraIssuesByAssigneeSlackID(userSlackID)
-	if err != nil {
-		p.logger.Printf("briefing: error loading Jira issues for stale/overdue check: %v", err)
-		return ""
-	}
+func gatherStaleAndOverdue(issues []db.JiraIssue, logger *log.Logger) string {
+	return gatherStaleAndOverdueAt(issues, time.Now(), logger)
+}
 
-	now := time.Now()
-	today := now.Format("2006-01-02")
+// gatherStaleAndOverdueAt is the testable core — accepts explicit "now" for deterministic tests.
+func gatherStaleAndOverdueAt(issues []db.JiraIssue, now time.Time, logger *log.Logger) string {
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	staleCutoff := now.AddDate(0, 0, -7)
 
 	var stale, overdue []db.JiraIssue
 
 	for _, issue := range issues {
-		// Overdue: due_date < today AND not done.
-		if issue.DueDate != "" && issue.DueDate < today &&
-			!strings.EqualFold(issue.StatusCategory, "done") {
-			overdue = append(overdue, issue)
+		// Overdue: parsed due_date before today AND not done.
+		if issue.DueDate != "" && !strings.EqualFold(issue.StatusCategory, "done") {
+			if due, err := parseFlexibleTime(issue.DueDate); err == nil {
+				if due.Before(todayStart) {
+					overdue = append(overdue, issue)
+				}
+			} else if logger != nil {
+				logger.Printf("briefing: cannot parse due_date %q for %s: %v", issue.DueDate, issue.Key, err)
+			}
 		}
 
 		// Stale: in_progress and status unchanged for >7 days.
