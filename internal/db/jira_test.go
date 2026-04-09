@@ -198,6 +198,9 @@ func TestGetJiraIssueLinksByKeys(t *testing.T) {
 	links, err := db.GetJiraIssueLinksByKeys([]string{"A-1", "A-4"})
 	require.NoError(t, err)
 	assert.Len(t, links, 2)
+	linkIDs := []string{links[0].ID, links[1].ID}
+	assert.Contains(t, linkIDs, "l1")
+	assert.Contains(t, linkIDs, "l2")
 
 	// Empty input returns empty slice.
 	links, err = db.GetJiraIssueLinksByKeys([]string{})
@@ -296,6 +299,10 @@ func TestClearJiraData(t *testing.T) {
 
 	states, _ := db.GetJiraSyncStates()
 	assert.Empty(t, states)
+
+	// Verify issue links are also cleared.
+	issueLinks, _ := db.GetJiraIssueLinksByKey("P-1")
+	assert.Empty(t, issueLinks)
 }
 
 func TestUpdateAndGetJiraBoardProfile(t *testing.T) {

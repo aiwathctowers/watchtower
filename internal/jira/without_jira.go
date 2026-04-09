@@ -3,6 +3,7 @@ package jira
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"watchtower/internal/config"
@@ -94,24 +95,53 @@ func DetectWithoutJira(d *db.DB, cfg *config.Config, since time.Time) ([]Without
 		return nil, nil
 	}
 
-	// Step 2: Filter out channels that have any jira_slack_links in the period.
+	// Step 2: Batch-check which channels have jira_slack_links in the period.
+	channelIDs := make([]string, len(candidates))
+	for i, c := range candidates {
+		channelIDs[i] = c.channelID
+	}
+
+	linkedChannels := make(map[string]bool)
+	if len(channelIDs) > 0 {
+		placeholders := make([]string, len(channelIDs))
+		args := make([]interface{}, 0, len(channelIDs)+1)
+		for i, id := range channelIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		args = append(args, sinceISO)
+
+		linkRows, err := d.Query(`
+			SELECT DISTINCT channel_id FROM jira_slack_links
+			WHERE channel_id IN (`+strings.Join(placeholders, ",")+`) AND detected_at >= ?
+		`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("batch checking jira links: %w", err)
+		}
+		defer linkRows.Close()
+
+		for linkRows.Next() {
+			var chID string
+			if err := linkRows.Scan(&chID); err != nil {
+				return nil, fmt.Errorf("scanning linked channel: %w", err)
+			}
+			linkedChannels[chID] = true
+		}
+		if err := linkRows.Err(); err != nil {
+			return nil, fmt.Errorf("iterating linked channels: %w", err)
+		}
+	}
+
+	// Filter and resolve channel names.
 	var warnings []WithoutJiraWarning
 	for _, c := range candidates {
-		var linkCount int
-		err := d.QueryRow(`
-			SELECT COUNT(*) FROM jira_slack_links
-			WHERE channel_id = ? AND detected_at >= ?
-		`, c.channelID, sinceISO).Scan(&linkCount)
-		if err != nil {
-			return nil, fmt.Errorf("checking jira links for channel %s: %w", c.channelID, err)
-		}
-		if linkCount > 0 {
+		if linkedChannels[c.channelID] {
 			continue
 		}
 
 		// Resolve channel name.
 		var channelName string
-		err = d.QueryRow(`SELECT name FROM channels WHERE id = ?`, c.channelID).Scan(&channelName)
+		err := d.QueryRow(`SELECT name FROM channels WHERE id = ?`, c.channelID).Scan(&channelName)
 		if err != nil {
 			channelName = c.channelID // fallback to ID if not found
 		}

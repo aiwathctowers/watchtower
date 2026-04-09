@@ -2,9 +2,11 @@ package jira
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
@@ -276,6 +278,7 @@ func buildBlockingChain(issueKey string, idx *linkIndex, d *db.DB) []string {
 func loadBlockersFromDB(key string, d *db.DB, visited map[string]bool) []string {
 	links, err := d.GetJiraIssueLinksByKey(key)
 	if err != nil {
+		log.Printf("blockers: failed to load links for %s: %v", key, err)
 		return nil
 	}
 	var blockers []string
@@ -324,6 +327,7 @@ func countDownstream(issueKey string, idx *linkIndex, d *db.DB) int {
 func loadDownstreamFromDB(key string, d *db.DB, visited map[string]bool) []string {
 	links, err := d.GetJiraIssueLinksByKey(key)
 	if err != nil {
+		log.Printf("blockers: failed to load downstream for %s: %v", key, err)
 		return nil
 	}
 	var targets []string
@@ -459,8 +463,9 @@ func fetchSlackContext(issueKey string, d *db.DB) string {
 			continue
 		}
 		text := msgs[0].Text
-		if len(text) > snippetMaxLen {
-			text = text[:snippetMaxLen]
+		if utf8.RuneCountInString(text) > snippetMaxLen {
+			runes := []rune(text)
+			text = string(runes[:snippetMaxLen])
 		}
 		return text
 	}

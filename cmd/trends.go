@@ -48,7 +48,7 @@ func runTrends(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 
 	// Look for the latest weekly digest
-	weekAgo := float64(time.Now().Add(-8 * 24 * time.Hour).Unix())
+	weekAgo := float64(time.Now().Add(-7 * 24 * time.Hour).Unix())
 	digests, err := database.GetDigests(db.DigestFilter{
 		Type:     "weekly",
 		FromUnix: weekAgo,
@@ -75,8 +75,8 @@ func runTrends(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(&buf, "%s\n\n", d.Summary)
 
 		// Try topic-structured data first
-		topics, _ := database.GetDigestTopics(d.ID)
-		if len(topics) > 0 {
+		topics, topicErr := database.GetDigestTopics(d.ID)
+		if topicErr == nil && len(topics) > 0 {
 			for _, t := range topics {
 				fmt.Fprintf(&buf, "### %s\n\n", t.Title)
 				if t.Summary != "" {
@@ -191,8 +191,8 @@ func showTopicsSummary(out interface{ Write([]byte) (int, error) }, database *db
 	topicCounts := make(map[string]int)
 	for _, d := range digests {
 		// Try topic-structured data first
-		dbTopics, _ := database.GetDigestTopics(d.ID)
-		if len(dbTopics) > 0 {
+		dbTopics, topicErr := database.GetDigestTopics(d.ID)
+		if topicErr == nil && len(dbTopics) > 0 {
 			for _, t := range dbTopics {
 				topicCounts[t.Title]++
 			}

@@ -396,7 +396,8 @@ func (db *DB) UpsertJiraSlackLink(link JiraSlackLink) error {
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(issue_key, channel_id, message_ts) DO UPDATE SET
 			track_id=COALESCE(excluded.track_id, jira_slack_links.track_id),
-			digest_id=COALESCE(excluded.digest_id, jira_slack_links.digest_id)`,
+			digest_id=COALESCE(excluded.digest_id, jira_slack_links.digest_id),
+			link_type=COALESCE(excluded.link_type, jira_slack_links.link_type)`,
 		link.IssueKey, link.ChannelID, link.MessageTS, link.TrackID, link.DigestID, link.LinkType)
 	if err != nil {
 		return fmt.Errorf("upserting jira slack link %s: %w", link.IssueKey, err)

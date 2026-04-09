@@ -945,7 +945,9 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 
 	var overrides jira.UserOverrides
 	if board != nil && board.UserOverridesJSON != "" {
-		_ = json.Unmarshal([]byte(board.UserOverridesJSON), &overrides)
+		if err := json.Unmarshal([]byte(board.UserOverridesJSON), &overrides); err != nil {
+			return fmt.Errorf("parsing existing overrides for board %d: %w", boardID, err)
+		}
 	}
 	if overrides.StaleThresholds == nil {
 		overrides.StaleThresholds = make(map[string]int)
@@ -953,7 +955,10 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 	for k, v := range thresholds {
 		overrides.StaleThresholds[k] = v
 	}
-	overridesJSON, _ := json.Marshal(overrides)
+	overridesJSON, err := json.Marshal(overrides)
+	if err != nil {
+		return fmt.Errorf("marshaling overrides: %w", err)
+	}
 
 	if err := database.UpdateJiraBoardUserOverrides(boardID, string(overridesJSON)); err != nil {
 		return fmt.Errorf("updating overrides: %w", err)
