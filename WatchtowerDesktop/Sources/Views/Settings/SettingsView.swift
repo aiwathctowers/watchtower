@@ -202,7 +202,7 @@ struct GeneralSettings: View {
     }
 
     private var aiSection: some View {
-        Section("AI") {
+        Section(header: Text("AI")) {
             Picker(
                 "AI Provider",
                 selection: Binding(
@@ -252,7 +252,7 @@ struct GeneralSettings: View {
                     prompt: Text("auto-detect")
                 )
 
-                if let path = Constants.findClaudePath() {
+                if let path = Constants.findInPath("claude") {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .help("Found: \(path)")
@@ -275,7 +275,7 @@ struct GeneralSettings: View {
                         prompt: Text("auto-detect")
                     )
 
-                    if let path = Constants.findCodexPath() {
+                    if let path = Constants.findInPath("codex") {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .help("Found: \(path)")
@@ -628,7 +628,7 @@ struct GeneralSettings: View {
 
     private func testConnection() {
         let isCodex = (config.aiProvider ?? "claude") == "codex"
-        let cliPath: String? = isCodex ? Constants.findCodexPath() : Constants.findClaudePath()
+        let cliPath: String? = isCodex ? Constants.findInPath("codex") : Constants.findInPath("claude")
         let providerName = isCodex ? "Codex" : "Claude"
         let defaultModel = isCodex ? "gpt-5.4" : "claude-sonnet-4-6"
 

@@ -535,7 +535,7 @@ final class ChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendWithError() async throws {
-        let mock = MockClaudeService(error: ClaudeError.notFound)
+        let mock = MockClaudeService(error: WatchtowerAIError.cliNotFound)
         let vm = ChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "Hello"
@@ -697,13 +697,13 @@ final class ChatViewModelProviderTests: XCTestCase {
     @MainActor
     func testCreateServiceForClaude() {
         let service = ChatViewModel.createService(for: .claude)
-        XCTAssertTrue(service is ClaudeService)
+        XCTAssertTrue(service is WatchtowerAIService)
     }
 
     @MainActor
     func testCreateServiceForCodex() {
         let service = ChatViewModel.createService(for: .codex)
-        XCTAssertTrue(service is CodexService)
+        XCTAssertTrue(service is WatchtowerAIService)
     }
 }
 
@@ -1250,7 +1250,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testInitialState() {
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         XCTAssertTrue(vm.messages.isEmpty)
         XCTAssertFalse(vm.isStreaming)
         XCTAssertEqual(vm.inputText, "")
@@ -1267,7 +1267,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
     @MainActor
     func testSendCreatesMessages() async throws {
         let mock = MockClaudeService(events: [.text("Great! "), .text("Tell me more."), .done])
-        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "I'm an Engineering Manager"
         vm.send()
@@ -1284,7 +1284,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendEmptyDoesNothing() {
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.inputText = "   "
         vm.send()
         XCTAssertTrue(vm.messages.isEmpty)
@@ -1292,7 +1292,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendWhileStreamingDoesNothing() {
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         vm.isStreaming = true
         vm.inputText = "Hello"
         vm.send()
@@ -1308,7 +1308,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
             [.text("Got it!"), .done],                    // send() response
             [.text(extractionJSON), .done]               // parseProfileFromChat() response
         ])
-        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: mock, dbManager: dbManager)
 
         // Simulate user saying their role
         vm.inputText = "I'm an engineering manager at Platform team"
@@ -1331,7 +1331,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
             [.text("I understand."), .done],              // send() response
             [.text(extractionJSON), .done]               // parseProfileFromChat() response
         ])
-        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "I often miss important decisions in threads and lose track of deadlines"
         vm.send()
@@ -1351,7 +1351,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
             try TestDatabase.insertProfile(db, slackUserID: "U001", onboardingDone: false)
         }
 
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         await vm.markOnboardingDone()
 
         let profile = try await dbManager.dbPool.read { db in
@@ -1362,8 +1362,8 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testSendWithError() async throws {
-        let mock = MockClaudeService(error: ClaudeError.notFound)
-        let vm = OnboardingChatViewModel(claudeService: mock, dbManager: dbManager)
+        let mock = MockClaudeService(error: WatchtowerAIError.cliNotFound)
+        let vm = OnboardingChatViewModel(aiService: mock, dbManager: dbManager)
 
         vm.inputText = "Hello"
         vm.send()
@@ -1380,7 +1380,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
             try TestDatabase.insertUser(db, id: "U002", displayName: "Bob")
         }
 
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), dbManager: dbManager)
         XCTAssertEqual(vm.allUsers.count, 2)
     }
 
@@ -1407,7 +1407,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testQuestionnaireLocalizationRussian() {
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), language: "Russian", dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), language: "Russian", dbManager: dbManager)
         vm.startQuestionnaire()
         XCTAssertEqual(vm.messages.count, 1)
         XCTAssertTrue(vm.messages[0].text.contains("роль"))
@@ -1418,7 +1418,7 @@ final class OnboardingChatViewModelTests: XCTestCase {
 
     @MainActor
     func testQuestionnaireLocalizationEnglish() {
-        let vm = OnboardingChatViewModel(claudeService: MockClaudeService(), language: "English", dbManager: dbManager)
+        let vm = OnboardingChatViewModel(aiService: MockClaudeService(), language: "English", dbManager: dbManager)
         vm.startQuestionnaire()
         XCTAssertEqual(vm.messages[0].text, "Let's understand your role. Do people report to you?")
         XCTAssertEqual(vm.quickReplies[0].label, "Yes")

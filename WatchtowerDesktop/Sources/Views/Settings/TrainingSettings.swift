@@ -255,16 +255,7 @@ struct TrainingSettings: View {
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = ["tune", "--apply"]
 
-            // H3: use resolvedEnvironment for proper PATH resolution in .app context
-            var env = Constants.resolvedEnvironment()
-            if let claudePath = Constants.findClaudePath() {
-                let claudeDir = (claudePath as NSString).deletingLastPathComponent
-                let currentPath = env["PATH"] ?? ""
-                if !currentPath.contains(claudeDir) {
-                    env["PATH"] = claudeDir + ":" + currentPath
-                }
-            }
-            process.environment = env
+            process.environment = Constants.resolvedEnvironment()
 
             let stdout = Pipe()
             let stderr = Pipe()

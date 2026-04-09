@@ -107,10 +107,8 @@ final class ChatViewModel {
     }
 
     static func createService(for provider: AIProvider) -> any AIServiceProtocol {
-        switch provider {
-        case .claude: ClaudeService()
-        case .codex: CodexService()
-        }
+        _ = provider // provider selection handled by WatchtowerAIService via config
+        return WatchtowerAIService()
     }
 
     func bind(to conversation: ChatConversation) {

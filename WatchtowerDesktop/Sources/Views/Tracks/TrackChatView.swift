@@ -13,7 +13,7 @@ final class TrackChatViewModel {
 
     private var conversationID: Int64?
     private var sessionID: String?
-    private let claudeService: any AIServiceProtocol
+    private let aiService: any AIServiceProtocol
     private let dbManager: DatabaseManager
     private var track: Track
     private weak var viewModel: TracksViewModel?
@@ -24,12 +24,12 @@ final class TrackChatViewModel {
         track: Track,
         viewModel: TracksViewModel,
         dbManager: DatabaseManager,
-        claudeService: (any AIServiceProtocol)? = nil
+        aiService: (any AIServiceProtocol)? = nil
     ) {
         self.track = track
         self.viewModel = viewModel
         self.dbManager = dbManager
-        self.claudeService = claudeService ?? ClaudeService()
+        self.aiService = aiService ?? WatchtowerAIService()
 
         loadOrCreateConversation()
         startMessageObservation()
@@ -119,7 +119,7 @@ final class TrackChatViewModel {
         let dbPath = dbManager.dbPool.path
         let dbPool = dbManager.dbPool
         let capturedTrack = track
-        let capturedClaudeService = claudeService
+        let capturedAIService = aiService
         let capturedConvID = conversationID
         let capturedDBManager = dbManager
 
@@ -130,7 +130,7 @@ final class TrackChatViewModel {
                 track: capturedTrack,
                 dbPool: dbPool,
                 dbPath: dbPath,
-                claudeService: capturedClaudeService,
+                aiService: capturedAIService,
                 dbManager: capturedDBManager,
                 conversationID: capturedConvID
             )
@@ -145,7 +145,7 @@ final class TrackChatViewModel {
         track: Track,
         dbPool: DatabasePool,
         dbPath: String,
-        claudeService: any AIServiceProtocol,
+        aiService: any AIServiceProtocol,
         dbManager: DatabaseManager,
         conversationID: Int64?
     ) async {
@@ -156,7 +156,7 @@ final class TrackChatViewModel {
         var fullText = ""
         var newSessionID: String?
         do {
-            let stream = claudeService.stream(
+            let stream = aiService.stream(
                 prompt: text,
                 systemPrompt: systemPrompt,
                 sessionID: currentSessionID,

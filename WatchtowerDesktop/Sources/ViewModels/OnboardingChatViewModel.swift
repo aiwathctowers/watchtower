@@ -81,7 +81,7 @@ final class OnboardingChatViewModel {
 
     private static let readyMarker = "[READY]"
     private var sessionID: String?
-    private let claudeService: any AIServiceProtocol
+    private let aiService: any AIServiceProtocol
     private var dbManager: DatabaseManager?
     private var streamTask: Task<Void, Never>?
     private var chatCompleted = false
@@ -89,8 +89,8 @@ final class OnboardingChatViewModel {
     /// The UI language selected during onboarding settings step.
     let language: String
 
-    init(claudeService: any AIServiceProtocol, language: String = "English", dbManager: DatabaseManager? = nil) {
-        self.claudeService = claudeService
+    init(aiService: any AIServiceProtocol = WatchtowerAIService(), language: String = "English", dbManager: DatabaseManager? = nil) {
+        self.aiService = aiService
         self.language = language
         self.dbManager = dbManager
         if dbManager != nil { loadUsers() }
@@ -268,7 +268,7 @@ final class OnboardingChatViewModel {
         sessionID: String?
     ) async {
         do {
-            let stream = claudeService.stream(
+            let stream = aiService.stream(
                 prompt: prompt,
                 systemPrompt: systemPrompt,
                 sessionID: sessionID,
@@ -376,7 +376,7 @@ final class OnboardingChatViewModel {
 
         var contextText = ""
         do {
-            let stream = claudeService.stream(
+            let stream = aiService.stream(
                 prompt: prompt,
                 systemPrompt: nil,
                 sessionID: nil,
@@ -571,7 +571,7 @@ final class OnboardingChatViewModel {
     private func collectStreamText(prompt: String) async -> String {
         var text = ""
         do {
-            let stream = claudeService.stream(
+            let stream = aiService.stream(
                 prompt: prompt,
                 systemPrompt: nil,
                 sessionID: nil,

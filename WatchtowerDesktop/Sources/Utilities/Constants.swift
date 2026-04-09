@@ -30,85 +30,28 @@ enum Constants {
         static let dailySummary = "DAILY_SUMMARY"
     }
 
-    /// Read `claude_path` override from config.yaml (lightweight, no Yams dependency).
-    nonisolated static func claudePathFromConfig() -> String? {
-        guard let data = FileManager.default.contents(atPath: configPath),
-              let str = String(data: data, encoding: .utf8) else { return nil }
-        // Simple line-based parse: "claude_path: /some/path"
-        for line in str.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("claude_path:") {
-                let value = trimmed.dropFirst("claude_path:".count)
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                if !value.isEmpty && FileManager.default.isExecutableFile(atPath: value) {
-                    return value
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Check if Claude Code CLI is available.
-    /// Priority: config override → search resolved PATH.
-    nonisolated static func findClaudePath() -> String? {
-        if let override = claudePathFromConfig() {
-            return override
-        }
-        return findInPath("claude")
-    }
-
-    /// Read `codex_path` override from config.yaml (lightweight, no Yams dependency).
-    nonisolated static func codexPathFromConfig() -> String? {
-        guard let data = FileManager.default.contents(atPath: configPath),
-              let str = String(data: data, encoding: .utf8) else { return nil }
-        for line in str.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("codex_path:") {
-                let value = trimmed.dropFirst("codex_path:".count)
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                if !value.isEmpty && FileManager.default.isExecutableFile(atPath: value) {
-                    return value
-                }
-            }
-        }
-        return nil
-    }
-
-    /// Check if Codex CLI is available.
-    /// Priority: config override → search resolved PATH.
-    nonisolated static func findCodexPath() -> String? {
-        if let override = codexPathFromConfig() {
-            return override
-        }
-        return findInPath("codex")
-    }
-
-    /// Search for a binary in the resolved user PATH, with well-known fallback directories.
+    /// Search for a binary in well-known directories first, then resolved PATH.
+    /// Well-known dirs are checked first to avoid TCC prompts from iterating
+    /// the full PATH (which may include ~/Documents, ~/Music, etc.).
     nonisolated static func findInPath(_ binary: String) -> String? {
-        let env = resolvedEnvironment()
-        guard let pathValue = env["PATH"] else { return nil }
-        for dir in pathValue.split(separator: ":") {
-            let fullPath = "\(dir)/\(binary)"
-            if FileManager.default.isExecutableFile(atPath: fullPath) {
-                return fullPath
-            }
-        }
-        // Fallback: well-known directories not always in PATH (nvm, fnm, volta, Homebrew)
         let home = NSHomeDirectory()
-        let fallbackDirs = [
+
+        // 1. Well-known directories — fast, no TCC risk
+        let knownDirs = [
+            "\(home)/.local/bin",
+            "\(home)/.claude/bin",
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "\(home)/.volta/bin"
         ]
-        for dir in fallbackDirs {
+        for dir in knownDirs {
             let fullPath = "\(dir)/\(binary)"
             if FileManager.default.isExecutableFile(atPath: fullPath) {
                 return fullPath
             }
         }
-        // Fallback: scan nvm/fnm versioned directories
+
+        // 2. Scan nvm/fnm versioned directories
         let versionedDirs = [
             "\(home)/.nvm/versions/node",
             "\(home)/.local/share/fnm/node-versions",
@@ -119,6 +62,23 @@ enum Constants {
                 return found
             }
         }
+
+        // 3. Resolved PATH — skip TCC-protected directories
+        let tccProtected: Set<String> = [
+            "\(home)/Documents", "\(home)/Downloads", "\(home)/Desktop",
+            "\(home)/Music", "\(home)/Movies", "\(home)/Pictures"
+        ]
+        let env = resolvedEnvironment()
+        guard let pathValue = env["PATH"] else { return nil }
+        for dir in pathValue.split(separator: ":") {
+            let dirStr = String(dir)
+            if tccProtected.contains(where: { dirStr.hasPrefix($0) }) { continue }
+            let fullPath = "\(dirStr)/\(binary)"
+            if FileManager.default.isExecutableFile(atPath: fullPath) {
+                return fullPath
+            }
+        }
+
         return nil
     }
 
