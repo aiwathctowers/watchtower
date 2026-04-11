@@ -8,6 +8,8 @@ struct JiraBoardsSettingsView: View {
     @State private var toggleError: String?
 
     @State private var isFetching = false
+    @State private var reAnalyzingBoardID: Int?
+    @State private var notifiedBoardIDs: Set<Int> = []
 
     var body: some View {
         Section("Boards") {
@@ -60,10 +62,17 @@ struct JiraBoardsSettingsView: View {
                                 in: Capsule()
                             )
                         analyzedBadge(board)
+                        if board.isConfigChanged {
+                            configChangedBadge
+                        }
                     }
                 }
 
                 Spacer()
+
+                if board.isConfigChanged {
+                    reAnalyzeButton(board)
+                }
 
                 Text("\(board.issueCount) issues")
                     .font(.caption)
@@ -81,6 +90,9 @@ struct JiraBoardsSettingsView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
             }
+        }
+        .onAppear {
+            checkAndNotifyConfigChange(board)
         }
     }
 
@@ -101,6 +113,94 @@ struct JiraBoardsSettingsView: View {
                 .padding(.vertical, 2)
                 .background(Color.gray.opacity(0.15), in: Capsule())
         }
+    }
+
+    private var configChangedBadge: some View {
+        Text("Config changed")
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.orange.opacity(0.15), in: Capsule())
+    }
+
+    private func reAnalyzeButton(_ board: JiraBoard) -> some View {
+        Button {
+            reAnalyzeBoard(board)
+        } label: {
+            HStack(spacing: 4) {
+                if reAnalyzingBoardID == board.id {
+                    ProgressView().controlSize(.mini)
+                }
+                Text("Re-analyze")
+                    .font(.caption)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(reAnalyzingBoardID == board.id)
+    }
+
+    private func reAnalyzeBoard(_ board: JiraBoard) {
+        guard let cliPath = Constants.findCLIPath() else {
+            toggleError = "Watchtower CLI not found"
+            return
+        }
+
+        reAnalyzingBoardID = board.id
+        toggleError = nil
+
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = [
+                "jira", "boards", "analyze", "--force",
+                String(board.id),
+            ]
+            process.environment = Constants.resolvedEnvironment()
+            process.currentDirectoryURL =
+                Constants.processWorkingDirectory()
+
+            let stderrPipe = Pipe()
+            process.standardOutput = Pipe()
+            process.standardError = stderrPipe
+
+            do {
+                try process.run()
+            } catch {
+                await MainActor.run {
+                    reAnalyzingBoardID = nil
+                    toggleError = "Failed to launch CLI"
+                }
+                return
+            }
+
+            let stderrData = stderrPipe.fileHandleForReading
+                .readDataToEndOfFile()
+            process.waitUntilExit()
+
+            await MainActor.run {
+                reAnalyzingBoardID = nil
+                if process.terminationStatus != 0 {
+                    let stderr = String(
+                        data: stderrData, encoding: .utf8
+                    )?.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ) ?? ""
+                    toggleError = stderr.isEmpty
+                        ? "Re-analysis failed"
+                        : String(stderr.prefix(200))
+                }
+            }
+        }
+    }
+
+    private func checkAndNotifyConfigChange(_ board: JiraBoard) {
+        guard board.isConfigChanged,
+              !notifiedBoardIDs.contains(board.id) else { return }
+        notifiedBoardIDs.insert(board.id)
+        NotificationService.shared
+            .sendBoardConfigChangedNotification(boardName: board.name)
     }
 
     private func boardTypeBadgeColor(

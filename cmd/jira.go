@@ -131,6 +131,18 @@ var jiraBlockersCmd = &cobra.Command{
 	RunE:  runJiraBlockers,
 }
 
+var jiraProjectMapCmd = &cobra.Command{
+	Use:   "project-map",
+	Short: "Show project map of epics",
+	RunE:  runJiraProjectMap,
+}
+
+var jiraReleasesCmd = &cobra.Command{
+	Use:   "releases",
+	Short: "Show release dashboard",
+	RunE:  runJiraReleases,
+}
+
 func init() {
 	rootCmd.AddCommand(jiraCmd)
 	jiraCmd.AddCommand(jiraLoginCmd)
@@ -150,13 +162,20 @@ func init() {
 	jiraFeaturesCmd.AddCommand(jiraFeaturesResetCmd)
 	jiraCmd.AddCommand(jiraWorkloadCmd)
 	jiraCmd.AddCommand(jiraBlockersCmd)
+	jiraCmd.AddCommand(jiraProjectMapCmd)
+	jiraCmd.AddCommand(jiraReleasesCmd)
 
 	jiraWorkloadCmd.Flags().Bool("json", false, "Output as JSON")
 	jiraBlockersCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraProjectMapCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraProjectMapCmd.Flags().String("epic", "", "Show details for a specific epic (e.g. PROJ-100)")
+	jiraReleasesCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraReleasesCmd.Flags().String("release", "", "Show details for a specific release (e.g. v1.0)")
 	jiraLoginCmd.Flags().Bool("no-open", false, "don't open the browser automatically")
 	jiraLoginCmd.Flags().String("site", "", "select Jira site by URL (e.g. https://mysite.atlassian.net)")
 	jiraFeaturesCmd.Flags().Bool("json", false, "output as JSON (for Swift integration)")
 	jiraBoardsAnalyzeCmd.Flags().Bool("force", false, "re-analyze even if config hash unchanged")
+	jiraBoardsAnalyzeCmd.Flags().Bool("auto", false, "auto re-analyze boards with changed config (respects 24h cooldown)")
 	jiraBoardsOverrideCmd.Flags().String("stale", "", "stale thresholds (e.g. 'Code Review=1,QA=2')")
 }
 
@@ -839,7 +858,33 @@ func runJiraBoardsAnalyze(cmd *cobra.Command, args []string) error {
 	analyzer := jira.NewBoardAnalyzer(client, database, aiProvider)
 
 	force, _ := cmd.Flags().GetBool("force")
+	autoRefresh, _ := cmd.Flags().GetBool("auto")
 	out := cmd.OutOrStdout()
+
+	// --auto mode: check for changed configs and re-analyze with cooldown.
+	if autoRefresh {
+		results, err := analyzer.CheckAndRefreshProfiles(cmd.Context(), true)
+		if err != nil {
+			return fmt.Errorf("auto-refresh: %w", err)
+		}
+		refreshed := 0
+		for _, r := range results {
+			if r.Refreshed {
+				fmt.Fprintf(out, "Refreshed board %d (%s)\n", r.BoardID, r.BoardName)
+				refreshed++
+			} else if r.Skipped {
+				fmt.Fprintf(out, "Skipped board %d (%s): cooldown not elapsed\n", r.BoardID, r.BoardName)
+			} else if r.Error != nil {
+				fmt.Fprintf(out, "Warning: board %d (%s): %v\n", r.BoardID, r.BoardName, r.Error)
+			}
+		}
+		if refreshed == 0 && len(results) == 0 {
+			fmt.Fprintln(out, "No boards need re-analysis.")
+		} else {
+			fmt.Fprintf(out, "Auto-refreshed %d board(s).\n", refreshed)
+		}
+		return nil
+	}
 
 	if len(args) > 0 {
 		// Analyze specific boards.
@@ -1161,6 +1206,303 @@ func blockerUrgencyIcon(u jira.BlockerUrgency) string {
 
 func formatBlockingChain(chain []string) string {
 	return strings.Join(chain, " \u2190 ")
+}
+
+func runJiraProjectMap(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	if !jira.IsFeatureEnabled(cfg, "epic_progress") {
+		return fmt.Errorf("epic_progress feature is disabled; enable with 'watchtower jira features enable epic_progress'")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	epicFlag, _ := cmd.Flags().GetString("epic")
+
+	// Single epic detail mode.
+	if epicFlag != "" {
+		epic, err := jira.BuildProjectMapForEpic(database, cfg, epicFlag, time.Now())
+		if err != nil {
+			return fmt.Errorf("building project map for epic: %w", err)
+		}
+		if epic == nil {
+			fmt.Fprintf(out, "Epic %s not found or has too few issues.\n", epicFlag)
+			return nil
+		}
+
+		// Who to ping for this epic.
+		pingTargets, err := jira.ComputeWhoToPingForEpic(database, epicFlag)
+		if err != nil {
+			return fmt.Errorf("computing who to ping: %w", err)
+		}
+
+		if jsonFlag {
+			payload := struct {
+				*jira.ProjectMapEpic
+				WhoToPing []jira.PingTarget `json:"who_to_ping"`
+			}{epic, pingTargets}
+			data, err := json.MarshalIndent(payload, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshalling JSON: %w", err)
+			}
+			fmt.Fprintln(out, string(data))
+			return nil
+		}
+
+		// Text output — epic detail.
+		fmt.Fprintf(out, "Epic: %s — %s\n", epic.EpicKey, epic.EpicName)
+		fmt.Fprintf(out, "Progress: %.0f%% (%d/%d done, %d in progress)\n",
+			epic.ProgressPct, epic.DoneIssues, epic.TotalIssues, epic.InProgressIssues)
+		fmt.Fprintf(out, "Status: %s\n", epic.StatusBadge)
+		fmt.Fprintf(out, "Forecast: %.1f weeks at current velocity\n", epic.ForecastWeeks)
+		fmt.Fprintln(out)
+
+		// Issues table.
+		if len(epic.Issues) > 0 {
+			fmt.Fprintln(out, "Issues:")
+			fmt.Fprintf(out, "  %-12s %-30s %-15s %-13s %s\n", "KEY", "SUMMARY", "STATUS", "ASSIGNEE", "DAYS")
+			for _, iss := range epic.Issues {
+				assignee := iss.AssigneeName
+				if assignee == "" {
+					assignee = "unassigned"
+				}
+				staleMarker := ""
+				if iss.IsStale {
+					staleMarker = " \u26a0\ufe0f stale"
+				}
+				fmt.Fprintf(out, "  %-12s %-30s %-15s %-13s %d%s\n",
+					iss.Key, truncate(iss.Summary, 30), truncate(iss.Status, 15),
+					truncate("@"+assignee, 13), iss.DaysInStatus, staleMarker)
+			}
+			fmt.Fprintln(out)
+		}
+
+		// Stale issues.
+		if len(epic.StaleIssues) > 0 {
+			fmt.Fprintf(out, "Stale Issues (%d):\n", len(epic.StaleIssues))
+			for _, iss := range epic.StaleIssues {
+				fmt.Fprintf(out, "  %-12s %-30s %-15s %d days\n",
+					iss.Key, truncate(iss.Summary, 30), truncate(iss.Status, 15), iss.DaysInStatus)
+			}
+			fmt.Fprintln(out)
+		}
+
+		// Participants.
+		if len(epic.Participants) > 0 {
+			fmt.Fprintln(out, "Participants:")
+			parts := make([]string, len(epic.Participants))
+			for i, p := range epic.Participants {
+				name := p.DisplayName
+				if name == "" {
+					name = p.SlackUserID
+				}
+				parts[i] = fmt.Sprintf("@%s", name)
+			}
+			fmt.Fprintf(out, "  %s\n", strings.Join(parts, ", "))
+			fmt.Fprintln(out)
+		}
+
+		// Who to ping.
+		if len(pingTargets) > 0 {
+			fmt.Fprintln(out, "Who to Ping:")
+			for _, p := range pingTargets {
+				name := p.DisplayName
+				if name == "" {
+					name = p.SlackUserID
+				}
+				fmt.Fprintf(out, "  @%s — %s\n", name, p.Reason)
+			}
+		}
+
+		return nil
+	}
+
+	// List mode — all epics table.
+	epics, err := jira.BuildProjectMap(database, cfg, time.Now())
+	if err != nil {
+		return fmt.Errorf("building project map: %w", err)
+	}
+
+	if len(epics) == 0 {
+		fmt.Fprintln(out, "No epics found.")
+		return nil
+	}
+
+	if jsonFlag {
+		data, err := json.MarshalIndent(epics, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling JSON: %w", err)
+		}
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+
+	fmt.Fprintln(out, "Project Map — Epics")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%-12s %-23s %10s  %-10s %7s %6s %8s\n",
+		"KEY", "NAME", "PROGRESS", "STATUS", "ISSUES", "STALE", "BLOCKED")
+	for _, e := range epics {
+		fmt.Fprintf(out, "%-12s %-23s %9.0f%%  %-10s %7d %6d %8d\n",
+			e.EpicKey, truncate(e.EpicName, 23),
+			e.ProgressPct, e.StatusBadge,
+			e.TotalIssues, e.StaleCount, e.BlockedCount)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%d epics found.\n", len(epics))
+
+	return nil
+}
+
+func runJiraReleases(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	if !jira.IsFeatureEnabled(cfg, "release_dashboard") {
+		return fmt.Errorf("release_dashboard feature is disabled; enable with 'watchtower jira features enable release_dashboard'")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	releaseFlag, _ := cmd.Flags().GetString("release")
+	now := time.Now()
+
+	// Single release detail mode.
+	if releaseFlag != "" {
+		entry, err := jira.BuildReleaseDetail(database, cfg, releaseFlag, now)
+		if err != nil {
+			return fmt.Errorf("building release detail: %w", err)
+		}
+		if entry == nil {
+			fmt.Fprintf(out, "Release %q not found.\n", releaseFlag)
+			return nil
+		}
+
+		if jsonFlag {
+			data, err := json.MarshalIndent(entry, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshalling JSON: %w", err)
+			}
+			fmt.Fprintln(out, string(data))
+			return nil
+		}
+
+		// Text output — release detail.
+		status := releaseStatus(entry)
+		fmt.Fprintf(out, "Release: %s\n", entry.Name)
+		fmt.Fprintf(out, "Date: %s\n", entry.ReleaseDate)
+		fmt.Fprintf(out, "Progress: %.0f%% (%d/%d done)\n", entry.ProgressPct, entry.DoneIssues, entry.TotalIssues)
+		fmt.Fprintf(out, "Status: %s", status)
+		if entry.AtRiskReason != "" {
+			fmt.Fprintf(out, " — %s", entry.AtRiskReason)
+		}
+		fmt.Fprintln(out)
+
+		// Epic progress table.
+		if len(entry.EpicProgress) > 0 {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "Epic Progress:")
+			fmt.Fprintf(out, "  %-12s %-23s %10s  %-10s\n", "EPIC", "NAME", "PROGRESS", "STATUS")
+			for _, ep := range entry.EpicProgress {
+				fmt.Fprintf(out, "  %-12s %-23s %9.0f%%  %-10s\n",
+					ep.EpicKey, truncate(ep.EpicName, 23), ep.ProgressPct, ep.StatusBadge)
+			}
+		}
+
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "Blocked Issues: %d\n", entry.BlockedCount)
+
+		scopeNet := entry.ScopeChanges.AddedLastWeek - entry.ScopeChanges.RemovedLastWeek
+		if scopeNet > 0 {
+			fmt.Fprintf(out, "Scope Changes (last week): +%d added\n", entry.ScopeChanges.AddedLastWeek)
+		} else if scopeNet < 0 {
+			fmt.Fprintf(out, "Scope Changes (last week): %d removed\n", entry.ScopeChanges.RemovedLastWeek)
+		}
+
+		if entry.AtRiskReason != "" {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "At Risk Reason: %s\n", entry.AtRiskReason)
+		}
+
+		return nil
+	}
+
+	// List mode — all releases table.
+	entries, err := jira.BuildReleaseDashboard(database, cfg, "", now)
+	if err != nil {
+		return fmt.Errorf("building release dashboard: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No releases found.")
+		return nil
+	}
+
+	if jsonFlag {
+		data, err := json.MarshalIndent(entries, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling JSON: %w", err)
+		}
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+
+	fmt.Fprintln(out, "Releases")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%-14s %-13s %10s  %-12s %6s %8s\n",
+		"NAME", "DATE", "PROGRESS", "STATUS", "EPICS", "BLOCKED")
+	for _, e := range entries {
+		status := releaseStatus(&e)
+		fmt.Fprintf(out, "%-14s %-13s %9.0f%%  %-12s %6d %8d\n",
+			truncate(e.Name, 14), e.ReleaseDate,
+			e.ProgressPct, status,
+			len(e.EpicProgress), e.BlockedCount)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%d releases found.\n", len(entries))
+
+	return nil
+}
+
+func releaseStatus(e *jira.ReleaseEntry) string {
+	if e.Released {
+		return "released"
+	}
+	if e.IsOverdue {
+		return "overdue"
+	}
+	if e.AtRisk {
+		return "at_risk"
+	}
+	return "unreleased"
 }
 
 // truncate shortens a string to maxLen, appending "..." if needed.

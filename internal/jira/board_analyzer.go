@@ -253,6 +253,149 @@ func (a *BoardAnalyzer) CheckConfigChanged(ctx context.Context) ([]int, error) {
 	return changed, nil
 }
 
+// RefreshCooldown is the minimum interval between automatic re-analyses of a board.
+const RefreshCooldown = 24 * time.Hour
+
+// RefreshResult describes the outcome of a single board refresh attempt.
+type RefreshResult struct {
+	BoardID   int
+	BoardName string
+	Refreshed bool
+	Skipped   bool // true if cooldown not elapsed
+	Error     error
+}
+
+// CheckAndRefreshProfiles checks selected boards for config changes and re-analyzes
+// those whose config hash changed and whose cooldown (24h) has elapsed.
+// User overrides are preserved across re-analysis: after the new LLM profile is
+// generated, existing user_overrides_json stale_thresholds are merged on top.
+// If autoRefresh is false, only logs which boards need refresh without running LLM.
+func (a *BoardAnalyzer) CheckAndRefreshProfiles(ctx context.Context, autoRefresh bool) ([]RefreshResult, error) {
+	boards, err := a.db.GetJiraSelectedBoards()
+	if err != nil {
+		return nil, fmt.Errorf("getting selected boards: %w", err)
+	}
+
+	var results []RefreshResult
+
+	for _, board := range boards {
+		full, err := a.db.GetJiraBoardProfile(board.ID)
+		if err != nil || full == nil {
+			// No profile yet — not a "changed config" case, skip.
+			continue
+		}
+
+		// Fetch current raw data to compute fresh hash.
+		rawData, err := a.FetchBoardRawData(ctx, *full)
+		if err != nil {
+			a.logger.Printf("warning: could not fetch raw data for board %d: %v", board.ID, err)
+			continue
+		}
+
+		newHash := ComputeConfigHash(rawData)
+		if newHash == full.ConfigHash {
+			continue // config unchanged
+		}
+
+		// Check cooldown.
+		if full.ProfileGeneratedAt != "" {
+			generated, err := time.Parse(time.RFC3339, full.ProfileGeneratedAt)
+			if err == nil && time.Since(generated) < RefreshCooldown {
+				a.logger.Printf("board %d (%s): config changed but cooldown not elapsed (generated %s ago)",
+					board.ID, board.Name, time.Since(generated).Truncate(time.Minute))
+				results = append(results, RefreshResult{
+					BoardID:   board.ID,
+					BoardName: board.Name,
+					Skipped:   true,
+				})
+				continue
+			}
+		}
+
+		a.logger.Printf("board %d (%s): config changed (hash %s -> %s)",
+			board.ID, board.Name, full.ConfigHash[:min(8, len(full.ConfigHash))], newHash[:min(8, len(newHash))])
+
+		if !autoRefresh {
+			a.logger.Printf("board %d (%s): needs re-analyze — run 'watchtower jira boards analyze' or use --auto",
+				board.ID, board.Name)
+			results = append(results, RefreshResult{
+				BoardID:   board.ID,
+				BoardName: board.Name,
+			})
+			continue
+		}
+
+		// Save existing user overrides before re-analysis.
+		existingOverrides := full.UserOverridesJSON
+
+		// Clear config hash to force re-analysis.
+		full.ConfigHash = ""
+		profile, err := a.AnalyzeBoard(ctx, *full)
+		if err != nil {
+			a.logger.Printf("warning: re-analysis failed for board %d (%s): %v", board.ID, board.Name, err)
+			results = append(results, RefreshResult{
+				BoardID:   board.ID,
+				BoardName: board.Name,
+				Error:     err,
+			})
+			continue
+		}
+
+		// Merge user overrides back on top of new profile.
+		if existingOverrides != "" {
+			if err := a.mergeUserOverrides(board.ID, profile, existingOverrides); err != nil {
+				a.logger.Printf("warning: failed to merge overrides for board %d: %v", board.ID, err)
+			}
+		}
+
+		a.logger.Printf("board %d (%s): re-analyzed successfully", board.ID, board.Name)
+		results = append(results, RefreshResult{
+			BoardID:   board.ID,
+			BoardName: board.Name,
+			Refreshed: true,
+		})
+	}
+
+	return results, nil
+}
+
+// mergeUserOverrides re-applies user override stale thresholds on top of a freshly
+// generated LLM profile and saves the updated profile to DB.
+func (a *BoardAnalyzer) mergeUserOverrides(boardID int, profile *BoardProfile, overridesJSON string) error {
+	var overrides UserOverrides
+	if err := json.Unmarshal([]byte(overridesJSON), &overrides); err != nil {
+		return fmt.Errorf("parsing user overrides: %w", err)
+	}
+
+	if len(overrides.StaleThresholds) == 0 {
+		return nil
+	}
+
+	// Apply overrides on top of LLM-generated thresholds.
+	if profile.StaleThresholds == nil {
+		profile.StaleThresholds = make(map[string]int)
+	}
+	for k, v := range overrides.StaleThresholds {
+		profile.StaleThresholds[k] = v
+	}
+
+	// Re-save profile with merged thresholds.
+	profileJSON, err := json.Marshal(profile)
+	if err != nil {
+		return fmt.Errorf("marshaling merged profile: %w", err)
+	}
+
+	// We only need to update llm_profile_json; other columns stay the same.
+	board, err := a.db.GetJiraBoardProfile(boardID)
+	if err != nil || board == nil {
+		return fmt.Errorf("getting board for merge: %w", err)
+	}
+
+	return a.db.UpdateJiraBoardProfile(boardID,
+		board.RawColumnsJSON, board.RawConfigJSON, string(profileJSON),
+		board.WorkflowSummary, board.ConfigHash, board.ProfileGeneratedAt)
+}
+
 // BuildFallbackProfile creates a basic profile without LLM, from raw board data.
 func BuildFallbackProfile(rawData *BoardRawData) *BoardProfile {
 	profile := &BoardProfile{

@@ -100,6 +100,34 @@ func (db *DB) GetJiraSelectedBoards() ([]JiraBoard, error) {
 	return boards, rows.Err()
 }
 
+// GetJiraBoardsWithChangedConfig returns selected boards whose stored config hash
+// differs from the hash that would be computed from current raw config data.
+// It fetches boards that have a profile (config_hash != ”) and compares the stored
+// raw_columns_json + raw_config_json hash against config_hash.
+func (db *DB) GetJiraBoardsWithChangedConfig() ([]JiraBoard, error) {
+	rows, err := db.Query(`SELECT id, name, project_key, board_type, is_selected, issue_count, synced_at,
+		raw_columns_json, raw_config_json, llm_profile_json, workflow_summary,
+		user_overrides_json, config_hash, profile_generated_at
+		FROM jira_boards WHERE is_selected = 1 AND config_hash != ''
+		ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("querying boards with changed config: %w", err)
+	}
+	defer rows.Close()
+
+	var boards []JiraBoard
+	for rows.Next() {
+		var b JiraBoard
+		if err := rows.Scan(&b.ID, &b.Name, &b.ProjectKey, &b.BoardType, &b.IsSelected, &b.IssueCount, &b.SyncedAt,
+			&b.RawColumnsJSON, &b.RawConfigJSON, &b.LLMProfileJSON, &b.WorkflowSummary,
+			&b.UserOverridesJSON, &b.ConfigHash, &b.ProfileGeneratedAt); err != nil {
+			return nil, fmt.Errorf("scanning board with changed config: %w", err)
+		}
+		boards = append(boards, b)
+	}
+	return boards, rows.Err()
+}
+
 // SetJiraBoardSelected updates the is_selected flag for a Jira board.
 func (db *DB) SetJiraBoardSelected(boardID int, selected bool) error {
 	_, err := db.Exec(`UPDATE jira_boards SET is_selected = ? WHERE id = ?`, selected, boardID)
@@ -116,8 +144,8 @@ func (db *DB) UpsertJiraIssue(issue JiraIssue) error {
 		assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
 		reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
 		priority, story_points, due_date, sprint_id, sprint_name, epic_key,
-		labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		labels, components, fix_versions, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET
 			id=excluded.id, project_key=excluded.project_key, board_id=excluded.board_id,
 			summary=excluded.summary, description_text=excluded.description_text,
@@ -131,6 +159,7 @@ func (db *DB) UpsertJiraIssue(issue JiraIssue) error {
 			priority=excluded.priority, story_points=excluded.story_points,
 			due_date=excluded.due_date, sprint_id=excluded.sprint_id, sprint_name=excluded.sprint_name,
 			epic_key=excluded.epic_key, labels=excluded.labels, components=excluded.components,
+			fix_versions=excluded.fix_versions,
 			created_at=excluded.created_at, updated_at=excluded.updated_at, resolved_at=excluded.resolved_at,
 			raw_json=excluded.raw_json, synced_at=excluded.synced_at, is_deleted=excluded.is_deleted`,
 		issue.Key, issue.ID, issue.ProjectKey, issue.BoardID,
@@ -141,7 +170,7 @@ func (db *DB) UpsertJiraIssue(issue JiraIssue) error {
 		issue.ReporterAccountID, issue.ReporterEmail, issue.ReporterDisplayName, issue.ReporterSlackID,
 		issue.Priority, issue.StoryPoints, issue.DueDate,
 		issue.SprintID, issue.SprintName, issue.EpicKey,
-		issue.Labels, issue.Components,
+		issue.Labels, issue.Components, issue.FixVersions,
 		issue.CreatedAt, issue.UpdatedAt, issue.ResolvedAt,
 		issue.RawJSON, issue.SyncedAt, issue.IsDeleted)
 	if err != nil {
@@ -152,26 +181,9 @@ func (db *DB) UpsertJiraIssue(issue JiraIssue) error {
 
 // GetJiraIssueByKey returns a Jira issue by its key.
 func (db *DB) GetJiraIssueByKey(key string) (*JiraIssue, error) {
-	row := db.QueryRow(`SELECT key, id, project_key, board_id, summary, description_text,
-		issue_type, issue_type_category, is_bug, status, status_category, status_category_changed_at,
-		assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
-		reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
-		priority, story_points, due_date, sprint_id, sprint_name, epic_key,
-		labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted
-		FROM jira_issues WHERE key = ?`, key)
+	row := db.QueryRow(`SELECT `+jiraIssueColumns+` FROM jira_issues WHERE key = ?`, key)
 
-	var issue JiraIssue
-	err := row.Scan(&issue.Key, &issue.ID, &issue.ProjectKey, &issue.BoardID,
-		&issue.Summary, &issue.DescriptionText,
-		&issue.IssueType, &issue.IssueTypeCategory, &issue.IsBug,
-		&issue.Status, &issue.StatusCategory, &issue.StatusCategoryChangedAt,
-		&issue.AssigneeAccountID, &issue.AssigneeEmail, &issue.AssigneeDisplayName, &issue.AssigneeSlackID,
-		&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
-		&issue.Priority, &issue.StoryPoints, &issue.DueDate,
-		&issue.SprintID, &issue.SprintName, &issue.EpicKey,
-		&issue.Labels, &issue.Components,
-		&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
-		&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted)
+	issue, err := scanJiraIssue(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -472,6 +484,7 @@ func (db *DB) ClearJiraData() error {
 		"jira_issue_links",
 		"jira_issues",
 		"jira_sprints",
+		"jira_releases",
 		"jira_user_map",
 		"jira_sync_state",
 		"jira_boards",
@@ -490,7 +503,7 @@ const jiraIssueColumns = `key, id, project_key, board_id, summary, description_t
 	assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
 	reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
 	priority, story_points, due_date, sprint_id, sprint_name, epic_key,
-	labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted`
+	labels, components, fix_versions, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted`
 
 // jiraIssueColumnsQualified is the same column list but qualified with table name (for JOINs).
 const jiraIssueColumnsQualified = `jira_issues.key, jira_issues.id, jira_issues.project_key, jira_issues.board_id,
@@ -500,7 +513,7 @@ const jiraIssueColumnsQualified = `jira_issues.key, jira_issues.id, jira_issues.
 	jira_issues.assignee_account_id, jira_issues.assignee_email, jira_issues.assignee_display_name, jira_issues.assignee_slack_id,
 	jira_issues.reporter_account_id, jira_issues.reporter_email, jira_issues.reporter_display_name, jira_issues.reporter_slack_id,
 	jira_issues.priority, jira_issues.story_points, jira_issues.due_date, jira_issues.sprint_id, jira_issues.sprint_name, jira_issues.epic_key,
-	jira_issues.labels, jira_issues.components, jira_issues.created_at, jira_issues.updated_at, jira_issues.resolved_at,
+	jira_issues.labels, jira_issues.components, jira_issues.fix_versions, jira_issues.created_at, jira_issues.updated_at, jira_issues.resolved_at,
 	jira_issues.raw_json, jira_issues.synced_at, jira_issues.is_deleted`
 
 func scanJiraIssue(scanner interface{ Scan(dest ...any) error }) (JiraIssue, error) {
@@ -513,7 +526,7 @@ func scanJiraIssue(scanner interface{ Scan(dest ...any) error }) (JiraIssue, err
 		&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
 		&issue.Priority, &issue.StoryPoints, &issue.DueDate,
 		&issue.SprintID, &issue.SprintName, &issue.EpicKey,
-		&issue.Labels, &issue.Components,
+		&issue.Labels, &issue.Components, &issue.FixVersions,
 		&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
 		&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted)
 	return issue, err
@@ -1056,6 +1069,275 @@ func (db *DB) GetJiraIssuesByKeysMap(keys []string) (map[string]JiraIssue, error
 		m[issue.Key] = issue
 	}
 	return m, nil
+}
+
+// ComponentResolver holds a user who resolved issues for a given component.
+type ComponentResolver struct {
+	SlackUserID string
+	DisplayName string
+	Count       int
+}
+
+// GetTopResolversByComponent returns users who resolved the most issues containing the given component.
+// The component is matched as a JSON substring inside the components column (JSON array).
+// Results are ordered by count descending, limited to `limit` rows.
+func (db *DB) GetTopResolversByComponent(component string, limit int) ([]ComponentResolver, error) {
+	if component == "" {
+		return nil, nil
+	}
+	rows, err := db.Query(`
+		SELECT assignee_slack_id, assignee_display_name, COUNT(*) AS cnt
+		FROM jira_issues
+		WHERE is_deleted = 0
+			AND status_category = 'done'
+			AND assignee_slack_id != ''
+			AND components LIKE ?
+		GROUP BY assignee_slack_id
+		ORDER BY cnt DESC
+		LIMIT ?`, "%"+component+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying top resolvers for component %s: %w", component, err)
+	}
+	defer rows.Close()
+
+	var result []ComponentResolver
+	for rows.Next() {
+		var r ComponentResolver
+		if err := rows.Scan(&r.SlackUserID, &r.DisplayName, &r.Count); err != nil {
+			return nil, fmt.Errorf("scanning top resolver: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// GetJiraIssuesByEpicKey returns all non-deleted child issues for a given epic key.
+func (db *DB) GetJiraIssuesByEpicKey(epicKey string) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues WHERE epic_key = ? AND is_deleted = 0 ORDER BY key`, epicKey)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues by epic key %s: %w", epicKey, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue by epic key: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraSlackLinksByIssueKeys returns all Slack links for a set of issue keys.
+func (db *DB) GetJiraSlackLinksByIssueKeys(keys []string) ([]JiraSlackLink, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(keys))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+
+	rows, err := db.Query(`SELECT id, issue_key, channel_id, message_ts, track_id, digest_id, link_type, detected_at
+		FROM jira_slack_links WHERE issue_key IN (`+placeholders+`) ORDER BY detected_at DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira slack links by issue keys: %w", err)
+	}
+	defer rows.Close()
+
+	var links []JiraSlackLink
+	for rows.Next() {
+		var l JiraSlackLink
+		if err := rows.Scan(&l.ID, &l.IssueKey, &l.ChannelID, &l.MessageTS, &l.TrackID, &l.DigestID, &l.LinkType, &l.DetectedAt); err != nil {
+			return nil, fmt.Errorf("scanning jira slack link by issue keys: %w", err)
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
+// GetJiraDecisionCountByIssueKeys returns the number of slack links with link_type='decision'
+// for the given issue keys.
+func (db *DB) GetJiraDecisionCountByIssueKeys(keys []string) (int, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.Repeat("?,", len(keys))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM jira_slack_links
+		WHERE issue_key IN (`+placeholders+`) AND link_type = 'decision'`, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting jira decisions by issue keys: %w", err)
+	}
+	return count, nil
+}
+
+// UpsertJiraRelease inserts or updates a Jira release (fix version).
+func (db *DB) UpsertJiraRelease(r JiraRelease) error {
+	_, err := db.Exec(`INSERT INTO jira_releases (id, project_key, name, description, release_date, released, archived, synced_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET project_key=excluded.project_key, name=excluded.name,
+			description=excluded.description, release_date=excluded.release_date,
+			released=excluded.released, archived=excluded.archived, synced_at=excluded.synced_at`,
+		r.ID, r.ProjectKey, r.Name, r.Description, r.ReleaseDate, r.Released, r.Archived, r.SyncedAt)
+	if err != nil {
+		return fmt.Errorf("upserting jira release %d (%s): %w", r.ID, r.Name, err)
+	}
+	return nil
+}
+
+// GetJiraReleases returns all releases for a project, sorted by release_date.
+func (db *DB) GetJiraReleases(projectKey string) ([]JiraRelease, error) {
+	rows, err := db.Query(`SELECT id, project_key, name, description, release_date, released, archived, synced_at
+		FROM jira_releases WHERE project_key = ? ORDER BY release_date, name`, projectKey)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira releases for %s: %w", projectKey, err)
+	}
+	defer rows.Close()
+
+	var releases []JiraRelease
+	for rows.Next() {
+		var r JiraRelease
+		if err := rows.Scan(&r.ID, &r.ProjectKey, &r.Name, &r.Description, &r.ReleaseDate, &r.Released, &r.Archived, &r.SyncedAt); err != nil {
+			return nil, fmt.Errorf("scanning jira release: %w", err)
+		}
+		releases = append(releases, r)
+	}
+	return releases, rows.Err()
+}
+
+// GetJiraReleasesByName returns releases matching a name across all projects.
+func (db *DB) GetJiraReleasesByName(name string) ([]JiraRelease, error) {
+	rows, err := db.Query(`SELECT id, project_key, name, description, release_date, released, archived, synced_at
+		FROM jira_releases WHERE name = ? ORDER BY project_key`, name)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira releases by name %s: %w", name, err)
+	}
+	defer rows.Close()
+
+	var releases []JiraRelease
+	for rows.Next() {
+		var r JiraRelease
+		if err := rows.Scan(&r.ID, &r.ProjectKey, &r.Name, &r.Description, &r.ReleaseDate, &r.Released, &r.Archived, &r.SyncedAt); err != nil {
+			return nil, fmt.Errorf("scanning jira release by name: %w", err)
+		}
+		releases = append(releases, r)
+	}
+	return releases, rows.Err()
+}
+
+// GetAllJiraReleases returns all releases across all projects, sorted by release_date.
+func (db *DB) GetAllJiraReleases() ([]JiraRelease, error) {
+	rows, err := db.Query(`SELECT id, project_key, name, description, release_date, released, archived, synced_at
+		FROM jira_releases ORDER BY release_date, name`)
+	if err != nil {
+		return nil, fmt.Errorf("querying all jira releases: %w", err)
+	}
+	defer rows.Close()
+
+	var releases []JiraRelease
+	for rows.Next() {
+		var r JiraRelease
+		if err := rows.Scan(&r.ID, &r.ProjectKey, &r.Name, &r.Description, &r.ReleaseDate, &r.Released, &r.Archived, &r.SyncedAt); err != nil {
+			return nil, fmt.Errorf("scanning jira release: %w", err)
+		}
+		releases = append(releases, r)
+	}
+	return releases, rows.Err()
+}
+
+// GetJiraIssuesByFixVersion returns all non-deleted issues that have the given version name in their fix_versions JSON array.
+func (db *DB) GetJiraIssuesByFixVersion(versionName string) ([]JiraIssue, error) {
+	// fix_versions is stored as a JSON array, e.g. '["v1.0","v2.0"]'.
+	// We use LIKE with the quoted name to match.
+	pattern := `%"` + versionName + `"%`
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+` FROM jira_issues WHERE fix_versions LIKE ? AND is_deleted = 0`, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues by fix version %s: %w", versionName, err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue by fix version: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetJiraIssueCountAddedSince returns the count of non-deleted issues with the given version name
+// in fix_versions whose synced_at is after the given timestamp (approximate scope tracking).
+func (db *DB) GetJiraIssueCountAddedSince(versionName string, since string) (int, error) {
+	pattern := `%"` + versionName + `"%`
+	var count int
+	err := db.QueryRow(`SELECT COUNT(*) FROM jira_issues WHERE fix_versions LIKE ? AND synced_at > ? AND is_deleted = 0`,
+		pattern, since).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting jira issues added since %s for version %s: %w", since, versionName, err)
+	}
+	return count, nil
+}
+
+// GetBlockedJiraIssues returns non-done, non-deleted issues whose status contains "block" (case-insensitive).
+func (db *DB) GetBlockedJiraIssues() ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues
+		WHERE status_category != 'done' AND is_deleted = 0 AND LOWER(status) LIKE '%block%'
+		ORDER BY key`)
+	if err != nil {
+		return nil, fmt.Errorf("querying blocked jira issues: %w", err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning blocked jira issue: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
+// GetStaleJiraIssues returns in_progress, non-deleted issues whose status_category_changed_at
+// is before the given cutoff time (RFC3339 string).
+func (db *DB) GetStaleJiraIssues(cutoff string) ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues
+		WHERE status_category = 'in_progress' AND is_deleted = 0
+			AND status_category_changed_at != '' AND status_category_changed_at < ?
+		ORDER BY key`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("querying stale jira issues: %w", err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning stale jira issue: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
 }
 
 // uniqueKeys converts a map[string]bool to a string slice.

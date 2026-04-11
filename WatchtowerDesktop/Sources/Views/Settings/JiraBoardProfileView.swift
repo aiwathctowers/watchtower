@@ -55,8 +55,8 @@ struct JiraBoardProfileView: View {
 
     @ViewBuilder
     private var configChangedBadge: some View {
-        if board.llmProfileJSON.isEmpty || board.configHash.isEmpty {
-            Text("Config changed, re-analyze?")
+        if board.isConfigChanged {
+            Text("Config changed")
                 .font(.caption2)
                 .foregroundStyle(.orange)
                 .padding(.horizontal, 6)
@@ -315,7 +315,8 @@ struct JiraBoardProfileView: View {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = [
-                "jira", "boards", "analyze", String(board.id)
+                "jira", "boards", "analyze", "--force",
+                String(board.id),
             ]
             process.environment = Constants.resolvedEnvironment()
             process.currentDirectoryURL =

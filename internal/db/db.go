@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 60"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 61"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2813,6 +2813,45 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v60: %w", err)
 		}
 		version = 60
+	}
+
+	if version < 61 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v61: %w", err)
+		}
+		defer tx.Rollback()
+
+		// Create jira_releases table.
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS jira_releases (
+			id INTEGER NOT NULL,
+			project_key TEXT NOT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			release_date TEXT NOT NULL DEFAULT '',
+			released INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			synced_at TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (id),
+			UNIQUE(project_key, name)
+		)`); err != nil {
+			return fmt.Errorf("migration v61 create jira_releases: %w", err)
+		}
+
+		// Add fix_versions column to jira_issues.
+		if !hasColumn(tx, "jira_issues", "fix_versions") {
+			if _, err := tx.Exec(`ALTER TABLE jira_issues ADD COLUMN fix_versions TEXT NOT NULL DEFAULT '[]'`); err != nil {
+				return fmt.Errorf("migration v61 add fix_versions: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 61"); err != nil {
+			return fmt.Errorf("setting schema version v61: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v61: %w", err)
+		}
+		version = 61
 	}
 
 	_ = version // silence unused variable if this is the last migration

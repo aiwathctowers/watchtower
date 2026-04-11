@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type Syncer struct {
 	logger        *log.Logger
 	boardIDs      []int
 	boardAnalyzer *BoardAnalyzer // optional, for config change detection
+	autoRefresh   bool           // when true, auto re-analyze boards with changed config
 }
 
 // NewSyncer creates a Syncer.
@@ -46,6 +48,11 @@ func (s *Syncer) SetLogger(l *log.Logger) {
 // SetBoardAnalyzer sets an optional board analyzer for config change detection during sync.
 func (s *Syncer) SetBoardAnalyzer(analyzer *BoardAnalyzer) {
 	s.boardAnalyzer = analyzer
+}
+
+// SetAutoRefresh enables automatic re-analysis of boards with changed config after sync.
+func (s *Syncer) SetAutoRefresh(auto bool) {
+	s.autoRefresh = auto
 }
 
 // Sync performs an incremental sync: fetches issues updated since last sync minus 2 minutes overlap.
@@ -115,13 +122,24 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 		s.logger.Printf("sprint sync error: %v", err)
 	}
 
-	// Check if board configs changed since last analysis.
+	// Sync releases (fix versions) for selected boards.
+	if err := s.syncReleases(ctx, boards); err != nil {
+		s.logger.Printf("releases sync error: %v", err)
+	}
+
+	// Check if board configs changed since last analysis and optionally auto-refresh.
 	if s.boardAnalyzer != nil {
-		changed, err := s.boardAnalyzer.CheckConfigChanged(ctx)
+		results, err := s.boardAnalyzer.CheckAndRefreshProfiles(ctx, s.autoRefresh)
 		if err != nil {
-			s.logger.Printf("board config check error: %v", err)
-		} else if len(changed) > 0 {
-			s.logger.Printf("board config changed for %d board(s): %v — run 'watchtower jira boards analyze' to update profiles", len(changed), changed)
+			s.logger.Printf("board config refresh check error: %v", err)
+		} else {
+			for _, r := range results {
+				if r.Error != nil {
+					s.logger.Printf("board %d (%s): refresh failed: %v", r.BoardID, r.BoardName, r.Error)
+				} else if r.Refreshed {
+					s.logger.Printf("board %d (%s): auto-refreshed profile", r.BoardID, r.BoardName)
+				}
+			}
 		}
 	}
 
@@ -261,6 +279,12 @@ func (s *Syncer) upsertIssue(ctx context.Context, issue Issue, boardID int) erro
 	}
 	componentsJSON, _ := json.Marshal(componentNames)
 
+	fixVersionNames := make([]string, 0, len(f.FixVersions))
+	for _, fv := range f.FixVersions {
+		fixVersionNames = append(fixVersionNames, fv.Name)
+	}
+	fixVersionsJSON, _ := json.Marshal(fixVersionNames)
+
 	// Compute project key from issue key.
 	projectKey := ""
 	if idx := strings.LastIndex(issue.Key, "-"); idx > 0 {
@@ -307,6 +331,7 @@ func (s *Syncer) upsertIssue(ctx context.Context, issue Issue, boardID int) erro
 		EpicKey:                 epicKey,
 		Labels:                  string(labelsJSON),
 		Components:              string(componentsJSON),
+		FixVersions:             string(fixVersionsJSON),
 		CreatedAt:               f.Created,
 		UpdatedAt:               f.Updated,
 		ResolvedAt:              resolvedAt,
@@ -399,6 +424,59 @@ func (s *Syncer) SyncSprints(ctx context.Context) error {
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// syncReleases fetches fix versions for each unique project key and upserts them.
+// Errors are logged but do not block the main sync.
+func (s *Syncer) syncReleases(ctx context.Context, boards []db.JiraBoard) error {
+	// Collect unique project keys.
+	seen := make(map[string]bool)
+	var projectKeys []string
+	for _, board := range boards {
+		if board.ProjectKey == "" || seen[board.ProjectKey] {
+			continue
+		}
+		if !validProjectKeyRe.MatchString(board.ProjectKey) {
+			continue
+		}
+		seen[board.ProjectKey] = true
+		projectKeys = append(projectKeys, board.ProjectKey)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, projectKey := range projectKeys {
+		versions, err := s.client.GetProjectVersions(ctx, projectKey)
+		if err != nil {
+			s.logger.Printf("failed to fetch versions for project %s: %v", projectKey, err)
+			continue
+		}
+
+		for _, v := range versions {
+			id := 0
+			if v.ID != "" {
+				if parsed, err := strconv.Atoi(v.ID); err == nil {
+					id = parsed
+				}
+			}
+			release := db.JiraRelease{
+				ID:          id,
+				ProjectKey:  projectKey,
+				Name:        v.Name,
+				Description: v.Description,
+				ReleaseDate: v.ReleaseDate,
+				Released:    v.Released,
+				Archived:    v.Archived,
+				SyncedAt:    now,
+			}
+			if err := s.db.UpsertJiraRelease(release); err != nil {
+				s.logger.Printf("failed to upsert release %q for project %s: %v", v.Name, projectKey, err)
+			}
+		}
+
+		s.logger.Printf("synced %d releases for project %s", len(versions), projectKey)
 	}
 
 	return nil

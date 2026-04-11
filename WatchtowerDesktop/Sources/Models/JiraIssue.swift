@@ -1,3 +1,4 @@
+import Foundation
 import GRDB
 
 struct JiraIssue: Codable, FetchableRecord, TableRecord {
@@ -33,7 +34,14 @@ struct JiraIssue: Codable, FetchableRecord, TableRecord {
     var createdAt: String
     var updatedAt: String
     var resolvedAt: String
+    var fixVersions: String
     var rawJson: String
     var syncedAt: String
     var isDeleted: Bool
+
+    var decodedFixVersions: [String] {
+        guard let data = fixVersions.data(using: .utf8),
+              let versions = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return versions
+    }
 }

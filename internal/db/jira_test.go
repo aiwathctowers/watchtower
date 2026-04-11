@@ -935,3 +935,141 @@ func TestTaskSourceTypeJira(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "jira", st)
 }
+
+// --- Jira Releases tests ---
+
+func TestUpsertAndGetJiraReleases(t *testing.T) {
+	db := openTestDB(t)
+
+	r1 := JiraRelease{
+		ID: 10001, ProjectKey: "PROJ", Name: "v1.0",
+		Description: "First release", ReleaseDate: "2026-04-15",
+		Released: false, Archived: false, SyncedAt: "2026-04-01T00:00:00Z",
+	}
+	r2 := JiraRelease{
+		ID: 10002, ProjectKey: "PROJ", Name: "v2.0",
+		Description: "Second release", ReleaseDate: "2026-05-01",
+		Released: true, Archived: false, SyncedAt: "2026-04-01T00:00:00Z",
+	}
+	require.NoError(t, db.UpsertJiraRelease(r1))
+	require.NoError(t, db.UpsertJiraRelease(r2))
+
+	releases, err := db.GetJiraReleases("PROJ")
+	require.NoError(t, err)
+	assert.Len(t, releases, 2)
+	assert.Equal(t, "v1.0", releases[0].Name)
+	assert.Equal(t, "v2.0", releases[1].Name)
+	assert.False(t, releases[0].Released)
+	assert.True(t, releases[1].Released)
+}
+
+func TestUpsertJiraRelease_UpdateOnConflict(t *testing.T) {
+	db := openTestDB(t)
+
+	r := JiraRelease{
+		ID: 10001, ProjectKey: "PROJ", Name: "v1.0",
+		Description: "Old desc", ReleaseDate: "2026-04-15",
+		Released: false, SyncedAt: "2026-04-01T00:00:00Z",
+	}
+	require.NoError(t, db.UpsertJiraRelease(r))
+
+	// Update via upsert.
+	r.Description = "New desc"
+	r.Released = true
+	require.NoError(t, db.UpsertJiraRelease(r))
+
+	releases, err := db.GetJiraReleases("PROJ")
+	require.NoError(t, err)
+	require.Len(t, releases, 1)
+	assert.Equal(t, "New desc", releases[0].Description)
+	assert.True(t, releases[0].Released)
+}
+
+func TestGetJiraReleases_Empty(t *testing.T) {
+	db := openTestDB(t)
+
+	releases, err := db.GetJiraReleases("NONEXIST")
+	require.NoError(t, err)
+	assert.Empty(t, releases)
+}
+
+func TestGetJiraReleases_SortedByReleaseDate(t *testing.T) {
+	db := openTestDB(t)
+
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 3, ProjectKey: "P", Name: "v3", ReleaseDate: "2026-06-01", SyncedAt: "now"}))
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 1, ProjectKey: "P", Name: "v1", ReleaseDate: "2026-04-01", SyncedAt: "now"}))
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 2, ProjectKey: "P", Name: "v2", ReleaseDate: "2026-05-01", SyncedAt: "now"}))
+
+	releases, err := db.GetJiraReleases("P")
+	require.NoError(t, err)
+	require.Len(t, releases, 3)
+	assert.Equal(t, "v1", releases[0].Name)
+	assert.Equal(t, "v2", releases[1].Name)
+	assert.Equal(t, "v3", releases[2].Name)
+}
+
+func TestGetJiraReleasesByName(t *testing.T) {
+	db := openTestDB(t)
+
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 1, ProjectKey: "A", Name: "v1.0", SyncedAt: "now"}))
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 2, ProjectKey: "B", Name: "v1.0", SyncedAt: "now"}))
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 3, ProjectKey: "C", Name: "v2.0", SyncedAt: "now"}))
+
+	releases, err := db.GetJiraReleasesByName("v1.0")
+	require.NoError(t, err)
+	assert.Len(t, releases, 2)
+	assert.Equal(t, "A", releases[0].ProjectKey)
+	assert.Equal(t, "B", releases[1].ProjectKey)
+
+	releases, err = db.GetJiraReleasesByName("nonexistent")
+	require.NoError(t, err)
+	assert.Empty(t, releases)
+}
+
+func TestJiraIssueFixVersions(t *testing.T) {
+	db := openTestDB(t)
+
+	issue := JiraIssue{
+		Key: "P-1", ProjectKey: "P", Summary: "With fix versions",
+		Status: "Open", StatusCategory: "todo",
+		Labels: `[]`, Components: `[]`, FixVersions: `["v1.0","v2.0"]`,
+		CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+	}
+	require.NoError(t, db.UpsertJiraIssue(issue))
+
+	loaded, err := db.GetJiraIssueByKey("P-1")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, `["v1.0","v2.0"]`, loaded.FixVersions)
+}
+
+func TestJiraIssueFixVersions_DefaultEmpty(t *testing.T) {
+	db := openTestDB(t)
+
+	// Issue without setting FixVersions — should default to "[]".
+	issue := JiraIssue{
+		Key: "P-2", ProjectKey: "P", Summary: "No fix versions",
+		Status: "Open", StatusCategory: "todo",
+		Labels: `[]`, Components: `[]`,
+		CreatedAt: "now", UpdatedAt: "now", SyncedAt: "now",
+	}
+	require.NoError(t, db.UpsertJiraIssue(issue))
+
+	loaded, err := db.GetJiraIssueByKey("P-2")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	// Either empty string or "[]" is acceptable; the DB default is "[]".
+	assert.Contains(t, []string{"", "[]"}, loaded.FixVersions)
+}
+
+func TestClearJiraData_IncludesReleases(t *testing.T) {
+	db := openTestDB(t)
+
+	require.NoError(t, db.UpsertJiraBoard(JiraBoard{ID: 1, Name: "B", ProjectKey: "P", SyncedAt: "now"}))
+	require.NoError(t, db.UpsertJiraRelease(JiraRelease{ID: 1, ProjectKey: "P", Name: "v1.0", SyncedAt: "now"}))
+
+	require.NoError(t, db.ClearJiraData())
+
+	releases, _ := db.GetJiraReleases("P")
+	assert.Empty(t, releases)
+}

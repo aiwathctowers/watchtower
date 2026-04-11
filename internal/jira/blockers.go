@@ -25,7 +25,7 @@ const (
 type PingTarget struct {
 	SlackUserID string `json:"slack_user_id"`
 	DisplayName string `json:"display_name"`
-	Reason      string `json:"reason"` // "assignee", "reporter", "slack_participant"
+	Reason      string `json:"reason"` // "assignee_blocker", "assignee", "expert", "reporter", "slack_participant"
 }
 
 // BlockerEntry represents a single blocked or stale issue with context.
@@ -101,7 +101,7 @@ func ComputeBlockerMap(d *db.DB, cfg *config.Config) ([]BlockerEntry, error) {
 		entry := buildEntry(issue, "blocked", now)
 		entry.BlockingChain = buildBlockingChain(issue.Key, linkIndex, d)
 		entry.DownstreamCount = countDownstream(issue.Key, linkIndex, d)
-		entry.WhoToPing = buildPingTargets(issue, entry.BlockingChain, d)
+		entry.WhoToPing = ComputeWhoToPing(d, issue, entry.BlockingChain)
 		entry.SlackContext = fetchSlackContext(issue.Key, d)
 		entry.Urgency = computeUrgency(entry.BlockedDays, entry.DownstreamCount)
 		entries = append(entries, entry)
@@ -112,7 +112,7 @@ func ComputeBlockerMap(d *db.DB, cfg *config.Config) ([]BlockerEntry, error) {
 		entry := buildEntry(issue, "stale", now)
 		entry.BlockingChain = buildBlockingChain(issue.Key, linkIndex, d)
 		entry.DownstreamCount = countDownstream(issue.Key, linkIndex, d)
-		entry.WhoToPing = buildPingTargets(issue, entry.BlockingChain, d)
+		entry.WhoToPing = ComputeWhoToPing(d, issue, entry.BlockingChain)
 		entry.SlackContext = fetchSlackContext(issue.Key, d)
 		entry.Urgency = computeUrgency(entry.BlockedDays, entry.DownstreamCount)
 		entries = append(entries, entry)
@@ -131,39 +131,7 @@ func ComputeBlockerMap(d *db.DB, cfg *config.Config) ([]BlockerEntry, error) {
 
 // findBlockedIssues returns non-done issues whose status contains "block" (case-insensitive).
 func findBlockedIssues(d *db.DB) ([]db.JiraIssue, error) {
-	rows, err := d.Query(`SELECT key, id, project_key, board_id, summary, description_text,
-		issue_type, issue_type_category, is_bug, status, status_category, status_category_changed_at,
-		assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
-		reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
-		priority, story_points, due_date, sprint_id, sprint_name, epic_key,
-		labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted
-		FROM jira_issues
-		WHERE status_category != 'done' AND is_deleted = 0 AND LOWER(status) LIKE '%block%'
-		ORDER BY key`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var issues []db.JiraIssue
-	for rows.Next() {
-		var issue db.JiraIssue
-		if err := rows.Scan(&issue.Key, &issue.ID, &issue.ProjectKey, &issue.BoardID,
-			&issue.Summary, &issue.DescriptionText,
-			&issue.IssueType, &issue.IssueTypeCategory, &issue.IsBug,
-			&issue.Status, &issue.StatusCategory, &issue.StatusCategoryChangedAt,
-			&issue.AssigneeAccountID, &issue.AssigneeEmail, &issue.AssigneeDisplayName, &issue.AssigneeSlackID,
-			&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
-			&issue.Priority, &issue.StoryPoints, &issue.DueDate,
-			&issue.SprintID, &issue.SprintName, &issue.EpicKey,
-			&issue.Labels, &issue.Components,
-			&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
-			&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted); err != nil {
-			return nil, err
-		}
-		issues = append(issues, issue)
-	}
-	return issues, rows.Err()
+	return d.GetBlockedJiraIssues()
 }
 
 // findStaleIssues returns in_progress issues that haven't changed status in >7 days,
@@ -171,42 +139,19 @@ func findBlockedIssues(d *db.DB) ([]db.JiraIssue, error) {
 func findStaleIssues(d *db.DB, now time.Time, blockedKeys map[string]bool) ([]db.JiraIssue, error) {
 	cutoff := now.AddDate(0, 0, -7).Format(time.RFC3339)
 
-	rows, err := d.Query(`SELECT key, id, project_key, board_id, summary, description_text,
-		issue_type, issue_type_category, is_bug, status, status_category, status_category_changed_at,
-		assignee_account_id, assignee_email, assignee_display_name, assignee_slack_id,
-		reporter_account_id, reporter_email, reporter_display_name, reporter_slack_id,
-		priority, story_points, due_date, sprint_id, sprint_name, epic_key,
-		labels, components, created_at, updated_at, resolved_at, raw_json, synced_at, is_deleted
-		FROM jira_issues
-		WHERE status_category = 'in_progress' AND is_deleted = 0
-			AND status_category_changed_at != '' AND status_category_changed_at < ?
-		ORDER BY key`, cutoff)
+	allStale, err := d.GetStaleJiraIssues(cutoff)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
+	// Filter out already-blocked keys.
 	var issues []db.JiraIssue
-	for rows.Next() {
-		var issue db.JiraIssue
-		if err := rows.Scan(&issue.Key, &issue.ID, &issue.ProjectKey, &issue.BoardID,
-			&issue.Summary, &issue.DescriptionText,
-			&issue.IssueType, &issue.IssueTypeCategory, &issue.IsBug,
-			&issue.Status, &issue.StatusCategory, &issue.StatusCategoryChangedAt,
-			&issue.AssigneeAccountID, &issue.AssigneeEmail, &issue.AssigneeDisplayName, &issue.AssigneeSlackID,
-			&issue.ReporterAccountID, &issue.ReporterEmail, &issue.ReporterDisplayName, &issue.ReporterSlackID,
-			&issue.Priority, &issue.StoryPoints, &issue.DueDate,
-			&issue.SprintID, &issue.SprintName, &issue.EpicKey,
-			&issue.Labels, &issue.Components,
-			&issue.CreatedAt, &issue.UpdatedAt, &issue.ResolvedAt,
-			&issue.RawJSON, &issue.SyncedAt, &issue.IsDeleted); err != nil {
-			return nil, err
-		}
+	for _, issue := range allStale {
 		if !blockedKeys[issue.Key] {
 			issues = append(issues, issue)
 		}
 	}
-	return issues, rows.Err()
+	return issues, nil
 }
 
 // linkIndex is a helper for traversing issue links efficiently.
@@ -367,47 +312,10 @@ func buildEntry(issue db.JiraIssue, blockerType string, now time.Time) BlockerEn
 	}
 }
 
-// buildPingTargets determines who to contact about a blocker.
+// buildPingTargets is a backwards-compatible alias for ComputeWhoToPing.
+// Deprecated: use ComputeWhoToPing directly.
 func buildPingTargets(issue db.JiraIssue, chain []string, d *db.DB) []PingTarget {
-	seen := make(map[string]bool)
-	var targets []PingTarget
-
-	addTarget := func(slackID, name, reason string) {
-		if slackID == "" || seen[slackID] || len(targets) >= maxPingTargets {
-			return
-		}
-		seen[slackID] = true
-		targets = append(targets, PingTarget{
-			SlackUserID: slackID,
-			DisplayName: name,
-			Reason:      reason,
-		})
-	}
-
-	// Root cause assignee (last in chain, if chain has >1 elements).
-	if len(chain) > 1 {
-		rootKey := chain[len(chain)-1]
-		rootIssue, err := d.GetJiraIssueByKey(rootKey)
-		if err == nil && rootIssue != nil {
-			addTarget(rootIssue.AssigneeSlackID, rootIssue.AssigneeDisplayName, "assignee")
-		}
-	}
-
-	// Issue's own assignee.
-	addTarget(issue.AssigneeSlackID, issue.AssigneeDisplayName, "assignee")
-
-	// Reporter.
-	addTarget(issue.ReporterSlackID, issue.ReporterDisplayName, "reporter")
-
-	// Slack participants from jira_slack_links → messages.
-	if len(targets) < maxPingTargets {
-		slackParticipants := fetchSlackParticipants(issue.Key, d)
-		for _, p := range slackParticipants {
-			addTarget(p.SlackUserID, p.DisplayName, "slack_participant")
-		}
-	}
-
-	return targets
+	return ComputeWhoToPing(d, issue, chain)
 }
 
 // fetchSlackParticipants returns Slack users who discussed this issue.

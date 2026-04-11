@@ -646,6 +646,7 @@ type JiraIssue struct {
 	EpicKey                 string
 	Labels                  string // JSON array
 	Components              string // JSON array
+	FixVersions             string // JSON array of version names
 	CreatedAt               string
 	UpdatedAt               string
 	ResolvedAt              string
@@ -694,6 +695,18 @@ type JiraSyncState struct {
 	IssuesSynced int
 	LastError    string
 	LastErrorAt  string
+}
+
+// JiraRelease represents a Jira fix version (release) stored locally.
+type JiraRelease struct {
+	ID          int    `json:"id"`
+	ProjectKey  string `json:"project_key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReleaseDate string `json:"release_date"`
+	Released    bool   `json:"released"`
+	Archived    bool   `json:"archived"`
+	SyncedAt    string `json:"synced_at"`
 }
 
 // SprintStats holds aggregated issue counts for an active sprint.

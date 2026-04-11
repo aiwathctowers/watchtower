@@ -727,6 +727,7 @@ CREATE TABLE IF NOT EXISTS jira_issues (
     due_date TEXT NOT NULL DEFAULT '', sprint_id INTEGER, sprint_name TEXT NOT NULL DEFAULT '',
     epic_key TEXT NOT NULL DEFAULT '',
     labels TEXT NOT NULL DEFAULT '[]', components TEXT NOT NULL DEFAULT '[]',
+    fix_versions TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '',
     raw_json TEXT NOT NULL DEFAULT '', synced_at TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0
 );
@@ -786,4 +787,18 @@ CREATE TABLE IF NOT EXISTS jira_sync_state (
     project_key TEXT PRIMARY KEY, last_synced_at TEXT NOT NULL DEFAULT '',
     issues_synced INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
     last_error_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Jira releases (fix versions)
+CREATE TABLE IF NOT EXISTS jira_releases (
+    id INTEGER NOT NULL,
+    project_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    release_date TEXT NOT NULL DEFAULT '',
+    released INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (id),
+    UNIQUE(project_key, name)
 );
