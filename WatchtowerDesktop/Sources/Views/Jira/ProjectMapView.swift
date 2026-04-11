@@ -26,6 +26,9 @@ struct ProjectMapView: View {
                 vm.startObserving()
             }
         }
+        .onDisappear {
+            viewModel?.stopObserving()
+        }
         .onChange(of: appState.isDBAvailable) {
             if viewModel == nil, let db = appState.databaseManager {
                 let vm = ProjectMapViewModel(dbManager: db)

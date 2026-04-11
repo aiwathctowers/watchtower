@@ -214,7 +214,7 @@ struct EpicCardView: View {
     private func issueRow(_ issue: JiraIssue) -> some View {
         let isStale = !issue.statusCategoryChangedAt.isEmpty
             && issue.statusCategory != "done"
-            && Self.daysSince(issue.statusCategoryChangedAt) > 7
+            && JiraHelpers.daysSince(issue.statusCategoryChangedAt) > JiraHelpers.staleThresholdDays
 
         return HStack(spacing: 8) {
             // Status icon
@@ -330,32 +330,7 @@ struct EpicCardView: View {
     }
 
     private func avatarColor(for userID: String) -> Color {
-        let colors: [Color] = [
-            .red, .orange, .yellow, .green, .mint, .teal,
-            .cyan, .blue, .indigo, .purple, .pink, .brown,
-        ]
-        let hash = userID.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        return colors[abs(hash) % colors.count]
-    }
-
-    // MARK: - Helpers
-
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt
-    }()
-
-    private static func daysSince(_ dateStr: String) -> Int {
-        guard !dateStr.isEmpty else { return 0 }
-        guard let date = isoFormatter.date(from: dateStr)
-                ?? ISO8601DateFormatter().date(from: dateStr) else {
-            return 0
-        }
-        return max(
-            0,
-            Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
-        )
+        JiraHelpers.avatarColor(for: userID)
     }
 }
 

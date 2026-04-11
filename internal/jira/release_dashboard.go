@@ -37,10 +37,9 @@ type ReleaseEpicProgress struct {
 	Done        int     `json:"done"`
 }
 
-// ScopeChange tracks how many issues were added/removed recently.
+// ScopeChange tracks how many issues were added recently.
 type ScopeChange struct {
-	AddedLastWeek   int `json:"added_last_week"`
-	RemovedLastWeek int `json:"removed_last_week"`
+	AddedLastWeek int `json:"added_last_week"`
 }
 
 // BuildReleaseDashboard returns unreleased, non-archived releases with aggregated progress.
@@ -75,9 +74,25 @@ func BuildReleaseDashboard(database *db.DB, cfg *config.Config, projectKey strin
 
 	weekAgo := now.AddDate(0, 0, -7).Format(time.RFC3339)
 
+	// Batch-load all issues with fix versions to avoid N+1 queries per release.
+	allIssues, err := database.GetAllJiraIssuesWithFixVersions()
+	if err != nil {
+		return nil, err
+	}
+
+	// Group issues by fix version name.
+	issuesByVersion := make(map[string][]db.JiraIssue)
+	for _, issue := range allIssues {
+		versions := parseFixVersions(issue.FixVersions)
+		for _, v := range versions {
+			issuesByVersion[v] = append(issuesByVersion[v], issue)
+		}
+	}
+
 	var entries []ReleaseEntry
 	for _, rel := range filtered {
-		entry, err := buildReleaseEntry(database, rel, now, weekAgo)
+		issues := issuesByVersion[rel.Name]
+		entry, err := buildReleaseEntry(database, rel, now, weekAgo, issues)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +135,13 @@ func BuildReleaseDetail(database *db.DB, cfg *config.Config, releaseName string,
 	rel := releases[0]
 	weekAgo := now.AddDate(0, 0, -7).Format(time.RFC3339)
 
-	entry, err := buildReleaseEntry(database, rel, now, weekAgo)
+	// Load issues for this specific release.
+	issues, err := database.GetJiraIssuesByFixVersion(rel.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	entry, err := buildReleaseEntry(database, rel, now, weekAgo, issues)
 	if err != nil {
 		return nil, err
 	}
@@ -128,12 +149,8 @@ func BuildReleaseDetail(database *db.DB, cfg *config.Config, releaseName string,
 }
 
 // buildReleaseEntry constructs a ReleaseEntry for a single release.
-func buildReleaseEntry(database *db.DB, rel db.JiraRelease, now time.Time, weekAgo string) (ReleaseEntry, error) {
-	issues, err := database.GetJiraIssuesByFixVersion(rel.Name)
-	if err != nil {
-		return ReleaseEntry{}, err
-	}
-
+// The issues parameter contains pre-loaded issues for this release.
+func buildReleaseEntry(database *db.DB, rel db.JiraRelease, now time.Time, weekAgo string, issues []db.JiraIssue) (ReleaseEntry, error) {
 	totalIssues := len(issues)
 	doneIssues := 0
 	blockedCount := 0
@@ -224,11 +241,11 @@ func buildReleaseEntry(database *db.DB, rel db.JiraRelease, now time.Time, weekA
 		progressPct = float64(doneIssues) / float64(totalIssues) * 100
 	}
 
-	// Overdue detection.
+	// Overdue detection: compare date strings to avoid timezone issues.
 	isOverdue := false
+	nowDate := now.Format("2006-01-02")
 	if rel.ReleaseDate != "" && !rel.Released {
-		releaseTime, parseErr := parseReleaseDate(rel.ReleaseDate)
-		if parseErr == nil && releaseTime.Before(now) {
+		if rel.ReleaseDate < nowDate {
 			isOverdue = true
 		}
 	}
@@ -250,7 +267,7 @@ func buildReleaseEntry(database *db.DB, rel db.JiraRelease, now time.Time, weekA
 	if !atRisk && rel.ReleaseDate != "" && !rel.Released {
 		releaseTime, parseErr := parseReleaseDate(rel.ReleaseDate)
 		if parseErr == nil {
-			daysUntil := releaseTime.Sub(now).Hours() / 24
+			daysUntil := releaseTime.Sub(now.Truncate(24*time.Hour)).Hours() / 24
 			if daysUntil >= 0 && daysUntil < 7 && progressPct < 80 {
 				atRisk = true
 				atRiskReason = "deadline approaching, insufficient progress"

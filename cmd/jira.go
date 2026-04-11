@@ -1440,11 +1440,8 @@ func runJiraReleases(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "Blocked Issues: %d\n", entry.BlockedCount)
 
-		scopeNet := entry.ScopeChanges.AddedLastWeek - entry.ScopeChanges.RemovedLastWeek
-		if scopeNet > 0 {
+		if entry.ScopeChanges.AddedLastWeek > 0 {
 			fmt.Fprintf(out, "Scope Changes (last week): +%d added\n", entry.ScopeChanges.AddedLastWeek)
-		} else if scopeNet < 0 {
-			fmt.Fprintf(out, "Scope Changes (last week): %d removed\n", entry.ScopeChanges.RemovedLastWeek)
 		}
 
 		if entry.AtRiskReason != "" {

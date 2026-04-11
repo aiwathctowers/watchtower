@@ -455,11 +455,14 @@ func (s *Syncer) syncReleases(ctx context.Context, boards []db.JiraBoard) error 
 		}
 
 		for _, v := range versions {
-			id := 0
-			if v.ID != "" {
-				if parsed, err := strconv.Atoi(v.ID); err == nil {
-					id = parsed
-				}
+			if v.ID == "" {
+				s.logger.Printf("skipping version %q with empty ID", v.Name)
+				continue
+			}
+			id, err := strconv.Atoi(v.ID)
+			if err != nil {
+				s.logger.Printf("skipping version %q: invalid ID %q", v.Name, v.ID)
+				continue
 			}
 			release := db.JiraRelease{
 				ID:          id,
@@ -479,6 +482,7 @@ func (s *Syncer) syncReleases(ctx context.Context, boards []db.JiraBoard) error 
 		s.logger.Printf("synced %d releases for project %s", len(versions), projectKey)
 	}
 
+	// Always returns nil — individual version errors are logged but non-blocking by design.
 	return nil
 }
 

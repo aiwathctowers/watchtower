@@ -14,6 +14,11 @@ final class ReleaseDashboardViewModel {
 
     // MARK: - Types
 
+    struct ScopeChanges {
+        let added: Int
+        let removed: Int
+    }
+
     struct ReleaseItem: Identifiable {
         let id: Int
         let name: String
@@ -28,7 +33,7 @@ final class ReleaseDashboardViewModel {
         let doneIssues: Int
         let blockedCount: Int
         let epicProgress: [EpicProgressItem]
-        let scopeChanges: (added: Int, removed: Int)
+        let scopeChanges: ScopeChanges
         let issues: [JiraIssue]
         let pingTargets: [PingTargetItem]
     }
@@ -67,7 +72,7 @@ final class ReleaseDashboardViewModel {
 
     func startObserving() {
         guard observationTask == nil else { return }
-        load()
+        Task { await load() }
         let dbPool = dbManager.dbPool
         observationTask = Task { [weak self] in
             let observation = ValueObservation.tracking { db -> (Int, Int) in
@@ -84,9 +89,11 @@ final class ReleaseDashboardViewModel {
             do {
                 for try await _ in observation.values(in: dbPool).dropFirst() {
                     guard !Task.isCancelled else { break }
-                    self?.load()
+                    await self?.load()
                 }
-            } catch {}
+            } catch {
+                print("ReleaseDashboard observation error: \(error)")
+            }
         }
     }
 
@@ -97,15 +104,26 @@ final class ReleaseDashboardViewModel {
 
     // MARK: - Load
 
-    func load() {
+    func load() async {
         isLoading = true
         do {
-            let items = try dbManager.dbPool.read { db -> [ReleaseItem] in
-                let allReleases = try JiraQueries.fetchUnreleasedReleases(db)
-                return try allReleases.map { release in
-                    try Self.buildReleaseItem(db: db, release: release)
+            let items = try await Task.detached { [dbManager] in
+                try dbManager.dbPool.read { db -> [ReleaseItem] in
+                    let allReleases = try JiraQueries.fetchUnreleasedReleases(db)
+
+                    // Batch-load all non-deleted issues to avoid N+1
+                    let allIssues = try JiraIssue.fetchAll(
+                        db,
+                        sql: "SELECT * FROM jira_issues WHERE is_deleted = 0"
+                    )
+                    // Index issues by key for epic lookups
+                    let issueByKey = Dictionary(allIssues.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+
+                    return try allReleases.map { release in
+                        try Self.buildReleaseItem(db: db, release: release, allIssues: allIssues, issueByKey: issueByKey)
+                    }
                 }
-            }
+            }.value
             releases = items.sorted { lhs, rhs in
                 // Overdue first, then at-risk, then by date
                 if lhs.isOverdue != rhs.isOverdue { return lhs.isOverdue }
@@ -122,9 +140,11 @@ final class ReleaseDashboardViewModel {
 
     // MARK: - Build
 
-    private static func buildReleaseItem(
+    private nonisolated static func buildReleaseItem(
         db: Database,
-        release: JiraRelease
+        release: JiraRelease,
+        allIssues: [JiraIssue],
+        issueByKey: [String: JiraIssue]
     ) throws -> ReleaseItem {
         let issues = try JiraQueries.fetchIssuesByFixVersion(db, versionName: release.name)
         let total = issues.count
@@ -133,24 +153,18 @@ final class ReleaseDashboardViewModel {
         let progressPct = total > 0 ? Double(done) / Double(total) : 0.0
 
         // Group by epic
-        var epicMap: [String: (epic: JiraIssue?, issues: [JiraIssue])] = [:]
+        var epicGroups: [String: [JiraIssue]] = [:]
         for issue in issues {
             let epicKey = issue.epicKey.isEmpty ? "_none_" : issue.epicKey
-            var entry = epicMap[epicKey] ?? (epic: nil, issues: [])
-            entry.issues.append(issue)
-            epicMap[epicKey] = entry
+            epicGroups[epicKey, default: []].append(issue)
         }
 
-        // Load epic details for each group
+        // Build epic progress using pre-loaded issueByKey (no N+1)
         var epicProgress: [EpicProgressItem] = []
-        for (epicKey, data) in epicMap where epicKey != "_none_" {
-            let epicIssue = try? JiraIssue.fetchOne(
-                db,
-                sql: "SELECT * FROM jira_issues WHERE key = ? AND is_deleted = 0",
-                arguments: [epicKey]
-            )
-            let epicTotal = data.issues.count
-            let epicDone = data.issues.filter { $0.statusCategory == "done" }.count
+        for (epicKey, groupIssues) in epicGroups where epicKey != "_none_" {
+            let epicIssue = issueByKey[epicKey]
+            let epicTotal = groupIssues.count
+            let epicDone = groupIssues.filter { $0.statusCategory == "done" }.count
             let epicPct = epicTotal > 0 ? Double(epicDone) / Double(epicTotal) : 0.0
             let badge: String
             if epicPct >= 1.0 {
@@ -180,21 +194,22 @@ final class ReleaseDashboardViewModel {
         let daysUntilRelease = Self.daysUntil(release.releaseDate)
         var atRisk = false
         var atRiskReason = ""
-        if blockedRatio > 0.3 {
+        if blockedRatio > JiraHelpers.blockedRatioThreshold {
             atRisk = true
             atRiskReason = "\(Int(blockedRatio * 100))% blocked"
-        } else if let days = daysUntilRelease, days < 7, progressPct < 0.8 {
+        } else if let days = daysUntilRelease, days < JiraHelpers.staleThresholdDays, progressPct < JiraHelpers.progressAtRiskThreshold {
             atRisk = true
             atRiskReason = "\(days)d left, \(Int(progressPct * 100))% done"
         }
 
         // Scope changes (last 7 days)
         let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-        let scopeChanges = try JiraQueries.fetchScopeChanges(
+        let scopeRaw = try JiraQueries.fetchScopeChanges(
             db,
             versionName: release.name,
             since: weekAgo
         )
+        let scopeChanges = ScopeChanges(added: scopeRaw.added, removed: scopeRaw.removed)
 
         // Ping targets from blocked issues
         var pingTargets: [PingTargetItem] = []
@@ -232,32 +247,26 @@ final class ReleaseDashboardViewModel {
 
     // MARK: - Date Helpers
 
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt
-    }()
-
-    private static let dateOnlyFormatter: DateFormatter = {
+    private nonisolated static let dateOnlyFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         fmt.locale = Locale(identifier: "en_US_POSIX")
         return fmt
     }()
 
-    private static func parseDate(_ dateStr: String) -> Date? {
+    private nonisolated static func parseDate(_ dateStr: String) -> Date? {
         guard !dateStr.isEmpty else { return nil }
         return dateOnlyFormatter.date(from: dateStr)
-            ?? isoFormatter.date(from: dateStr)
+            ?? JiraHelpers.isoFormatter.date(from: dateStr)
             ?? ISO8601DateFormatter().date(from: dateStr)
     }
 
-    private static func isDateInPast(_ dateStr: String) -> Bool {
+    private nonisolated static func isDateInPast(_ dateStr: String) -> Bool {
         guard let date = parseDate(dateStr) else { return false }
         return date < Date()
     }
 
-    private static func daysUntil(_ dateStr: String) -> Int? {
+    private nonisolated static func daysUntil(_ dateStr: String) -> Int? {
         guard let date = parseDate(dateStr) else { return nil }
         return Calendar.current.dateComponents([.day], from: Date(), to: date).day
     }

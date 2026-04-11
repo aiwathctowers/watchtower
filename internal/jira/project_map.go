@@ -94,14 +94,16 @@ func BuildProjectMap(database *db.DB, cfg *config.Config, now time.Time) ([]Proj
 		return nil, err
 	}
 
+	// Bulk-load all child issues for all epics in one query.
+	allChildrenByEpic, err := database.GetJiraIssuesByEpicKeys(epicKeys)
+	if err != nil {
+		return nil, err
+	}
+
 	var result []ProjectMapEpic
 
 	for _, a := range filteredAggs {
-		// Load child issues for this epic.
-		children, err := database.GetJiraIssuesByEpicKey(a.EpicKey)
-		if err != nil {
-			return nil, err
-		}
+		children := allChildrenByEpic[a.EpicKey]
 
 		// Compute progress metrics (reuse epic_progress.go logic).
 		progressPct := float64(a.Done) / float64(a.Total) * 100
@@ -138,57 +140,8 @@ func BuildProjectMap(database *db.DB, cfg *config.Config, now time.Time) ([]Proj
 			}
 		}
 
-		// Process child issues: build issues list, detect stale/blocked, collect participants.
-		participantsSeen := make(map[string]bool)
-		var childKeys []string
-
-		for _, child := range children {
-			childKeys = append(childKeys, child.Key)
-
-			mi := toProjectMapIssue(child, now)
-			epic.Issues = append(epic.Issues, mi)
-
-			if mi.IsStale {
-				epic.StaleCount++
-				epic.StaleIssues = append(epic.StaleIssues, mi)
-			}
-			if mi.IsBlocked {
-				epic.BlockedCount++
-			}
-
-			// Collect unique participants (assignees and reporters).
-			addParticipant(&epic.Participants, &participantsSeen, child.AssigneeSlackID, child.AssigneeDisplayName, "assignee")
-			addParticipant(&epic.Participants, &participantsSeen, child.ReporterSlackID, child.ReporterDisplayName, "reporter")
-		}
-
-		// Slack discussions from jira_slack_links for all child issue keys.
-		if len(childKeys) > 0 {
-			links, err := database.GetJiraSlackLinksByIssueKeys(childKeys)
-			if err != nil {
-				return nil, err
-			}
-			for _, l := range links {
-				ref := SlackDiscussionRef{
-					ChannelID: l.ChannelID,
-					MessageTS: l.MessageTS,
-				}
-				if l.TrackID != nil {
-					v := int64(*l.TrackID)
-					ref.TrackID = &v
-				}
-				if l.DigestID != nil {
-					v := int64(*l.DigestID)
-					ref.DigestID = &v
-				}
-				epic.SlackDiscussions = append(epic.SlackDiscussions, ref)
-			}
-
-			// Key decisions count.
-			decCount, err := database.GetJiraDecisionCountByIssueKeys(childKeys)
-			if err != nil {
-				return nil, err
-			}
-			epic.KeyDecisionsCount = decCount
+		if err := populateEpicChildren(database, &epic, children, now); err != nil {
+			return nil, err
 		}
 
 		result = append(result, epic)
@@ -298,7 +251,16 @@ func BuildProjectMapForEpic(database *db.DB, cfg *config.Config, epicKey string,
 		}
 	}
 
-	// Process child issues.
+	if err := populateEpicChildren(database, &epic, children, now); err != nil {
+		return nil, err
+	}
+
+	return &epic, nil
+}
+
+// populateEpicChildren processes child issues: builds issue list, detects stale/blocked,
+// collects participants, loads Slack discussions and decision counts.
+func populateEpicChildren(database *db.DB, epic *ProjectMapEpic, children []db.JiraIssue, now time.Time) error {
 	participantsSeen := make(map[string]bool)
 	var childKeys []string
 
@@ -320,11 +282,10 @@ func BuildProjectMapForEpic(database *db.DB, cfg *config.Config, epicKey string,
 		addParticipant(&epic.Participants, &participantsSeen, child.ReporterSlackID, child.ReporterDisplayName, "reporter")
 	}
 
-	// Slack discussions.
 	if len(childKeys) > 0 {
 		links, err := database.GetJiraSlackLinksByIssueKeys(childKeys)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, l := range links {
 			ref := SlackDiscussionRef{
@@ -344,12 +305,12 @@ func BuildProjectMapForEpic(database *db.DB, cfg *config.Config, epicKey string,
 
 		decCount, err := database.GetJiraDecisionCountByIssueKeys(childKeys)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		epic.KeyDecisionsCount = decCount
 	}
 
-	return &epic, nil
+	return nil
 }
 
 // toProjectMapIssue converts a JiraIssue to a ProjectMapIssue, computing days in status,

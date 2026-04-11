@@ -194,7 +194,7 @@ func TestMergeUserOverridesLogic(t *testing.T) {
 	assert.Equal(t, 2, profile.StaleThresholds["Deploy"], "new override key should be added")
 }
 
-func TestGetJiraBoardsWithChangedConfig(t *testing.T) {
+func TestGetJiraSelectedBoardsWithProfile(t *testing.T) {
 	d, err := db.Open(":memory:")
 	require.NoError(t, err)
 	defer d.Close()
@@ -218,7 +218,7 @@ func TestGetJiraBoardsWithChangedConfig(t *testing.T) {
 		'hash3', '2026-04-08T00:00:00Z', '{}', '[]', '{}', 'summary')`)
 	require.NoError(t, err)
 
-	boards, err := d.GetJiraBoardsWithChangedConfig()
+	boards, err := d.GetJiraSelectedBoardsWithProfile()
 	require.NoError(t, err)
 
 	// Only board 1 should be returned (selected + has config_hash).

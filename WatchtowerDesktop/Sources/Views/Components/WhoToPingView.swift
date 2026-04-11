@@ -35,7 +35,7 @@ struct WhoToPingView: View {
             }
         }
         .task {
-            loadTeamID()
+            await loadTeamID()
         }
     }
 
@@ -78,12 +78,7 @@ struct WhoToPingView: View {
     }
 
     private func avatarColor(for userID: String) -> Color {
-        let colors: [Color] = [
-            .red, .orange, .yellow, .green, .mint, .teal,
-            .cyan, .blue, .indigo, .purple, .pink, .brown,
-        ]
-        let hash = userID.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
-        return colors[abs(hash) % colors.count]
+        JiraHelpers.avatarColor(for: userID)
     }
 
     // MARK: - Reason Chip
@@ -123,11 +118,13 @@ struct WhoToPingView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func loadTeamID() {
+    private func loadTeamID() async {
         do {
-            let ws = try dbPool.read { db in
-                try WorkspaceQueries.fetchWorkspace(db)
-            }
+            let ws = try await Task.detached { [dbPool] in
+                try dbPool.read { db in
+                    try WorkspaceQueries.fetchWorkspace(db)
+                }
+            }.value
             teamID = ws?.id
         } catch {
             teamID = nil

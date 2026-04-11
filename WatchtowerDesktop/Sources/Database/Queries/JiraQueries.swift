@@ -877,16 +877,15 @@ enum JiraQueries {
         try JiraIssue.fetchAll(
             db,
             sql: """
-                SELECT *
-                FROM jira_issues
-                WHERE fix_versions LIKE ?
-                  AND is_deleted = 0
+                SELECT ji.* FROM jira_issues ji
+                WHERE EXISTS (SELECT 1 FROM json_each(ji.fix_versions) WHERE value = ?)
+                  AND ji.is_deleted = 0
                 ORDER BY
-                  CASE status_category WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END,
-                  priority,
-                  updated_at DESC
+                  CASE ji.status_category WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END,
+                  ji.priority,
+                  ji.updated_at DESC
                 """,
-            arguments: ["%\"\(versionName)\"%"]
+            arguments: [versionName]
         )
     }
 
@@ -981,12 +980,12 @@ enum JiraQueries {
             db,
             sql: """
                 SELECT COUNT(*)
-                FROM jira_issues
-                WHERE fix_versions LIKE ?
-                  AND synced_at >= ?
-                  AND is_deleted = 0
+                FROM jira_issues ji
+                WHERE EXISTS (SELECT 1 FROM json_each(ji.fix_versions) WHERE value = ?)
+                  AND ji.synced_at >= ?
+                  AND ji.is_deleted = 0
                 """,
-            arguments: ["%\"\(versionName)\"%", sinceStr]
+            arguments: [versionName, sinceStr]
         ) ?? 0
 
         // Removed count requires historical data not available in current schema.

@@ -2,7 +2,7 @@ import Foundation
 
 /// A person to contact about a Jira issue — used by WhoToPingView.
 struct PingTargetItem: Identifiable, Codable {
-    var id: String { slackUserID }
+    var id: String { "\(slackUserID)_\(reason)" }
     let slackUserID: String
     let displayName: String
     /// Raw reason key: "assignee", "assignee_blocker", "expert", "reporter",

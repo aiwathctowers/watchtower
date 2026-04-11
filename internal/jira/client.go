@@ -202,7 +202,7 @@ var searchFields = []string{
 
 // GetProjectVersions fetches all fix versions (releases) for a project.
 func (c *Client) GetProjectVersions(ctx context.Context, projectKey string) ([]FixVersion, error) {
-	path := fmt.Sprintf("/rest/api/3/project/%s/versions", projectKey)
+	path := fmt.Sprintf("/rest/api/3/project/%s/versions", url.PathEscape(projectKey))
 	var versions []FixVersion
 	if err := c.get(ctx, path, &versions); err != nil {
 		return nil, fmt.Errorf("fetching versions for project %s: %w", projectKey, err)

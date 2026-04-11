@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -318,7 +319,7 @@ func TestBuildProjectMap_SlackLinks(t *testing.T) {
 	// 3 children.
 	for i, key := range []string{"PROJ-30", "PROJ-31", "PROJ-32"} {
 		insertTestIssue(t, d, db.JiraIssue{
-			Key: key, ID: string(rune('3') + rune(i)), EpicKey: "PROJ-400",
+			Key: key, ID: fmt.Sprintf("30%d", i), EpicKey: "PROJ-400",
 			Summary: "Task", Status: "In Progress", StatusCategory: "in_progress",
 			StatusCategoryChangedAt: now.AddDate(0, 0, -1).Format(time.RFC3339),
 			AssigneeSlackID:         "U1", AssigneeDisplayName: "Alice",
@@ -386,7 +387,7 @@ func TestBuildProjectMap_MultipleEpicsSorted(t *testing.T) {
 	})
 	for i := 0; i < 3; i++ {
 		insertTestIssue(t, d, db.JiraIssue{
-			Key: "A-" + string(rune('1'+i)), ID: "5" + string(rune('1'+i)),
+			Key: fmt.Sprintf("A-%d", i+1), ID: fmt.Sprintf("50%d", i),
 			EpicKey: "PROJ-500", Summary: "Done task",
 			Status: "Done", StatusCategory: "done",
 			ResolvedAt:              now.AddDate(0, 0, -3).Format(time.RFC3339),
@@ -402,7 +403,7 @@ func TestBuildProjectMap_MultipleEpicsSorted(t *testing.T) {
 	})
 	for i := 0; i < 3; i++ {
 		insertTestIssue(t, d, db.JiraIssue{
-			Key: "B-" + string(rune('1'+i)), ID: "6" + string(rune('1'+i)),
+			Key: fmt.Sprintf("B-%d", i+1), ID: fmt.Sprintf("60%d", i),
 			EpicKey: "PROJ-600", Summary: "Todo task",
 			Status: "To Do", StatusCategory: "new",
 			StatusCategoryChangedAt: now.AddDate(0, 0, -1).Format(time.RFC3339),
@@ -447,7 +448,7 @@ func TestBuildProjectMap_NoOwnerWhenNoAssignee(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		insertTestIssue(t, d, db.JiraIssue{
-			Key: "C-" + string(rune('1'+i)), ID: "7" + string(rune('1'+i)),
+			Key: fmt.Sprintf("C-%d", i+1), ID: fmt.Sprintf("70%d", i),
 			EpicKey: "PROJ-700", Summary: "Task",
 			Status: "In Progress", StatusCategory: "in_progress",
 			StatusCategoryChangedAt: now.AddDate(0, 0, -1).Format(time.RFC3339),

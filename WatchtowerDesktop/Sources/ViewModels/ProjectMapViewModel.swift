@@ -32,6 +32,8 @@ final class ProjectMapViewModel {
         let participants: [(slackID: String, name: String)]
         let pingTargets: [PingTargetItem]
         let createdAt: String?
+        /// Pre-computed end date stored at creation time to avoid instability.
+        let computedEndDate: Date?
 
         // MARK: - Gantt dates
 
@@ -41,23 +43,11 @@ final class ProjectMapViewModel {
         }
 
         var endDate: Date? {
-            guard let weeks = forecastWeeks, weeks > 0 else { return nil }
-            // End = now + forecastWeeks
-            return Calendar.current.date(
-                byAdding: .day,
-                value: Int(weeks * 7),
-                to: Date()
-            )
+            computedEndDate
         }
 
-        private static let isoFull: ISO8601DateFormatter = {
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return f
-        }()
-
         private static func parseDate(_ s: String) -> Date? {
-            isoFull.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+            JiraHelpers.isoFormatter.date(from: s) ?? ISO8601DateFormatter().date(from: s)
         }
     }
 
@@ -104,7 +94,7 @@ final class ProjectMapViewModel {
 
     func startObserving() {
         guard observationTask == nil else { return }
-        load()
+        Task { await load() }
         let dbPool = dbManager.dbPool
         observationTask = Task { [weak self] in
             let observation = ValueObservation.tracking { db in
@@ -116,9 +106,11 @@ final class ProjectMapViewModel {
             do {
                 for try await _ in observation.values(in: dbPool).dropFirst() {
                     guard !Task.isCancelled else { break }
-                    self?.load()
+                    await self?.load()
                 }
-            } catch {}
+            } catch {
+                print("ProjectMap observation error: \(error)")
+            }
         }
     }
 
@@ -129,15 +121,30 @@ final class ProjectMapViewModel {
 
     // MARK: - Load
 
-    func load() {
+    func load() async {
         isLoading = true
         do {
-            let items = try dbManager.dbPool.read { db -> [EpicItem] in
-                let epicIssues = try JiraQueries.fetchAllEpics(db)
-                return try epicIssues.map { epic in
-                    try Self.buildEpicItem(db: db, epic: epic)
+            let items = try await Task.detached { [dbManager] in
+                try dbManager.dbPool.read { db -> [EpicItem] in
+                    // Batch-load all non-deleted issues to avoid N+1
+                    let allIssues = try JiraIssue.fetchAll(
+                        db,
+                        sql: "SELECT * FROM jira_issues WHERE is_deleted = 0"
+                    )
+                    // Group child issues by epic_key
+                    var issuesByEpic: [String: [JiraIssue]] = [:]
+                    for issue in allIssues where !issue.epicKey.isEmpty {
+                        issuesByEpic[issue.epicKey, default: []].append(issue)
+                    }
+                    // Get epic-type issues
+                    let epicIssues = allIssues.filter { $0.issueTypeCategory == "epic" }
+
+                    let now = Date()
+                    return epicIssues.map { epic in
+                        Self.buildEpicItem(epic: epic, childIssues: issuesByEpic[epic.key] ?? [], now: now)
+                    }
                 }
-            }
+            }.value
             epics = items.sorted { lhs, rhs in
                 // Behind first, then at risk, then on track
                 let lhsOrder = Self.statusSortOrder(lhs.statusBadge)
@@ -155,11 +162,11 @@ final class ProjectMapViewModel {
 
     // MARK: - Build
 
-    private static func buildEpicItem(
-        db: Database,
-        epic: JiraIssue
-    ) throws -> EpicItem {
-        let childIssues = try JiraQueries.fetchIssuesByEpicKey(db, epicKey: epic.key)
+    private nonisolated static func buildEpicItem(
+        epic: JiraIssue,
+        childIssues: [JiraIssue],
+        now: Date
+    ) -> EpicItem {
         let total = childIssues.count
         let done = childIssues.filter { $0.statusCategory == "done" }.count
         let inProgress = childIssues.filter {
@@ -168,7 +175,7 @@ final class ProjectMapViewModel {
 
         let stale = childIssues.filter { issue in
             guard issue.statusCategory != "done" else { return false }
-            return daysSince(issue.statusCategoryChangedAt) > 7
+            return JiraHelpers.daysSince(issue.statusCategoryChangedAt) > JiraHelpers.staleThresholdDays
         }.count
 
         let blocked = childIssues.filter { issue in
@@ -177,7 +184,16 @@ final class ProjectMapViewModel {
 
         let progressPct = total > 0 ? Double(done) / Double(total) : 0.0
 
-        let participants = try JiraQueries.fetchParticipantsForEpic(db, epicKey: epic.key)
+        // Extract unique participants from child issues
+        var participantMap: [(slackID: String, name: String)] = []
+        var seenParticipants: Set<String> = []
+        for issue in childIssues {
+            if !issue.assigneeSlackId.isEmpty, !seenParticipants.contains(issue.assigneeSlackId) {
+                seenParticipants.insert(issue.assigneeSlackId)
+                participantMap.append((slackID: issue.assigneeSlackId, name: issue.assigneeDisplayName))
+            }
+        }
+        participantMap.sort { $0.name < $1.name }
 
         // Build ping targets from epic assignee + reporter
         var pingTargets: [PingTargetItem] = []
@@ -216,21 +232,27 @@ final class ProjectMapViewModel {
             // Use last 28 days resolved count for velocity
             let recentDone = childIssues.filter { issue in
                 guard issue.statusCategory == "done", !issue.resolvedAt.isEmpty else { return false }
-                return daysSince(issue.resolvedAt) <= 28
+                return JiraHelpers.daysSince(issue.resolvedAt) <= JiraHelpers.velocityWindowDays
             }.count
             let weeklyVelocity = Double(recentDone) / 4.0
             guard weeklyVelocity > 0 else { return nil }
             return Double(total - done) / weeklyVelocity
         }()
 
+        // Pre-compute end date for Gantt stability
+        let computedEndDate: Date? = {
+            guard let weeks = forecastWeeks, weeks > 0 else { return nil }
+            return Calendar.current.date(byAdding: .day, value: Int(weeks * 7), to: now)
+        }()
+
         // Compute velocity metrics matching Go epic_progress.go algorithm.
         let resolvedLastWeek = childIssues.filter { issue in
             guard issue.statusCategory == "done", !issue.resolvedAt.isEmpty else { return false }
-            return daysSince(issue.resolvedAt) <= 7
+            return JiraHelpers.daysSince(issue.resolvedAt) <= JiraHelpers.staleThresholdDays
         }.count
         let resolvedLast4W = childIssues.filter { issue in
             guard issue.statusCategory == "done", !issue.resolvedAt.isEmpty else { return false }
-            return daysSince(issue.resolvedAt) <= 28
+            return JiraHelpers.daysSince(issue.resolvedAt) <= JiraHelpers.velocityWindowDays
         }.count
         let velocityPerWeek = Double(resolvedLast4W) / 4.0
 
@@ -255,19 +277,20 @@ final class ProjectMapViewModel {
             blockedCount: blocked,
             forecastWeeks: forecastWeeks,
             issues: childIssues,
-            participants: participants,
+            participants: participantMap,
             pingTargets: pingTargets,
-            createdAt: epic.createdAt
+            createdAt: epic.createdAt,
+            computedEndDate: computedEndDate
         )
     }
 
     /// Matches Go computeStatusBadge() from epic_progress.go:
-    /// - remaining == 0 → on_track (epic complete)
-    /// - velocity == 0 → behind
-    /// - resolvedLastWeek == 0 → behind
-    /// - resolvedLastWeek < velocity → at_risk
-    /// - else → on_track
-    private static func computeStatusBadge(
+    /// - remaining == 0 -> on_track (epic complete)
+    /// - velocity == 0 -> behind
+    /// - resolvedLastWeek == 0 -> behind
+    /// - resolvedLastWeek < velocity -> at_risk
+    /// - else -> on_track
+    private nonisolated static func computeStatusBadge(
         total: Int,
         done: Int,
         resolvedLastWeek: Int,
@@ -293,31 +316,11 @@ final class ProjectMapViewModel {
         return .onTrack
     }
 
-    private static func statusSortOrder(_ badge: EpicStatusBadge) -> Int {
+    private nonisolated static func statusSortOrder(_ badge: EpicStatusBadge) -> Int {
         switch badge {
         case .behind: 0
         case .atRisk: 1
         case .onTrack: 2
         }
-    }
-
-    // MARK: - Helpers
-
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt
-    }()
-
-    private static func daysSince(_ dateStr: String) -> Int {
-        guard !dateStr.isEmpty else { return 0 }
-        guard let date = isoFormatter.date(from: dateStr)
-                ?? ISO8601DateFormatter().date(from: dateStr) else {
-            return 0
-        }
-        return max(
-            0,
-            Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
-        )
     }
 }

@@ -3,7 +3,7 @@ package jira
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"sort"
 
 	"watchtower/internal/db"
 )
@@ -52,7 +52,6 @@ func ComputeWhoToPing(d *db.DB, issue db.JiraIssue, chain []string) []PingTarget
 			}
 			resolvers, err := d.GetTopResolversByComponent(comp, maxPingTargets)
 			if err != nil {
-				log.Printf("who_to_ping: failed to get resolvers for component %s: %v", comp, err)
 				continue
 			}
 			for _, r := range resolvers {
@@ -127,7 +126,13 @@ func ComputeWhoToPingForEpic(d *db.DB, epicKey string) ([]PingTarget, error) {
 			compSet[c] = true
 		}
 	}
-	for comp := range compSet {
+	// Sort components for deterministic iteration.
+	comps := make([]string, 0, len(compSet))
+	for c := range compSet {
+		comps = append(comps, c)
+	}
+	sort.Strings(comps)
+	for _, comp := range comps {
 		if len(targets) >= maxPingTargets {
 			break
 		}

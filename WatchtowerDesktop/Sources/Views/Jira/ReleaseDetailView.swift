@@ -75,8 +75,9 @@ struct ReleaseDetailView: View {
 
     private func epicBadgeColor(_ badge: String) -> Color {
         switch badge {
-        case "Done": .green
-        case "In Progress": .blue
+        case "on_track": .green
+        case "at_risk": .orange
+        case "behind": .red
         default: .secondary
         }
     }

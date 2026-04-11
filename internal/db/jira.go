@@ -100,11 +100,9 @@ func (db *DB) GetJiraSelectedBoards() ([]JiraBoard, error) {
 	return boards, rows.Err()
 }
 
-// GetJiraBoardsWithChangedConfig returns selected boards whose stored config hash
-// differs from the hash that would be computed from current raw config data.
-// It fetches boards that have a profile (config_hash != ”) and compares the stored
-// raw_columns_json + raw_config_json hash against config_hash.
-func (db *DB) GetJiraBoardsWithChangedConfig() ([]JiraBoard, error) {
+// GetJiraSelectedBoardsWithProfile returns selected boards that have a profile (config_hash != ”).
+// Useful for detecting config changes by comparing stored config_hash with freshly computed hashes.
+func (db *DB) GetJiraSelectedBoardsWithProfile() ([]JiraBoard, error) {
 	rows, err := db.Query(`SELECT id, name, project_key, board_type, is_selected, issue_count, synced_at,
 		raw_columns_json, raw_config_json, llm_profile_json, workflow_summary,
 		user_overrides_json, config_hash, profile_generated_at
@@ -1091,10 +1089,10 @@ func (db *DB) GetTopResolversByComponent(component string, limit int) ([]Compone
 		WHERE is_deleted = 0
 			AND status_category = 'done'
 			AND assignee_slack_id != ''
-			AND components LIKE ?
+			AND EXISTS (SELECT 1 FROM json_each(jira_issues.components) WHERE value = ?)
 		GROUP BY assignee_slack_id
 		ORDER BY cnt DESC
-		LIMIT ?`, "%"+component+"%", limit)
+		LIMIT ?`, component, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying top resolvers for component %s: %w", component, err)
 	}
@@ -1129,6 +1127,38 @@ func (db *DB) GetJiraIssuesByEpicKey(epicKey string) ([]JiraIssue, error) {
 		issues = append(issues, issue)
 	}
 	return issues, rows.Err()
+}
+
+// GetJiraIssuesByEpicKeys returns all non-deleted child issues for the given epic keys,
+// grouped by epic key. This avoids N+1 queries when loading children for multiple epics.
+func (db *DB) GetJiraIssuesByEpicKeys(epicKeys []string) (map[string][]JiraIssue, error) {
+	if len(epicKeys) == 0 {
+		return map[string][]JiraIssue{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(epicKeys))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, len(epicKeys))
+	for i, k := range epicKeys {
+		args[i] = k
+	}
+
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+		FROM jira_issues WHERE epic_key IN (`+placeholders+`) AND is_deleted = 0 ORDER BY key`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues by epic keys: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]JiraIssue)
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue by epic keys: %w", err)
+		}
+		result[issue.EpicKey] = append(result[issue.EpicKey], issue)
+	}
+	return result, rows.Err()
 }
 
 // GetJiraSlackLinksByIssueKeys returns all Slack links for a set of issue keys.
@@ -1261,10 +1291,9 @@ func (db *DB) GetAllJiraReleases() ([]JiraRelease, error) {
 
 // GetJiraIssuesByFixVersion returns all non-deleted issues that have the given version name in their fix_versions JSON array.
 func (db *DB) GetJiraIssuesByFixVersion(versionName string) ([]JiraIssue, error) {
-	// fix_versions is stored as a JSON array, e.g. '["v1.0","v2.0"]'.
-	// We use LIKE with the quoted name to match.
-	pattern := `%"` + versionName + `"%`
-	rows, err := db.Query(`SELECT `+jiraIssueColumns+` FROM jira_issues WHERE fix_versions LIKE ? AND is_deleted = 0`, pattern)
+	rows, err := db.Query(`SELECT `+jiraIssueColumns+` FROM jira_issues
+		WHERE EXISTS (SELECT 1 FROM json_each(jira_issues.fix_versions) WHERE value = ?)
+		AND is_deleted = 0`, versionName)
 	if err != nil {
 		return nil, fmt.Errorf("querying jira issues by fix version %s: %w", versionName, err)
 	}
@@ -1284,19 +1313,41 @@ func (db *DB) GetJiraIssuesByFixVersion(versionName string) ([]JiraIssue, error)
 // GetJiraIssueCountAddedSince returns the count of non-deleted issues with the given version name
 // in fix_versions whose synced_at is after the given timestamp (approximate scope tracking).
 func (db *DB) GetJiraIssueCountAddedSince(versionName string, since string) (int, error) {
-	pattern := `%"` + versionName + `"%`
 	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM jira_issues WHERE fix_versions LIKE ? AND synced_at > ? AND is_deleted = 0`,
-		pattern, since).Scan(&count)
+	err := db.QueryRow(`SELECT COUNT(*) FROM jira_issues
+		WHERE EXISTS (SELECT 1 FROM json_each(jira_issues.fix_versions) WHERE value = ?)
+		AND synced_at > ? AND is_deleted = 0`,
+		versionName, since).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("counting jira issues added since %s for version %s: %w", since, versionName, err)
 	}
 	return count, nil
 }
 
+// GetAllJiraIssuesWithFixVersions returns all non-deleted issues that have non-empty fix_versions.
+// This is used for batch loading in the release dashboard to avoid N+1 queries.
+func (db *DB) GetAllJiraIssuesWithFixVersions() ([]JiraIssue, error) {
+	rows, err := db.Query(`SELECT ` + jiraIssueColumns + `
+		FROM jira_issues WHERE fix_versions != '' AND fix_versions != '[]' AND is_deleted = 0`)
+	if err != nil {
+		return nil, fmt.Errorf("querying jira issues with fix versions: %w", err)
+	}
+	defer rows.Close()
+
+	var issues []JiraIssue
+	for rows.Next() {
+		issue, err := scanJiraIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning jira issue with fix versions: %w", err)
+		}
+		issues = append(issues, issue)
+	}
+	return issues, rows.Err()
+}
+
 // GetBlockedJiraIssues returns non-done, non-deleted issues whose status contains "block" (case-insensitive).
 func (db *DB) GetBlockedJiraIssues() ([]JiraIssue, error) {
-	rows, err := db.Query(`SELECT `+jiraIssueColumns+`
+	rows, err := db.Query(`SELECT ` + jiraIssueColumns + `
 		FROM jira_issues
 		WHERE status_category != 'done' AND is_deleted = 0 AND LOWER(status) LIKE '%block%'
 		ORDER BY key`)

@@ -9,6 +9,7 @@ struct JiraBoardsSettingsView: View {
 
     @State private var isFetching = false
     @State private var reAnalyzingBoardID: Int?
+    // TODO: notifiedBoardIDs resets when the view is recreated. Consider @AppStorage or a static Set if persistent dedup is needed.
     @State private var notifiedBoardIDs: Set<Int> = []
 
     var body: some View {

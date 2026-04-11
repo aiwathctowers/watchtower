@@ -312,12 +312,6 @@ func buildEntry(issue db.JiraIssue, blockerType string, now time.Time) BlockerEn
 	}
 }
 
-// buildPingTargets is a backwards-compatible alias for ComputeWhoToPing.
-// Deprecated: use ComputeWhoToPing directly.
-func buildPingTargets(issue db.JiraIssue, chain []string, d *db.DB) []PingTarget {
-	return ComputeWhoToPing(d, issue, chain)
-}
-
 // fetchSlackParticipants returns Slack users who discussed this issue.
 func fetchSlackParticipants(issueKey string, d *db.DB) []PingTarget {
 	links, err := d.GetJiraSlackLinksByIssue(issueKey)
