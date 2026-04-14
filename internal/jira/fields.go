@@ -352,10 +352,10 @@ Consider the sample values to determine the correct role.`
 
 	dataJSON, _ := json.Marshal(map[string]interface{}{
 		"board":                board.Name,
-		"project":             board.ProjectKey,
-		"board_type":          board.BoardType,
+		"project":              board.ProjectKey,
+		"board_type":           board.BoardType,
 		"total_issues_sampled": len(resp.Issues),
-		"fields":              samples,
+		"fields":               samples,
 	})
 	userMessage := fmt.Sprintf("Assign roles to these custom fields for board %q:\n\n%s",
 		board.Name, string(dataJSON))

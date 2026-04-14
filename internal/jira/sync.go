@@ -32,10 +32,10 @@ type Syncer struct {
 	mapper        *UserMapper
 	logger        *log.Logger
 	boardIDs      []int
-	boardAnalyzer *BoardAnalyzer              // optional, for config change detection
-	autoRefresh   bool                        // when true, auto re-analyze boards with changed config
+	boardAnalyzer *BoardAnalyzer                 // optional, for config change detection
+	autoRefresh   bool                           // when true, auto re-analyze boards with changed config
 	fieldMapCache map[int][]db.JiraBoardFieldMap // boardID -> field mappings
-	OnProgress    func(SyncProgress)          // optional progress callback
+	OnProgress    func(SyncProgress)             // optional progress callback
 }
 
 // NewSyncer creates a Syncer.

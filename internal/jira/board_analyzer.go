@@ -726,7 +726,6 @@ func (a *BoardAnalyzer) fetchProjectStatuses(ctx context.Context, projectKey str
 	}
 	seen := map[string]bool{}
 	categoryStatuses := map[string][]statusInfo{}
-	categoryOrder := []string{}
 	for _, it := range resp {
 		for _, s := range it.Statuses {
 			if seen[s.ID] {
@@ -734,9 +733,6 @@ func (a *BoardAnalyzer) fetchProjectStatuses(ctx context.Context, projectKey str
 			}
 			seen[s.ID] = true
 			catKey := s.StatusCategory.Key
-			if _, exists := categoryStatuses[catKey]; !exists {
-				categoryOrder = append(categoryOrder, catKey)
-			}
 			categoryStatuses[catKey] = append(categoryStatuses[catKey], statusInfo{
 				ID: s.ID, Name: s.Name, CategoryKey: catKey,
 			})
