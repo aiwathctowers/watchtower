@@ -135,7 +135,9 @@ func TestRunDigest_WeeklyDigest(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	_, err = database.UpsertDigest(db.Digest{
-		PeriodFrom:   now - 7*86400,
+		// Use 6 days ago to stay safely inside the 7-day filter window even if
+		// the wall clock ticks over a second between setup and command execution.
+		PeriodFrom:   now - 6*86400,
 		PeriodTo:     now,
 		Type:         "weekly",
 		Summary:      "Weekly summary: productive sprint",
