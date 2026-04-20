@@ -114,8 +114,9 @@ type IterationInfo struct {
 
 // UserOverrides stores user-specified overrides for board analysis.
 type UserOverrides struct {
-	StaleThresholds map[string]int  `json:"stale_thresholds,omitempty"`
-	TerminalStages  map[string]bool `json:"terminal_stages,omitempty"` // status name → is_terminal override
+	StaleThresholds map[string]int    `json:"stale_thresholds,omitempty"`
+	TerminalStages  map[string]bool   `json:"terminal_stages,omitempty"` // status name → is_terminal override
+	PhaseOverrides  map[string]string `json:"phase_overrides,omitempty"` // status name → phase (backlog|active_work|review|testing|done|other)
 }
 
 // BoardAnalyzer performs LLM-based analysis of Jira boards.
@@ -263,12 +264,10 @@ func (a *BoardAnalyzer) AnalyzeBoard(ctx context.Context, board db.JiraBoard) (*
 	// Call LLM.
 	profile, err := a.callLLM(ctx, rawData)
 	if err != nil {
-		// On LLM failure, use fallback.
-		a.logger.Printf("LLM analysis failed for board %d, using fallback: %v", board.ID, err)
-		profile = BuildFallbackProfile(rawData)
-	} else if len(profile.WorkflowStages) == 0 {
-		a.logger.Printf("LLM returned empty workflow for board %d, using fallback", board.ID)
-		profile = BuildFallbackProfile(rawData)
+		return nil, fmt.Errorf("LLM analysis for board %d: %w", board.ID, err)
+	}
+	if len(profile.WorkflowStages) == 0 {
+		return nil, fmt.Errorf("LLM returned empty workflow for board %d", board.ID)
 	}
 
 	// Store custom field mappings in the profile.
@@ -480,120 +479,6 @@ func (a *BoardAnalyzer) mergeUserOverrides(boardID int, profile *BoardProfile, o
 		board.WorkflowSummary, board.ConfigHash, board.ProfileGeneratedAt)
 }
 
-// inferPhaseFromName guesses the workflow phase from a status/column name.
-func inferPhaseFromName(name string) (phase string, isTerminal bool) {
-	lower := strings.ToLower(name)
-	switch {
-	case lower == "done" || lower == "closed" || lower == "resolved":
-		return "done", true
-	case lower == "backlog" || lower == "to do" || lower == "todo" || lower == "open":
-		return "backlog", false
-	case strings.Contains(lower, "review"):
-		return "review", false
-	case strings.Contains(lower, "test") || strings.Contains(lower, "qa"):
-		return "testing", false
-	default:
-		return "active_work", false
-	}
-}
-
-// BuildFallbackProfile creates a basic profile without LLM, from raw board data.
-func BuildFallbackProfile(rawData *BoardRawData) *BoardProfile {
-	profile := &BoardProfile{
-		StaleThresholds: map[string]int{},
-		HealthSignals:   []string{},
-	}
-
-	// Map columns to workflow stages.
-	for _, col := range rawData.Config.Columns {
-		phase, isTerminal := inferPhaseFromName(col.Name)
-
-		var statuses []string
-		for _, s := range col.Statuses {
-			statuses = append(statuses, s.Name)
-		}
-
-		profile.WorkflowStages = append(profile.WorkflowStages, WorkflowStage{
-			Name:             col.Name,
-			OriginalStatuses: statuses,
-			Phase:            phase,
-			IsTerminal:       isTerminal,
-		})
-
-		// Default stale threshold: 3 days for active_work, 7 for backlog.
-		if phase == "active_work" {
-			profile.StaleThresholds[col.Name] = 3
-		} else if phase == "backlog" {
-			profile.StaleThresholds[col.Name] = 7
-		}
-	}
-
-	// Fallback: synthesize stages from local issue status distribution when API columns unavailable.
-	if len(profile.WorkflowStages) == 0 && len(rawData.IssueSample.StatusDistribution) > 0 {
-		var statusNames []string
-		for name := range rawData.IssueSample.StatusDistribution {
-			statusNames = append(statusNames, name)
-		}
-		sort.Strings(statusNames)
-
-		for _, name := range statusNames {
-			phase, isTerminal := inferPhaseFromName(name)
-			profile.WorkflowStages = append(profile.WorkflowStages, WorkflowStage{
-				Name:             name,
-				OriginalStatuses: []string{name},
-				Phase:            phase,
-				IsTerminal:       isTerminal,
-			})
-			if phase == "active_work" {
-				profile.StaleThresholds[name] = 3
-			} else if phase == "backlog" {
-				profile.StaleThresholds[name] = 7
-			}
-		}
-	}
-
-	// Estimation approach.
-	if rawData.Config.Estimation != nil {
-		profile.EstimationApproach = EstimationApproach{
-			Type:  "story_points",
-			Field: &rawData.Config.Estimation.FieldID,
-		}
-	} else {
-		profile.EstimationApproach = EstimationApproach{Type: "none"}
-	}
-
-	// Check field mapping for estimation if not found from config.
-	if profile.EstimationApproach.Type == "none" && len(rawData.CustomFields) > 0 {
-		for _, cf := range rawData.CustomFields {
-			if cf.Role == "story_points" {
-				profile.EstimationApproach = EstimationApproach{
-					Type:  "story_points",
-					Field: &cf.FieldID,
-				}
-				break
-			} else if cf.Role == "tshirt_size" {
-				profile.EstimationApproach = EstimationApproach{
-					Type:  "tshirt_size",
-					Field: &cf.FieldID,
-				}
-				break
-			}
-		}
-	}
-
-	// Iteration info.
-	profile.IterationInfo.HasIterations = len(rawData.Sprints) > 0 || rawData.BoardType == "scrum"
-
-	// Workflow summary.
-	var stageNames []string
-	for _, s := range profile.WorkflowStages {
-		stageNames = append(stageNames, s.Name)
-	}
-	profile.WorkflowSummary = fmt.Sprintf("%s board with stages: %s",
-		rawData.BoardType, strings.Join(stageNames, " -> "))
-
-	return profile
-}
 
 // ComputeConfigHash computes a SHA256 hash of the board configuration for change detection.
 func ComputeConfigHash(rawData *BoardRawData) string {
@@ -808,15 +693,30 @@ Respond with ONLY valid JSON matching this structure:
   "estimation_approach": {"type":"story_points|time|none", "field":"fieldId or null"},
   "iteration_info": {"has_iterations":true, "typical_length_days":14, "avg_throughput":0},
   "workflow_summary": "One paragraph describing the workflow",
-  "stale_thresholds": {"Column Name": 3},
-  "health_signals": ["signal1", "signal2"]
+  "stale_thresholds": {"Status Name": 3},
+  "health_signals": ["signal1", "signal2", "signal3"]
 }
 
 Guidelines:
-- Group similar statuses into workflow stages
+- Group similar statuses into workflow stages (e.g. "Triage" and "New" → backlog; "Declined" → other or done)
 - Identify the phase for each stage: backlog, active_work, review, testing, done, other
-- Estimate reasonable stale thresholds (days) per stage
-- Suggest health signals relevant to this board's workflow
+- Set DIFFERENT stale thresholds (days) per status based on expected duration in that phase:
+  - backlog statuses (Backlog, Triage, New): 7-14 days (items can wait)
+  - active_work (In Progress, On Track): 2-3 days (should move quickly)
+  - review (Code Review, DEV REVIEW): 1-2 days (fast feedback loops)
+  - testing (QA, Ready for test): 3-5 days (may need test cycles)
+  - NEVER set the same threshold for all statuses — different phases have different expected durations
+- IMPORTANT: Generate 3-8 specific, actionable health signals based on the board's workflow structure and issue data. Examples:
+  - "Review bottleneck risk — DEV REVIEW + Review have X issues" (when review stages have many items)
+  - "High WIP: N active issues across In Progress / On Track" (when active_work has high counts)
+  - "Missing estimation — T-Shirt Size field available but most issues lack estimates"
+  - "Backlog growing — N issues in Triage/New without assignee"
+  - "No sprint configured — consider time-boxing work for better predictability"
+  - "Testing backlog — Ready for test has N issues waiting"
+  - "Blocked issues — N issues in Declined status need attention"
+  - "Unbalanced workload — top assignee has X issues vs average Y"
+  Tailor signals to the actual issue_sample data (status_distribution, assignee_distribution, priority_distribution).
+  ALWAYS return at least 3 health signals. Never return an empty array.
 - If custom_fields are present, incorporate them into the analysis:
   - Use estimation fields (story_points, tshirt_size) to set estimation_approach
   - Mention relevant role fields (qa_assignee, developer) in workflow summary

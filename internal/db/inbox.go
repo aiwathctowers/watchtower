@@ -534,9 +534,12 @@ func (db *DB) CheckUserReplied(currentUserID, channelID, messageTS, threadTS str
 			return false, fmt.Errorf("checking thread reply: %w", err)
 		}
 	} else {
+		// Check for any reply in the channel after the message: either a top-level
+		// message or a thread reply to the original message (common in DMs).
 		err = db.QueryRow(`SELECT COUNT(*) FROM messages
-			WHERE channel_id = ? AND user_id = ? AND ts > ? AND (thread_ts IS NULL OR thread_ts = '')`,
-			channelID, currentUserID, messageTS).Scan(&count)
+			WHERE channel_id = ? AND user_id = ? AND ts > ?
+			AND (thread_ts IS NULL OR thread_ts = '' OR thread_ts = ?)`,
+			channelID, currentUserID, messageTS, messageTS).Scan(&count)
 		if err != nil {
 			return false, fmt.Errorf("checking channel reply: %w", err)
 		}

@@ -115,7 +115,7 @@ func BuildProjectMap(database *db.DB, cfg *config.Config, now time.Time) ([]Proj
 		} else {
 			forecast = maxForecastWeeks
 		}
-		badge := computeStatusBadge(a, velocity)
+		badge, _ := computeStatusBadge(a, velocity, "", "", 0, now)
 
 		// Build epic entry.
 		epic := ProjectMapEpic{
@@ -229,7 +229,7 @@ func BuildProjectMapForEpic(database *db.DB, cfg *config.Config, epicKey string,
 	} else {
 		forecast = maxForecastWeeks
 	}
-	badge := computeStatusBadge(agg, velocity)
+	badge, _ := computeStatusBadge(agg, velocity, "", "", 0, now)
 
 	epic := ProjectMapEpic{
 		EpicKey:          epicKey,

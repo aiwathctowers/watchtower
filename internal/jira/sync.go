@@ -463,12 +463,23 @@ func (s *Syncer) convertIssue(ctx context.Context, issue Issue, boardID int) (db
 					continue
 				}
 
-				if fm.Role == "story_points" {
+				switch fm.Role {
+				case "story_points":
 					var sp float64
 					if err := json.Unmarshal(rawVal, &sp); err == nil {
 						storyPoints = &sp
 					}
-				} else {
+				case "planned_end":
+					// Use as due date if standard dueDate is empty.
+					if dueDate == "" {
+						var val interface{}
+						if err := json.Unmarshal(rawVal, &val); err == nil {
+							if dateStr := extractDisplayValue(val); dateStr != "" {
+								dueDate = dateStr
+							}
+						}
+					}
+				default:
 					// For other roles, extract a display value.
 					var val interface{}
 					if err := json.Unmarshal(rawVal, &val); err == nil {

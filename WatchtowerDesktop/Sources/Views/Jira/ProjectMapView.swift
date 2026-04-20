@@ -3,12 +3,6 @@ import SwiftUI
 struct ProjectMapView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: ProjectMapViewModel?
-    @State private var selectedTab: Tab = .list
-
-    enum Tab: String, CaseIterable {
-        case list = "List"
-        case gantt = "Gantt"
-    }
 
     var body: some View {
         Group {
@@ -66,31 +60,16 @@ struct ProjectMapView: View {
                     filterChips(vm2)
                 }
 
-                // Tab picker
-                Picker("View", selection: $selectedTab) {
-                    ForEach(Tab.allCases, id: \.self) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 140)
             }
             .padding()
 
             Divider()
 
-            // Search bar (list tab only)
-            if selectedTab == .list, !vm.epics.isEmpty {
+            if !vm.epics.isEmpty {
                 searchBar(vm)
             }
 
-            // Content
-            switch selectedTab {
-            case .list:
-                listContent(vm)
-            case .gantt:
-                ganttContent(vm)
-            }
+            listContent(vm)
         }
     }
 
@@ -251,17 +230,4 @@ struct ProjectMapView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Gantt Content
-
-    @ViewBuilder
-    private func ganttContent(_ vm: ProjectMapViewModel) -> some View {
-        if vm.isLoading {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if vm.epics.isEmpty {
-            emptyState(isFiltered: false)
-        } else {
-            GanttChartView(epics: vm.epics)
-        }
-    }
 }

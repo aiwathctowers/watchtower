@@ -3,10 +3,12 @@ import SwiftUI
 struct UserOverridesWrapper: Codable {
     let staleThresholds: [String: Int]?
     let terminalStages: [String: Bool]?
+    let phaseOverrides: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case staleThresholds = "stale_thresholds"
         case terminalStages = "terminal_stages"
+        case phaseOverrides = "phase_overrides"
     }
 }
 
@@ -18,6 +20,7 @@ struct JiraBoardProfileView: View {
     @State private var profile: BoardProfileDisplay?
     @State private var overrides: [String: Int] = [:]
     @State private var terminalOverrides: [String: Bool] = [:]
+    @State private var phaseOverrides: [String: String] = [:]
     @State private var isAnalyzing = false
     @State private var analyzeError: String?
 
@@ -116,19 +119,48 @@ struct JiraBoardProfileView: View {
         }
     }
 
+    /// Flatten all statuses from stages, apply phase overrides, regroup by effective phase.
+    private func effectiveStatusesByPhase(
+        _ stages: [WorkflowStageDisplay]
+    ) -> [(phase: String, statuses: [(name: String, isTerminal: Bool)])] {
+        // Collect all statuses with their original phase/terminal info.
+        struct StatusInfo {
+            let name: String
+            let originalPhase: String
+            let isTerminal: Bool
+        }
+        var all: [StatusInfo] = []
+        for stage in stages {
+            for status in stage.originalStatuses {
+                all.append(StatusInfo(
+                    name: status,
+                    originalPhase: stage.phase,
+                    isTerminal: stage.isTerminal
+                ))
+            }
+        }
+
+        // Group by effective phase (with overrides applied).
+        let phaseOrder = ["backlog", "active_work", "review", "testing", "done", "other"]
+        var grouped: [String: [(name: String, isTerminal: Bool)]] = [:]
+        for s in all {
+            let effectivePhase = phaseOverrides[s.name] ?? s.originalPhase
+            grouped[effectivePhase, default: []].append((s.name, s.isTerminal))
+        }
+
+        return phaseOrder.compactMap { phase in
+            guard let statuses = grouped[phase], !statuses.isEmpty else { return nil }
+            return (phase, statuses)
+        }
+    }
+
     private func workflowFlow(
         _ stages: [WorkflowStageDisplay]
     ) -> some View {
-        let grouped = Dictionary(
-            grouping: stages,
-            by: { $0.phase }
-        )
-        let phaseOrder = ["backlog", "active_work", "review",
-                          "testing", "done", "other"]
-        let activePhases = phaseOrder.filter { grouped[$0] != nil }
+        let phases = effectiveStatusesByPhase(stages)
 
         return VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(activePhases.enumerated()), id: \.element) { idx, phase in
+            ForEach(Array(phases.enumerated()), id: \.offset) { idx, entry in
                 if idx > 0 {
                     HStack {
                         Spacer()
@@ -139,8 +171,8 @@ struct JiraBoardProfileView: View {
                     }
                 }
                 phaseBlock(
-                    phase: phase,
-                    stages: grouped[phase] ?? []
+                    phase: entry.phase,
+                    statuses: entry.statuses
                 )
             }
         }
@@ -149,7 +181,7 @@ struct JiraBoardProfileView: View {
 
     private func phaseBlock(
         phase: String,
-        stages: [WorkflowStageDisplay]
+        statuses: [(name: String, isTerminal: Bool)]
     ) -> some View {
         let color = phaseColor(phase)
         return VStack(alignment: .leading, spacing: 6) {
@@ -159,8 +191,13 @@ struct JiraBoardProfileView: View {
                 .foregroundStyle(color)
                 .textCase(.uppercase)
             FlowLayout(spacing: 6) {
-                ForEach(stages) { stage in
-                    stagePill(stage, color: color)
+                ForEach(statuses, id: \.name) { status in
+                    statusBadge(
+                        status: status.name,
+                        stageIsTerminal: status.isTerminal,
+                        color: color,
+                        isOverridden: phaseOverrides[status.name] != nil
+                    )
                 }
             }
         }
@@ -171,63 +208,70 @@ struct JiraBoardProfileView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(color.opacity(0.25), lineWidth: 1)
         )
+        .dropDestination(for: String.self) { items, _ in
+            guard let statusName = items.first else { return false }
+            // Don't drop onto the same phase.
+            let currentPhase = phaseOverrides[statusName] ?? originalPhase(for: statusName)
+            guard currentPhase != phase else { return false }
+            phaseOverrides[statusName] = phase
+            applyPhaseOverride(boardID: board.id, status: statusName, phase: phase)
+            return true
+        } isTargeted: { _ in }
     }
 
-    private func stagePill(
-        _ stage: WorkflowStageDisplay,
-        color: Color
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text(stage.name)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                if !stage.typicalDurationSignal.isEmpty {
-                    Text("· \(stage.typicalDurationSignal)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            HStack(spacing: 4) {
-                ForEach(stage.originalStatuses, id: \.self) { status in
-                    statusBadge(status: status, stageIsTerminal: stage.isTerminal, color: color)
-                }
+    /// Look up the original phase for a status from the LLM profile.
+    private func originalPhase(for status: String) -> String? {
+        guard let profile else { return nil }
+        for stage in profile.workflowStages {
+            if stage.originalStatuses.contains(status) {
+                return stage.phase
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+        return nil
     }
 
-    private func statusBadge(status: String, stageIsTerminal: Bool, color: Color) -> some View {
+    private func statusBadge(
+        status: String,
+        stageIsTerminal: Bool,
+        color: Color,
+        isOverridden: Bool = false
+    ) -> some View {
         let isTerminal = terminalOverrides[status] ?? stageIsTerminal
-        return Button {
+        return HStack(spacing: 3) {
+            Circle()
+                .fill(isTerminal ? Color.red.opacity(0.6) : Color.green.opacity(0.6))
+                .frame(width: 6, height: 6)
+            Text(status)
+                .font(.caption2)
+            if isOverridden {
+                Image(systemName: "arrow.uturn.right")
+                    .font(.system(size: 7))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            isTerminal ? Color.red.opacity(0.1) : color.opacity(0.1),
+            in: Capsule()
+        )
+        .overlay(
+            Capsule().stroke(
+                isOverridden ? color.opacity(0.5) : (isTerminal ? Color.red.opacity(0.3) : color.opacity(0.2)),
+                lineWidth: isOverridden ? 1.5 : 1
+            )
+        )
+        .draggable(status)
+        .onTapGesture {
             let newVal = !isTerminal
             terminalOverrides[status] = newVal
             applyTerminalOverride(boardID: board.id, stage: status, isTerminal: newVal)
-        } label: {
-            HStack(spacing: 3) {
-                Circle()
-                    .fill(isTerminal ? Color.red.opacity(0.6) : Color.green.opacity(0.6))
-                    .frame(width: 6, height: 6)
-                Text(status)
-                    .font(.caption2)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                isTerminal ? Color.red.opacity(0.1) : color.opacity(0.1),
-                in: Capsule()
-            )
-            .overlay(
-                Capsule().stroke(
-                    isTerminal ? Color.red.opacity(0.3) : color.opacity(0.2),
-                    lineWidth: 1
-                )
-            )
         }
-        .buttonStyle(.plain)
-        .help(isTerminal ? "\(status): terminal (click to include in initial sync)" : "\(status): active (click to exclude from initial sync)")
+        .help(isOverridden
+              ? "\(status): moved here (drag to another phase, or re-analyze to reset)"
+              : isTerminal
+                ? "\(status): terminal (click to toggle)"
+                : "\(status): active (click to toggle, drag to move)")
     }
 
     private func phaseColor(_ phase: String) -> Color {
@@ -508,6 +552,7 @@ struct JiraBoardProfileView: View {
            ) {
             overrides = wrapper.staleThresholds ?? [:]
             terminalOverrides = wrapper.terminalStages ?? [:]
+            phaseOverrides = wrapper.phaseOverrides ?? [:]
         }
     }
 
@@ -594,6 +639,32 @@ struct JiraBoardProfileView: View {
                 "jira", "boards", "override",
                 String(boardID),
                 "--stale", "\(stage)=\(days)"
+            ]
+            process.environment = Constants.resolvedEnvironment()
+            process.currentDirectoryURL =
+                Constants.processWorkingDirectory()
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = Pipe()
+
+            try? process.run()
+            process.waitUntilExit()
+        }
+    }
+
+    private func applyPhaseOverride(
+        boardID: Int,
+        status: String,
+        phase: String
+    ) {
+        guard let cliPath = Constants.findCLIPath() else { return }
+
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = [
+                "jira", "boards", "override",
+                String(boardID),
+                "--phase", "\(status)=\(phase)"
             ]
             process.environment = Constants.resolvedEnvironment()
             process.currentDirectoryURL =

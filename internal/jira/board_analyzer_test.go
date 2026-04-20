@@ -11,52 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildFallbackProfile(t *testing.T) {
-	rawData := &BoardRawData{
-		BoardName:  "Sprint Board",
-		ProjectKey: "PROJ",
-		BoardType:  "scrum",
-		Config: BoardConfig{
-			Columns: []BoardColumn{
-				{Name: "To Do", Statuses: []BoardColumnStatus{{Name: "Open"}}},
-				{Name: "In Progress", Statuses: []BoardColumnStatus{{Name: "In Progress"}}},
-				{Name: "Code Review", Statuses: []BoardColumnStatus{{Name: "In Review"}}},
-				{Name: "Done", Statuses: []BoardColumnStatus{{Name: "Done"}, {Name: "Closed"}}},
-			},
-			Estimation: &EstimationField{FieldID: "story_points", DisplayName: "Story Points"},
-		},
-		Sprints: []SprintSummary{
-			{Name: "Sprint 1", State: "active"},
-		},
-	}
-
-	profile := BuildFallbackProfile(rawData)
-
-	assert.Len(t, profile.WorkflowStages, 4)
-	assert.Equal(t, "backlog", profile.WorkflowStages[0].Phase)
-	assert.Equal(t, "active_work", profile.WorkflowStages[1].Phase)
-	assert.Equal(t, "review", profile.WorkflowStages[2].Phase)
-	assert.Equal(t, "done", profile.WorkflowStages[3].Phase)
-	assert.True(t, profile.WorkflowStages[3].IsTerminal)
-
-	assert.Equal(t, "story_points", profile.EstimationApproach.Type)
-	assert.True(t, profile.IterationInfo.HasIterations)
-
-	assert.Contains(t, profile.WorkflowSummary, "scrum")
-	assert.Greater(t, len(profile.StaleThresholds), 0)
-}
-
-func TestBuildFallbackProfile_NoEstimation(t *testing.T) {
-	rawData := &BoardRawData{
-		BoardType: "kanban",
-		Config:    BoardConfig{},
-	}
-
-	profile := BuildFallbackProfile(rawData)
-	assert.Equal(t, "none", profile.EstimationApproach.Type)
-	assert.False(t, profile.IterationInfo.HasIterations)
-}
-
 func TestComputeConfigHash(t *testing.T) {
 	rawData1 := &BoardRawData{
 		Config: BoardConfig{

@@ -77,7 +77,7 @@ struct EpicCardView: View {
                     statusChip
                 }
 
-                // Row 2: Progress bar + counts + warnings
+                // Row 2: Owner + due date + SP + progress + warnings
                 HStack(spacing: 10) {
                     // Owner
                     if let owner = epic.ownerName {
@@ -87,9 +87,24 @@ struct EpicCardView: View {
                             .lineLimit(1)
                     }
 
+                    // Due date
+                    if let due = epic.dueDate {
+                        let overdue = JiraHelpers.daysSince(due) > 0
+                        Label(JiraHelpers.shortDate(due), systemImage: "calendar")
+                            .font(.caption)
+                            .foregroundStyle(overdue ? .red : .secondary)
+                    }
+
+                    // Story points
+                    if epic.totalStoryPoints > 0 {
+                        Text("\(Int(epic.doneStoryPoints))/\(Int(epic.totalStoryPoints)) SP")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Spacer()
 
-                    // Counts
+                    // Issue counts
                     Text("\(epic.doneIssues)/\(epic.totalIssues)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -126,6 +141,18 @@ struct EpicCardView: View {
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                }
+
+                // Row 3: Status reason
+                if epic.statusBadge != .onTrack || epic.velocityPerWeek > 0 {
+                    Text(epic.statusReason)
+                        .font(.caption2)
+                        .foregroundStyle(
+                            epic.statusBadge == .behind ? .red
+                            : epic.statusBadge == .atRisk ? .orange
+                            : .secondary
+                        )
+                        .lineLimit(1)
                 }
             }
             .padding(.vertical, 10)
@@ -183,15 +210,49 @@ struct EpicCardView: View {
 
     private var expandedView: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Forecast
-            if let fw = epic.forecastWeeks {
-                HStack(spacing: 4) {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
+            // Velocity & forecast
+            HStack(spacing: 16) {
+                if epic.velocityPerWeek > 0 {
+                    Label(
+                        "\(String(format: "%.1f", epic.velocityPerWeek)) issues/wk",
+                        systemImage: "speedometer"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if let fw = epic.forecastWeeks, fw < 999 {
+                    let forecastDate = Calendar.current.date(
+                        byAdding: .day, value: Int(fw * 7), to: Date()
+                    ).map { JiraHelpers.shortDate(ISO8601DateFormatter().string(from: $0)) }
+
+                    if let due = epic.dueDate {
+                        // Show forecast vs deadline
+                        let overdue = forecastDate.map { fd in fd > JiraHelpers.shortDate(due) } ?? true
+                        Label(
+                            forecastDate.map { "Est. \($0)" } ?? "~\(String(format: "%.0f", fw)) wk",
+                            systemImage: "chart.line.uptrend.xyaxis"
+                        )
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Forecast: ~\(String(format: "%.1f", fw)) weeks remaining")
+                        .foregroundStyle(overdue ? .red : .green)
+                    } else {
+                        Label(
+                            "~\(String(format: "%.0f", fw)) wk remaining",
+                            systemImage: "chart.line.uptrend.xyaxis"
+                        )
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(fw > 8 ? .orange : .secondary)
+                    }
+                }
+
+                if epic.totalStoryPoints > 0 {
+                    let remainingSP = epic.totalStoryPoints - epic.doneStoryPoints
+                    Label(
+                        "\(Int(remainingSP)) SP remaining",
+                        systemImage: "number.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
 
@@ -262,6 +323,21 @@ struct EpicCardView: View {
                 .foregroundStyle(isStale ? .orange : .primary)
 
             Spacer()
+
+            // Story points
+            if let sp = issue.storyPoints, sp > 0 {
+                Text("\(Int(sp)) SP")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            // Due date
+            if !issue.dueDate.isEmpty {
+                let overdue = issue.statusCategory != "done" && JiraHelpers.daysSince(issue.dueDate) > 0
+                Text(JiraHelpers.shortDate(issue.dueDate))
+                    .font(.caption2)
+                    .foregroundStyle(overdue ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+            }
 
             if !issue.assigneeDisplayName.isEmpty {
                 Text(issue.assigneeDisplayName)

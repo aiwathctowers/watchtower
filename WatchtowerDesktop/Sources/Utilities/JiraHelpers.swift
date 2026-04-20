@@ -35,12 +35,41 @@ enum JiraHelpers {
         return URL(string: "\(base)/browse/\(issueKey)")
     }
 
-    static func daysSince(_ dateStr: String) -> Int {
-        guard !dateStr.isEmpty else { return 0 }
+    private static let shortDateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "dd MMM"
+        return fmt
+    }()
+
+    static func shortDate(_ dateStr: String) -> String {
+        guard !dateStr.isEmpty else { return "" }
+        // Try date-only format first (YYYY-MM-DD from Jira due dates)
+        if dateStr.count == 10, let date = dateOnlyFormatter.date(from: dateStr) {
+            return shortDateFormatter.string(from: date)
+        }
         guard let date = isoFormatter.date(from: dateStr)
                 ?? fallbackISOFormatter.date(from: dateStr) else {
-            return 0
+            return String(dateStr.prefix(10))
         }
+        return shortDateFormatter.string(from: date)
+    }
+
+    private static let dateOnlyFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        return fmt
+    }()
+
+    static func daysSince(_ dateStr: String) -> Int {
+        guard !dateStr.isEmpty else { return 0 }
+        let date: Date?
+        if dateStr.count == 10 {
+            date = dateOnlyFormatter.date(from: dateStr)
+        } else {
+            date = isoFormatter.date(from: dateStr)
+                ?? fallbackISOFormatter.date(from: dateStr)
+        }
+        guard let date else { return 0 }
         return max(
             0,
             Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0

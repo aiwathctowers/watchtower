@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -11,15 +12,19 @@ import (
 // EpicProgressEntry holds computed progress and forecast for a single epic.
 type EpicProgressEntry struct {
 	EpicKey          string
-	EpicName         string // summary of the epic issue from jira_issues
+	EpicName         string  // summary of the epic issue from jira_issues
 	TotalIssues      int
 	DoneIssues       int
 	InProgressIssues int
 	ProgressPct      float64 // done/total * 100
 	WeeklyDeltaPct   float64 // resolved this week / total * 100
 	StatusBadge      string  // "on_track", "at_risk", "behind"
+	StatusReason     string  // human-readable reason for the badge
 	ForecastWeeks    float64 // (total - done) / velocity_per_week
+	ForecastDate     string  // ISO date when epic is expected to finish (empty if no velocity)
 	VelocityPerWeek  float64 // resolved last 28 days / 4
+	DueDate          string  // epic's due date (empty if none)
+	DaysLate         int     // >0 means forecast is N days past due; <=0 means on time or no due date
 }
 
 // minEpicIssues is the minimum number of child issues for an epic to be included.
@@ -77,12 +82,39 @@ func ComputeEpicProgress(database *db.DB, cfg *config.Config, now time.Time) ([]
 			forecast = maxForecastWeeks
 		}
 
-		badge := computeStatusBadge(a, velocity)
-
 		epicName := ""
+		dueDate := ""
 		if issue, ok := epicIssues[a.EpicKey]; ok {
 			epicName = issue.Summary
+			dueDate = issue.DueDate
 		}
+
+		// Compute forecast date.
+		var forecastDate string
+		var daysLate int
+		if velocity > 0 && forecast < maxForecastWeeks {
+			fd := now.AddDate(0, 0, int(forecast*7))
+			forecastDate = fd.Format("2006-01-02")
+
+			// Compare with due date.
+			if dueDate != "" {
+				if due, err := time.Parse("2006-01-02", dueDate); err == nil {
+					diff := fd.Sub(due)
+					if diff > 0 {
+						daysLate = int(diff.Hours() / 24)
+					}
+				}
+			}
+		} else if dueDate != "" {
+			// No velocity but has due date — check if already overdue.
+			if due, err := time.Parse("2006-01-02", dueDate); err == nil {
+				if now.After(due) {
+					daysLate = int(now.Sub(due).Hours() / 24)
+				}
+			}
+		}
+
+		badge, reason := computeStatusBadge(a, velocity, dueDate, forecastDate, daysLate, now)
 
 		entries = append(entries, EpicProgressEntry{
 			EpicKey:          a.EpicKey,
@@ -93,8 +125,12 @@ func ComputeEpicProgress(database *db.DB, cfg *config.Config, now time.Time) ([]
 			ProgressPct:      progressPct,
 			WeeklyDeltaPct:   weeklyDelta,
 			StatusBadge:      badge,
+			StatusReason:     reason,
 			ForecastWeeks:    forecast,
+			ForecastDate:     forecastDate,
 			VelocityPerWeek:  velocity,
+			DueDate:          dueDate,
+			DaysLate:         daysLate,
 		})
 	}
 
@@ -111,36 +147,59 @@ func ComputeEpicProgress(database *db.DB, cfg *config.Config, now time.Time) ([]
 	return entries, nil
 }
 
-// computeStatusBadge determines the status badge based on velocity and weekly progress.
-//
-// Logic:
-//   - behind: velocity == 0 and there are remaining issues, OR no progress this week and epic not done
-//   - at_risk: velocity > 0 but weekly resolved < expected weekly rate (total / (total-done) adjusted)
-//   - on_track: healthy pace
-func computeStatusBadge(a db.EpicAggRow, velocity float64) string {
+// computeStatusBadge determines the status badge and human-readable reason
+// based on velocity, weekly progress, and deadline forecast.
+func computeStatusBadge(a db.EpicAggRow, velocity float64, dueDate, forecastDate string, daysLate int, now time.Time) (string, string) {
 	remaining := a.Total - a.Done
 	if remaining == 0 {
-		return "on_track" // epic is complete
+		return "on_track", "All issues done"
+	}
+
+	// Deadline-aware checks first.
+	if daysLate > 0 && velocity > 0 {
+		weeks := float64(daysLate) / 7
+		return "behind", fmt.Sprintf("Forecast %s, due %s — ~%.0f wk late", forecastDate, dueDate, weeks)
+	}
+	if daysLate > 0 && velocity == 0 {
+		return "behind", fmt.Sprintf("No velocity, already %dd past due date %s", daysLate, dueDate)
 	}
 
 	if velocity == 0 {
-		return "behind"
+		return "behind", "No issues resolved in the last 4 weeks"
 	}
 
-	// Expected weekly rate: to finish the remaining items at current velocity,
-	// we compare actual weekly progress to velocity.
-	// If resolved this week >= velocity (i.e. pace is at or above average), it's on track.
-	// If resolved this week > 0 but below velocity, it's at risk.
-	// If nothing resolved this week, it's behind.
 	if a.ResolvedLastWeek == 0 {
-		return "behind"
+		reason := "No issues resolved this week"
+		if dueDate != "" {
+			if due, err := time.Parse("2006-01-02", dueDate); err == nil {
+				daysLeft := int(due.Sub(now).Hours() / 24)
+				if daysLeft > 0 {
+					reason += fmt.Sprintf(", %dd until due date", daysLeft)
+				}
+			}
+		}
+		return "behind", reason
+	}
+
+	// Check if forecast misses deadline even with current velocity.
+	if dueDate != "" && forecastDate != "" && forecastDate > dueDate {
+		weeks := float64(daysLate) / 7
+		if weeks < 1 {
+			return "at_risk", fmt.Sprintf("Tight — forecast %s, due %s", forecastDate, dueDate)
+		}
+		return "at_risk", fmt.Sprintf("Forecast %s, due %s — ~%.0f wk late", forecastDate, dueDate, weeks)
 	}
 
 	if float64(a.ResolvedLastWeek) < velocity {
-		return "at_risk"
+		pct := int((1.0 - float64(a.ResolvedLastWeek)/velocity) * 100)
+		return "at_risk", fmt.Sprintf("Velocity dropped %d%% vs avg (%d vs %.1f/wk)", pct, a.ResolvedLastWeek, velocity)
 	}
 
-	return "on_track"
+	// On track — include deadline info if available.
+	if dueDate != "" && forecastDate != "" {
+		return "on_track", fmt.Sprintf("On pace — forecast %s, due %s", forecastDate, dueDate)
+	}
+	return "on_track", fmt.Sprintf("%.1f issues/wk, %d remaining", velocity, remaining)
 }
 
 // badgeOrder returns sort priority (lower = first).

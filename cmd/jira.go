@@ -216,6 +216,7 @@ func init() {
 	jiraBoardsAnalyzeCmd.Flags().Bool("auto", false, "auto re-analyze boards with changed config (respects 24h cooldown)")
 	jiraBoardsOverrideCmd.Flags().String("stale", "", "stale thresholds (e.g. 'Code Review=1,QA=2')")
 	jiraBoardsOverrideCmd.Flags().String("terminal", "", "terminal stage overrides (e.g. 'Done=true,Declined=false')")
+	jiraBoardsOverrideCmd.Flags().String("phase", "", "phase overrides (e.g. 'Triage=backlog,Declined=done')")
 
 	jiraSyncCmd.Flags().IntVar(&jiraSyncFlagBoard, "board", 0, "sync only this board ID")
 	jiraSyncCmd.Flags().BoolVar(&jiraSyncFlagProgressJSON, "progress-json", false, "output progress as JSON lines to stdout")
@@ -1130,9 +1131,10 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 
 	staleFlag, _ := cmd.Flags().GetString("stale")
 	terminalFlag, _ := cmd.Flags().GetString("terminal")
+	phaseFlag, _ := cmd.Flags().GetString("phase")
 
-	if staleFlag == "" && terminalFlag == "" {
-		return fmt.Errorf("at least one of --stale or --terminal is required")
+	if staleFlag == "" && terminalFlag == "" && phaseFlag == "" {
+		return fmt.Errorf("at least one of --stale, --terminal, or --phase is required")
 	}
 
 	// Read existing overrides and merge new values on top.
@@ -1176,6 +1178,24 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 			}
 			val := strings.TrimSpace(kv[1]) == "true"
 			overrides.TerminalStages[strings.TrimSpace(kv[0])] = val
+		}
+	}
+
+	validPhases := map[string]bool{"backlog": true, "active_work": true, "review": true, "testing": true, "done": true, "other": true}
+	if phaseFlag != "" {
+		if overrides.PhaseOverrides == nil {
+			overrides.PhaseOverrides = make(map[string]string)
+		}
+		for _, part := range strings.Split(phaseFlag, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid phase format: %q (expected 'StatusName=phase')", part)
+			}
+			phase := strings.TrimSpace(kv[1])
+			if !validPhases[phase] {
+				return fmt.Errorf("invalid phase %q; must be one of: backlog, active_work, review, testing, done, other", phase)
+			}
+			overrides.PhaseOverrides[strings.TrimSpace(kv[0])] = phase
 		}
 	}
 	overridesJSON, err := json.Marshal(overrides)

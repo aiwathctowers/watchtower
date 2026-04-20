@@ -113,10 +113,13 @@ final class WorkloadViewModel {
                         let boards = try JiraBoard.filter(Column("is_selected") == true).fetchAll(db)
                         var statuses = Set<String>()
                         for board in boards where !board.llmProfileJSON.isEmpty {
-                            if let data = board.llmProfileJSON.data(using: .utf8),
-                               let profile = try? JSONDecoder().decode(BoardProfileDisplay.self, from: data) {
-                                for stage in profile.workflowStages where stage.phase == "testing" {
-                                    statuses.formUnion(stage.originalStatuses.map { $0.lowercased() })
+                            if let data = board.llmProfileJSON.data(using: .utf8) {
+                                let decoder = JSONDecoder()
+                                decoder.keyDecodingStrategy = .convertFromSnakeCase
+                                if let profile = try? decoder.decode(BoardProfileDisplay.self, from: data) {
+                                    for stage in profile.workflowStages where stage.phase == "testing" {
+                                        statuses.formUnion(stage.originalStatuses.map { $0.lowercased() })
+                                    }
                                 }
                             }
                         }
