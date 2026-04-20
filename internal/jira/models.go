@@ -30,23 +30,24 @@ type Issue struct {
 
 // IssueFields holds the fields of a Jira issue.
 type IssueFields struct {
-	Summary     string      `json:"summary"`
-	Description interface{} `json:"description"`
-	IssueType   IssueType   `json:"issuetype"`
-	Status      Status      `json:"status"`
-	Assignee    *User       `json:"assignee"`
-	Reporter    *User       `json:"reporter"`
-	Priority    *Priority   `json:"priority"`
-	Created     string      `json:"created"`
-	Updated     string      `json:"updated"`
-	DueDate     *string     `json:"duedate"`
-	Labels      []string    `json:"labels"`
-	Components  []Component `json:"components"`
-	IssueLinks  []IssueLink `json:"issuelinks"`
-	Sprint      *Sprint     `json:"sprint"`
-	Epic        *EpicRef    `json:"epic"`
-	Parent      *ParentRef  `json:"parent"`
-	Resolved    *string     `json:"resolutiondate"`
+	Summary     string       `json:"summary"`
+	Description interface{}  `json:"description"`
+	IssueType   IssueType    `json:"issuetype"`
+	Status      Status       `json:"status"`
+	Assignee    *User        `json:"assignee"`
+	Reporter    *User        `json:"reporter"`
+	Priority    *Priority    `json:"priority"`
+	Created     string       `json:"created"`
+	Updated     string       `json:"updated"`
+	DueDate     *string      `json:"duedate"`
+	Labels      []string     `json:"labels"`
+	Components  []Component  `json:"components"`
+	IssueLinks  []IssueLink  `json:"issuelinks"`
+	Sprint      *Sprint      `json:"sprint"`
+	Epic        *EpicRef     `json:"epic"`
+	Parent      *ParentRef   `json:"parent"`
+	Resolved    *string      `json:"resolutiondate"`
+	FixVersions []FixVersion `json:"fixVersions"`
 }
 
 // IssueType represents the type of a Jira issue.
@@ -106,6 +107,16 @@ type IssueRef struct {
 	Key string `json:"key"`
 }
 
+// FixVersion represents a Jira fix version (release).
+type FixVersion struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReleaseDate string `json:"releaseDate"`
+	Released    bool   `json:"released"`
+	Archived    bool   `json:"archived"`
+}
+
 // Sprint represents a Jira sprint.
 type Sprint struct {
 	ID           int    `json:"id"`
@@ -129,11 +140,14 @@ type ParentRef struct {
 }
 
 // SearchResult is a paginated response from the Jira search API.
+// The new /rest/api/3/search/jql endpoint returns `isLast` and `nextPageToken` instead of `total`.
 type SearchResult struct {
-	StartAt    int     `json:"startAt"`
-	MaxResults int     `json:"maxResults"`
-	Total      int     `json:"total"`
-	Issues     []Issue `json:"issues"`
+	StartAt       int     `json:"startAt"`
+	MaxResults    int     `json:"maxResults"`
+	Total         int     `json:"total"`
+	IsLast        bool    `json:"isLast"`
+	NextPageToken string  `json:"nextPageToken"`
+	Issues        []Issue `json:"issues"`
 }
 
 // SprintList is a paginated response from the Jira sprints API.

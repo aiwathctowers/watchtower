@@ -9,33 +9,55 @@ struct JiraUserMappingSettingsView: View {
     @State private var slackUsers: [User] = []
     @State private var observationTask: Task<Void, Never>?
 
+    @State private var isExpanded = false
+    @State private var isResolving = false
+
     var body: some View {
         Section("User Mapping") {
-            HStack {
-                Label(
-                    "\(mappedCount) matched",
-                    systemImage: "person.fill.checkmark"
-                )
-                .font(.caption)
-                .foregroundStyle(.green)
+            DisclosureGroup(isExpanded: $isExpanded) {
+                if mappings.isEmpty {
+                    Text("No Jira users synced yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(
+                        mappings,
+                        id: \.jiraAccountId
+                    ) { mapping in
+                        userRow(mapping)
+                    }
+                }
+            } label: {
+                HStack {
+                    Label(
+                        "\(mappedCount) matched",
+                        systemImage: "person.fill.checkmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.green)
 
-                Label(
-                    "\(unmappedCount) unmatched",
-                    systemImage: "person.fill.questionmark"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
+                    Label(
+                        "\(unmappedCount) unmatched",
+                        systemImage: "person.fill.questionmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
 
-            if mappings.isEmpty {
-                Text("No Jira users synced yet")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(
-                    mappings,
-                    id: \.jiraAccountId
-                ) { mapping in
-                    userRow(mapping)
+                    Spacer()
+
+                    Button {
+                        resolveUsers()
+                    } label: {
+                        if isResolving {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Resolve", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.caption)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isResolving)
                 }
             }
         }
@@ -95,13 +117,21 @@ struct JiraUserMappingSettingsView: View {
         _ mapping: JiraUserMap
     ) -> some View {
         Menu {
-            ForEach(slackUsers, id: \.id) { user in
+            ForEach(
+                slackUsers.prefix(50),
+                id: \.id
+            ) { user in
                 Button(user.displayName) {
                     assignSlackUser(
                         mapping: mapping,
                         slackUserId: user.id
                     )
                 }
+            }
+            if slackUsers.count > 50 {
+                Divider()
+                Text("\(slackUsers.count - 50) more — use CLI to assign")
+                    .foregroundStyle(.secondary)
             }
         } label: {
             Label("Assign Slack user", systemImage: "link")
@@ -146,13 +176,34 @@ struct JiraUserMappingSettingsView: View {
             process.environment = Constants.resolvedEnvironment()
             process.currentDirectoryURL =
                 Constants.processWorkingDirectory()
-            process.standardOutput = Pipe()
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = Pipe()
 
             do {
                 try process.run()
                 process.waitUntilExit()
             } catch {}
+        }
+    }
+
+    private func resolveUsers() {
+        guard let cliPath = Constants.findCLIPath() else { return }
+        isResolving = true
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = ["jira", "users", "resolve"]
+            process.environment = Constants.resolvedEnvironment()
+            process.currentDirectoryURL = Constants.processWorkingDirectory()
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {}
+            await MainActor.run {
+                isResolving = false
+            }
         }
     }
 

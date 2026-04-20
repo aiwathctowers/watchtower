@@ -1089,6 +1089,7 @@ func (p *Pipeline) enrichKeyMessages(channelID, keyMessagesJSON string, fallback
 	type enrichedMsg struct {
 		TS        string `json:"ts"`
 		ChannelID string `json:"channel_id"`
+		ThreadTS  string `json:"thread_ts,omitempty"`
 		UserID    string `json:"user_id"`
 		Author    string `json:"author"`
 		Text      string `json:"text"`
@@ -1106,9 +1107,14 @@ func (p *Pipeline) enrichKeyMessages(channelID, keyMessagesJSON string, fallback
 			author = "@" + name
 		}
 		p.cacheMu.RUnlock()
+		threadTS := ""
+		if msg.ThreadTS.Valid {
+			threadTS = msg.ThreadTS.String
+		}
 		enriched = append(enriched, enrichedMsg{
 			TS:        msg.TS,
 			ChannelID: msg.ChannelID,
+			ThreadTS:  threadTS,
 			UserID:    msg.UserID,
 			Author:    author,
 			Text:      text,
@@ -1441,7 +1447,7 @@ func (p *Pipeline) languageInstruction() string {
 
 // textSimilarityThreshold is the minimum Jaccard similarity for text-based dedup.
 // Calibrated on production data: duplicates score 0.22-0.46, unrelated 0.00-0.04.
-const textSimilarityThreshold = 0.20
+const textSimilarityThreshold = 0.30
 
 // reWordTokenizer splits text into word tokens for similarity comparison.
 var reWordTokenizer = regexp.MustCompile(`[\p{L}\d]{3,}`)
@@ -1604,6 +1610,7 @@ func filterValidSourceRefs(raw string) string {
 	var refs []struct {
 		TS        string `json:"ts"`
 		ChannelID string `json:"channel_id,omitempty"`
+		ThreadTS  string `json:"thread_ts,omitempty"`
 		Author    string `json:"author,omitempty"`
 		Text      string `json:"text,omitempty"`
 	}

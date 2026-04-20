@@ -22,6 +22,7 @@ var Defaults = map[string]string{
 	TracksExtractBatch: defaultTracksExtractBatch,
 	PeopleBatch:        defaultPeopleBatch,
 	TasksGenerate:      defaultTasksGenerate,
+	TasksUpdate:        defaultTasksUpdate,
 	MeetingPrep:        defaultMeetingPrep,
 }
 
@@ -43,6 +44,7 @@ var AllIDs = []string{
 	BriefingDaily,
 	InboxPrioritize,
 	TasksGenerate,
+	TasksUpdate,
 	MeetingPrep,
 }
 
@@ -67,6 +69,7 @@ var DefaultVersions = map[string]int{
 	DigestChannelBatch: 2, // v2: full decision/situation rules, 2-7 topics, 2000 char running_summary
 	PeopleBatch:        1, // v1: batch people cards for low-data users
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
+	TasksUpdate:        1, // v1: AI task update from user instruction
 	MeetingPrep:        3, // v3: Jira context for attendees (workload, shared issues)
 }
 
@@ -88,6 +91,7 @@ var Descriptions = map[string]string{
 	DigestChannelBatch: "Channel batch digest — multi-channel analysis for low-activity channels",
 	PeopleBatch:        "People batch cards — lightweight cards for low-data users in one AI call",
 	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
+	TasksUpdate:        "Task update — AI-powered task modification from user instruction",
 	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
 }
 
@@ -274,7 +278,9 @@ Your task: identify actions, requests, tasks, and expectations directed at this 
 
 CRITICAL: Group related requests into a SINGLE track. If multiple messages discuss the same topic/task, combine them into ONE comprehensive track — do NOT create separate items for each message about the same topic.
 
-DEDUPLICATION: Review the EXISTING TRACKS section below. If a message relates to an existing track (from ANY channel, not just this one), UPDATE it (set "existing_id" to the track's ID) instead of creating a new one. This enables cross-channel topic merging — if the same initiative is discussed in #backend and #infra, it should be ONE track.
+DEDUPLICATION: Review the EXISTING TRACKS section below. If a message is clearly about the same initiative as an existing track (from ANY channel), UPDATE it (set "existing_id") instead of creating a new one.
+
+TOPIC SEPARATION (equally important): Each track MUST be about ONE coherent initiative. Do NOT merge unrelated topics into a single track — different processes, different projects, different bugs = separate tracks. When unsure if topics are related, keep them separate.
 
 COMPLETION DETECTION: If you see messages confirming that an existing track has been COMPLETED, return the track with "existing_id" and "status_hint": "done". Do NOT ignore completion signals.
 
@@ -304,7 +310,7 @@ Return ONLY a JSON object (no markdown fences, no explanation):
         {"name": "@username", "user_id": "U123", "stance": "brief summary of this person's position"}
       ],
       "source_refs": [
-        {"ts": "1234567890.123456", "channel_id": "C123ABC", "author": "@username", "text": "key quote (1 sentence)"}
+        {"ts": "1234567890.123456", "channel_id": "C123ABC", "thread_ts": "1234567890.000000", "author": "@username", "text": "key quote (1 sentence)"}
       ],
       "sub_items": [
         {"text": "specific sub-task", "status": "open"}
@@ -320,7 +326,7 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 
 Rules:
 - GROUPING: Multiple messages about the same topic = ONE track. Aim for 0-5 tracks per channel.
-- CROSS-CHANNEL MERGE: If the topic matches an existing track from another channel, set existing_id to that track. This is the key feature — one topic across channels = one track.
+- CROSS-CHANNEL MERGE: If the topic clearly matches an existing track from another channel (same initiative), set existing_id.
 - Only extract tracks with a CLEAR actionable request. Skip vague mentions.
 - Look for BOTH explicit and implicit tracks:
   * Direct requests, assignments, questions expecting action, commitments, review requests, follow-ups
@@ -333,9 +339,9 @@ Rules:
 - category: MUST be one of: code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
 - ownership: "mine" (task is on user), "delegated" (user's report owns it), "watching" (user monitors, HIGH priority only)
 - ball_on: user_id of who acts next
-- source_refs: 2-5 most important messages as footnotes. MUST copy ts and channel_id exactly from key_messages data — do NOT invent timestamps
+- source_refs: 2-5 most important messages as footnotes. MUST copy ts, channel_id, and thread_ts exactly from key_messages data — do NOT invent timestamps
 - sub_items: break into sub-tasks with "open"/"done" status, 2-5 per track
-- existing_id: match against EXISTING TRACKS from ALL channels. STRONGLY prefer updating over creating duplicates.
+- existing_id: match against EXISTING TRACKS from ALL channels. Only set when the topic is clearly the SAME initiative — if unsure, create a new track.
 - status_hint: "done" if confirmed complete, "" otherwise. Only with existing_id.
 - If no tracks are found, return {"items": []}
 %[13]s
@@ -739,15 +745,21 @@ const defaultTracksExtractBatch = `You are analyzing channel digests from multip
 
 Each channel below has pre-analyzed topics with decisions, action items, and situations extracted from channel digests. Extract actionable tracks from these structured observations.
 
-CRITICAL — DEDUPLICATION (read this carefully):
+CRITICAL — DEDUPLICATION:
 1. BEFORE creating any new track, scan the ENTIRE "EXISTING TRACKS" section below.
-2. If a topic is about the same initiative, project, task, or discussion as an existing track — even if phrased differently or from a different channel — you MUST set "existing_id" to that track's ID instead of creating a new one.
-3. When in doubt, UPDATE an existing track rather than creating a new one. Duplicates are the worst outcome.
+2. If a topic is about the same initiative, project, task, or discussion as an existing track — even if phrased differently or from a different channel — set "existing_id" to that track's ID instead of creating a new one.
 
-CRITICAL — GROUPING:
+CRITICAL — TOPIC SEPARATION (equally important as deduplication):
+1. Each track MUST represent ONE coherent initiative or workstream. Topics about different projects, different processes, or different technical areas MUST be separate tracks.
+2. Do NOT merge topics just because they come from the same channel or the same discussion thread. Ask: "Is this the SAME initiative?" — if the answer is not a clear yes, keep them separate.
+3. Examples of topics that MUST be separate tracks:
+   - A process change (e.g. new workflow step) vs. a Jira project setup vs. a bug fix — these are 3 separate tracks
+   - A hiring decision vs. a technical architecture change — 2 separate tracks
+   - A release planning discussion vs. a security incident — 2 separate tracks
+
+GROUPING:
 1. Multiple topics about the same initiative/project/task = ONE track. Do NOT create separate tracks for different aspects of the same thing.
-2. A track should represent ONE coherent initiative or workstream. Do NOT mix unrelated topics into a single track just because they come from the same channel.
-3. Aim for 0-3 tracks per channel. If you're generating more, you're probably not grouping enough.
+2. Aim for 0-3 tracks per channel. But do NOT sacrifice topic separation to hit this target — correctness matters more than count.
 
 COMPLETION DETECTION: If topics indicate that an existing track has been COMPLETED, return the track with "existing_id" and "status_hint": "done".
 
@@ -772,7 +784,7 @@ Return ONLY a JSON array (no markdown fences, no explanation):
         "decision_summary": "",
         "decision_options": [],
         "participants": [{"name": "@username", "user_id": "U123", "stance": "brief summary"}],
-        "source_refs": [{"ts": "1234567890.123456", "channel_id": "C123ABC", "author": "@username", "text": "key quote"}],
+        "source_refs": [{"ts": "1234567890.123456", "channel_id": "C123ABC", "thread_ts": "1234567890.000000", "author": "@username", "text": "key quote"}],
         "sub_items": [{"text": "sub-task", "status": "open"}],
         "ownership": "mine",
         "ball_on": "U123",
@@ -787,9 +799,9 @@ Return [] if no tracks found in any channel.
 %s
 
 Rules:
-- GROUPING: Multiple topics about the same initiative = ONE track. Aim for 0-3 tracks per channel. Different aspects of the same project (e.g. design discussion + implementation + review) = ONE track.
-- MERGE WITH EXISTING: If a topic matches an existing track (from ANY channel, including the same one), set existing_id. This is the most important rule — one initiative = one track, always.
-- TOPIC SEPARATION: Each track should be about ONE coherent initiative. Do NOT combine unrelated topics into a single track. If topics are about genuinely different things, create separate tracks.
+- GROUPING: Multiple topics about the same initiative = ONE track. Different aspects of the same project (e.g. design discussion + implementation + review) = ONE track.
+- MERGE WITH EXISTING: If a topic clearly matches an existing track (same project/initiative), set existing_id.
+- TOPIC SEPARATION (equally important as merge): Each track MUST be about ONE coherent initiative. Do NOT combine unrelated topics — different processes, different projects, different bug fixes = separate tracks. When unsure if topics are related, keep them separate.
 - Only extract tracks with a CLEAR actionable request or decision needing action. Skip informational topics with no action expected.
 - Extract tracks from:
   * Action items assigned to the user, decisions requiring user input, requests and tasks directed at user
@@ -802,9 +814,9 @@ Rules:
 - category: MUST be one of: code_review, decision_needed, info_request, task, approval, follow_up, bug_fix, discussion
 - ownership: "mine" (task is on user), "delegated" (user's report owns it), "watching" (user monitors, HIGH priority only)
 - ball_on: user_id of who acts next
-- source_refs: reference key messages from digest topics. MUST copy ts and channel_id exactly from enriched key_messages — do NOT invent timestamps
+- source_refs: reference key messages from digest topics. MUST copy ts, channel_id, and thread_ts exactly from enriched key_messages — do NOT invent timestamps
 - sub_items: break into sub-tasks with "open"/"done" status, 2-5 per track
-- existing_id: match against EXISTING TRACKS by meaning, not exact wording. ALWAYS prefer updating over creating duplicates. If you're unsure whether a topic matches an existing track, it probably does — set existing_id.
+- existing_id: match against EXISTING TRACKS by meaning, not exact wording. Only set existing_id when the topic is clearly about the SAME initiative. If unsure, create a new track — a duplicate is easier to merge later than a wrongly-merged track is to split.
 - status_hint: "done" if confirmed complete, "" otherwise. Only with existing_id.
 - SKIP channels where nothing actionable was found — omit them from the result entirely
 %s
@@ -881,8 +893,43 @@ Return ONLY valid JSON in this exact format:
   "priority": "high|medium|low",
   "due_date": "YYYY-MM-DDTHH:MM",
   "sub_items": [
-    {"text": "step 1 description", "done": false},
+    {"text": "step 1 description", "done": false, "due_date": "YYYY-MM-DDTHH:MM"},
     {"text": "step 2 description", "done": false}
+  ]
+}
+
+Note: sub-item due_date is optional — only include it when a specific deadline makes sense for that step.`
+
+const defaultTasksUpdate = `You are a task update assistant. The user has an existing task and wants to modify it based on their instruction.
+
+Current date/time: %s
+
+=== CURRENT TASK ===
+%s
+
+=== USER INSTRUCTION ===
+The user's instruction will be provided as the user message. Apply the requested changes to the task.
+
+Rules:
+- Modify the task according to the user's instruction
+- Preserve existing sub-items that the user didn't ask to change (keep their done status)
+- Sub-items can have an optional due_date in YYYY-MM-DDTHH:MM format
+- You can add, remove, or modify sub-items as requested
+- You can change text, intent, priority, due_date as requested
+- If the user asks to add something, ADD to existing sub-items, don't replace them
+- Keep sub-item text concise (under 80 chars each)
+- Only change fields the user explicitly or implicitly asked to change
+- Return the COMPLETE updated task (not just the diff)
+
+Return ONLY valid JSON in this exact format:
+{
+  "text": "task title",
+  "intent": "why this task matters",
+  "priority": "high|medium|low",
+  "due_date": "YYYY-MM-DDTHH:MM",
+  "sub_items": [
+    {"text": "step description", "done": false, "due_date": "YYYY-MM-DDTHH:MM"},
+    {"text": "step description", "done": true}
   ]
 }`
 

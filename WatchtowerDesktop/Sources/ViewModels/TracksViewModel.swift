@@ -234,9 +234,11 @@ final class TracksViewModel {
         return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)")
     }
 
-    func slackMessageURL(channelID: String, messageTS: String) -> URL? {
+    func slackMessageURL(channelID: String, messageTS: String, threadTS: String? = nil) -> URL? {
         guard let teamID = workspaceTeamID, !teamID.isEmpty else { return nil }
-        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)&message=\(messageTS)")
+        // Use thread parent TS when available — Slack opens the thread context correctly.
+        let ts = (threadTS != nil && !threadTS!.isEmpty) ? threadTS! : messageTS
+        return URL(string: "slack://channel?team=\(teamID)&id=\(channelID)&message=\(ts)")
     }
 
     func submitFeedback(trackID: Int, rating: Int) {

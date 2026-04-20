@@ -332,6 +332,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     blocking        TEXT NOT NULL DEFAULT '',
     tags            TEXT NOT NULL DEFAULT '[]',
     sub_items       TEXT NOT NULL DEFAULT '[]',
+    notes           TEXT NOT NULL DEFAULT '[]',
     source_type     TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('track','digest','briefing','manual','chat','inbox','jira')),
     source_id       TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -710,6 +711,25 @@ CREATE TABLE IF NOT EXISTS jira_boards (
     profile_generated_at TEXT NOT NULL DEFAULT ''
 );
 
+-- Jira custom fields (discovered from API, classified by LLM)
+CREATE TABLE IF NOT EXISTS jira_custom_fields (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    field_type TEXT NOT NULL,
+    items_type TEXT NOT NULL DEFAULT '',
+    is_useful INTEGER NOT NULL DEFAULT 0,
+    usage_hint TEXT NOT NULL DEFAULT '',
+    synced_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Per-board custom field mapping
+CREATE TABLE IF NOT EXISTS jira_board_field_map (
+    board_id INTEGER NOT NULL,
+    field_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    PRIMARY KEY (board_id, field_id)
+);
+
 -- Jira issues
 CREATE TABLE IF NOT EXISTS jira_issues (
     key TEXT PRIMARY KEY, id TEXT NOT NULL DEFAULT '', project_key TEXT NOT NULL,
@@ -727,8 +747,10 @@ CREATE TABLE IF NOT EXISTS jira_issues (
     due_date TEXT NOT NULL DEFAULT '', sprint_id INTEGER, sprint_name TEXT NOT NULL DEFAULT '',
     epic_key TEXT NOT NULL DEFAULT '',
     labels TEXT NOT NULL DEFAULT '[]', components TEXT NOT NULL DEFAULT '[]',
+    fix_versions TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT NOT NULL DEFAULT '',
-    raw_json TEXT NOT NULL DEFAULT '', synced_at TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0
+    raw_json TEXT NOT NULL DEFAULT '', custom_fields_json TEXT NOT NULL DEFAULT '',
+    synced_at TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jira_issues_project ON jira_issues(project_key);
 CREATE INDEX IF NOT EXISTS idx_jira_issues_assignee ON jira_issues(assignee_account_id);
@@ -786,4 +808,32 @@ CREATE TABLE IF NOT EXISTS jira_sync_state (
     project_key TEXT PRIMARY KEY, last_synced_at TEXT NOT NULL DEFAULT '',
     issues_synced INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
     last_error_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Meeting notes (questions + freeform notes linked to calendar events)
+CREATE TABLE IF NOT EXISTS meeting_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('question', 'note')),
+    text TEXT NOT NULL DEFAULT '',
+    is_checked INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    task_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_notes_event ON meeting_notes(event_id);
+
+-- Jira releases (fix versions)
+CREATE TABLE IF NOT EXISTS jira_releases (
+    id INTEGER NOT NULL,
+    project_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    release_date TEXT NOT NULL DEFAULT '',
+    released INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (id),
+    UNIQUE(project_key, name)
 );

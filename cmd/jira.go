@@ -17,6 +17,11 @@ import (
 	"github.com/spf13/viper"
 )
 
+var (
+	jiraSyncFlagBoard        int
+	jiraSyncFlagProgressJSON bool
+)
+
 var jiraCmd = &cobra.Command{
 	Use:   "jira",
 	Short: "Jira Cloud integration",
@@ -72,6 +77,12 @@ var jiraUsersMapCmd = &cobra.Command{
 	Short: "Manually map a Jira user to a Slack user",
 	Args:  cobra.ExactArgs(2),
 	RunE:  runJiraUsersMap,
+}
+
+var jiraUsersResolveCmd = &cobra.Command{
+	Use:   "resolve",
+	Short: "Auto-resolve Jira users to Slack users (email + fuzzy name match)",
+	RunE:  runJiraUsersResolve,
 }
 
 var jiraSyncCmd = &cobra.Command{
@@ -131,6 +142,37 @@ var jiraBlockersCmd = &cobra.Command{
 	RunE:  runJiraBlockers,
 }
 
+var jiraProjectMapCmd = &cobra.Command{
+	Use:   "project-map",
+	Short: "Show project map of epics",
+	RunE:  runJiraProjectMap,
+}
+
+var jiraReleasesCmd = &cobra.Command{
+	Use:   "releases",
+	Short: "Show release dashboard",
+	RunE:  runJiraReleases,
+}
+
+var jiraFieldsCmd = &cobra.Command{
+	Use:   "fields",
+	Short: "List discovered custom fields",
+	RunE:  runJiraFields,
+}
+
+var jiraFieldsDiscoverCmd = &cobra.Command{
+	Use:   "discover",
+	Short: "Force re-discover and classify custom fields via LLM",
+	RunE:  runJiraFieldsDiscover,
+}
+
+var jiraFieldsMapCmd = &cobra.Command{
+	Use:   "map <board-id>",
+	Short: "Show or generate field mapping for a board",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runJiraFieldsMap,
+}
+
 func init() {
 	rootCmd.AddCommand(jiraCmd)
 	jiraCmd.AddCommand(jiraLoginCmd)
@@ -143,6 +185,7 @@ func init() {
 	jiraBoardsCmd.AddCommand(jiraBoardsOverrideCmd)
 	jiraCmd.AddCommand(jiraUsersCmd)
 	jiraUsersCmd.AddCommand(jiraUsersMapCmd)
+	jiraUsersCmd.AddCommand(jiraUsersResolveCmd)
 	jiraCmd.AddCommand(jiraSyncCmd)
 	jiraCmd.AddCommand(jiraFeaturesCmd)
 	jiraFeaturesCmd.AddCommand(jiraFeaturesEnableCmd)
@@ -150,14 +193,33 @@ func init() {
 	jiraFeaturesCmd.AddCommand(jiraFeaturesResetCmd)
 	jiraCmd.AddCommand(jiraWorkloadCmd)
 	jiraCmd.AddCommand(jiraBlockersCmd)
+	jiraCmd.AddCommand(jiraProjectMapCmd)
+	jiraCmd.AddCommand(jiraReleasesCmd)
+	jiraCmd.AddCommand(jiraFieldsCmd)
+	jiraFieldsCmd.AddCommand(jiraFieldsDiscoverCmd)
+	jiraFieldsCmd.AddCommand(jiraFieldsMapCmd)
+
+	jiraFieldsCmd.Flags().Bool("useful", false, "Show only useful fields")
+	jiraFieldsCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraFieldsMapCmd.Flags().Bool("force", false, "Regenerate mapping even if one exists")
 
 	jiraWorkloadCmd.Flags().Bool("json", false, "Output as JSON")
 	jiraBlockersCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraProjectMapCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraProjectMapCmd.Flags().String("epic", "", "Show details for a specific epic (e.g. PROJ-100)")
+	jiraReleasesCmd.Flags().Bool("json", false, "Output as JSON")
+	jiraReleasesCmd.Flags().String("release", "", "Show details for a specific release (e.g. v1.0)")
 	jiraLoginCmd.Flags().Bool("no-open", false, "don't open the browser automatically")
 	jiraLoginCmd.Flags().String("site", "", "select Jira site by URL (e.g. https://mysite.atlassian.net)")
 	jiraFeaturesCmd.Flags().Bool("json", false, "output as JSON (for Swift integration)")
 	jiraBoardsAnalyzeCmd.Flags().Bool("force", false, "re-analyze even if config hash unchanged")
+	jiraBoardsAnalyzeCmd.Flags().Bool("auto", false, "auto re-analyze boards with changed config (respects 24h cooldown)")
 	jiraBoardsOverrideCmd.Flags().String("stale", "", "stale thresholds (e.g. 'Code Review=1,QA=2')")
+	jiraBoardsOverrideCmd.Flags().String("terminal", "", "terminal stage overrides (e.g. 'Done=true,Declined=false')")
+	jiraBoardsOverrideCmd.Flags().String("phase", "", "phase overrides (e.g. 'Triage=backlog,Declined=done')")
+
+	jiraSyncCmd.Flags().IntVar(&jiraSyncFlagBoard, "board", 0, "sync only this board ID")
+	jiraSyncCmd.Flags().BoolVar(&jiraSyncFlagProgressJSON, "progress-json", false, "output progress as JSON lines to stdout")
 }
 
 func runJiraLogin(cmd *cobra.Command, _ []string) error {
@@ -539,6 +601,46 @@ func runJiraUsersMap(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runJiraUsersResolve(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	mapper := jira.NewUserMapper(nil, database)
+	if err := mapper.ResolveAll(cmd.Context(), cfg.Jira.UserMap); err != nil {
+		return fmt.Errorf("resolving users: %w", err)
+	}
+
+	// Backfill assignee_slack_id on existing issues.
+	if err := database.BackfillJiraSlackIDs(); err != nil {
+		return fmt.Errorf("backfilling slack IDs: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	maps, _ := database.GetJiraUserMaps()
+	matched := 0
+	for _, m := range maps {
+		if m.SlackUserID != "" {
+			matched++
+		}
+	}
+	fmt.Fprintf(out, "Resolved %d/%d Jira users to Slack.\n", matched, len(maps))
+	return nil
+}
+
 func runJiraSync(cmd *cobra.Command, _ []string) error {
 	cfg, err := config.Load(flagConfig)
 	if err != nil {
@@ -584,24 +686,84 @@ func runJiraSync(cmd *cobra.Command, _ []string) error {
 	syncer := jira.NewSyncer(client, database, mapper, boardIDs)
 
 	out := cmd.OutOrStdout()
-	fmt.Fprintln(out, "Syncing Jira issues...")
+
+	// Wire progress JSON output.
+	if jiraSyncFlagProgressJSON {
+		start := time.Now()
+		syncer.OnProgress = func(p jira.SyncProgress) {
+			data, _ := json.Marshal(jiraSyncProgressJSON{
+				Pipeline:   "jira-sync",
+				Done:       p.Done,
+				Total:      p.Total,
+				Status:     p.Phase,
+				ElapsedSec: time.Since(start).Seconds(),
+			})
+			fmt.Fprintln(out, string(data))
+		}
+	}
+
+	// Single-board sync.
+	if jiraSyncFlagBoard > 0 {
+		if !jiraSyncFlagProgressJSON {
+			fmt.Fprintf(out, "Syncing board %d...\n", jiraSyncFlagBoard)
+		}
+		count, err := syncer.SyncBoard(cmd.Context(), jiraSyncFlagBoard)
+		if err != nil {
+			if jiraSyncFlagProgressJSON {
+				data, _ := json.Marshal(jiraSyncProgressJSON{Pipeline: "jira-sync", Finished: true, Error: err.Error()})
+				fmt.Fprintln(out, string(data))
+				return nil
+			}
+			return fmt.Errorf("syncing board: %w", err)
+		}
+		if jiraSyncFlagProgressJSON {
+			data, _ := json.Marshal(jiraSyncProgressJSON{Pipeline: "jira-sync", Done: count, Total: count, Finished: true, ItemsFound: count})
+			fmt.Fprintln(out, string(data))
+		} else {
+			fmt.Fprintf(out, "Synced %d issues.\n", count)
+		}
+		return nil
+	}
+
+	if !jiraSyncFlagProgressJSON {
+		fmt.Fprintln(out, "Syncing Jira issues...")
+	}
 
 	count, err := syncer.Sync(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("syncing: %w", err)
 	}
 
-	fmt.Fprintf(out, "Synced %d Jira issues.\n", count)
+	if !jiraSyncFlagProgressJSON {
+		fmt.Fprintf(out, "Synced %d Jira issues.\n", count)
+	}
 
 	// Resolve users after sync.
 	if err := mapper.ResolveAll(cmd.Context(), cfg.Jira.UserMap); err != nil {
-		fmt.Fprintf(out, "Warning: user mapping failed: %v\n", err)
+		if !jiraSyncFlagProgressJSON {
+			fmt.Fprintf(out, "Warning: user mapping failed: %v\n", err)
+		}
 	}
+
+	// Backfill slack IDs on issues that were synced before user mapping was resolved.
+	_ = database.BackfillJiraSlackIDs()
 
 	return nil
 }
 
 // resolveJiraOAuthConfig returns Jira OAuth credentials from env or ldflags.
+// jiraSyncProgressJSON matches the InsightProgressData format used by other pipelines.
+type jiraSyncProgressJSON struct {
+	Pipeline   string  `json:"pipeline"`
+	Done       int     `json:"done"`
+	Total      int     `json:"total"`
+	Status     string  `json:"status,omitempty"`
+	ElapsedSec float64 `json:"elapsed_sec,omitempty"`
+	Finished   bool    `json:"finished"`
+	ItemsFound int     `json:"items_found,omitempty"`
+	Error      string  `json:"error,omitempty"`
+}
+
 func resolveJiraOAuthConfig() jira.JiraOAuthConfig {
 	clientID := os.Getenv("WATCHTOWER_JIRA_CLIENT_ID")
 	if clientID == "" {
@@ -837,31 +999,65 @@ func runJiraBoardsAnalyze(cmd *cobra.Command, args []string) error {
 	aiProvider := newAIClient(cfg, cfg.DBPath())
 
 	analyzer := jira.NewBoardAnalyzer(client, database, aiProvider)
+	analyzer.SetLanguage(cfg.Digest.Language)
 
 	force, _ := cmd.Flags().GetBool("force")
+	autoRefresh, _ := cmd.Flags().GetBool("auto")
 	out := cmd.OutOrStdout()
 
-	if len(args) > 0 {
+	runID, _ := database.CreatePipelineRun("jira-boards", "cli", "auto")
+
+	var analyzeErr error
+	analyzed := 0
+
+	// --auto mode: check for changed configs and re-analyze with cooldown.
+	if autoRefresh {
+		results, err := analyzer.CheckAndRefreshProfiles(cmd.Context(), true)
+		if err != nil {
+			analyzeErr = fmt.Errorf("auto-refresh: %w", err)
+		} else {
+			for _, r := range results {
+				if r.Refreshed {
+					fmt.Fprintf(out, "Refreshed board %d (%s)\n", r.BoardID, r.BoardName)
+					analyzed++
+				} else if r.Skipped {
+					fmt.Fprintf(out, "Skipped board %d (%s): cooldown not elapsed\n", r.BoardID, r.BoardName)
+				} else if r.Error != nil {
+					fmt.Fprintf(out, "Warning: board %d (%s): %v\n", r.BoardID, r.BoardName, r.Error)
+				}
+			}
+			if analyzed == 0 && len(results) == 0 {
+				fmt.Fprintln(out, "No boards need re-analysis.")
+			} else {
+				fmt.Fprintf(out, "Auto-refreshed %d board(s).\n", analyzed)
+			}
+		}
+	} else if len(args) > 0 {
 		// Analyze specific boards.
 		for _, arg := range args {
 			boardID, err := strconv.Atoi(arg)
 			if err != nil {
-				return fmt.Errorf("invalid board ID %q: %w", arg, err)
+				analyzeErr = fmt.Errorf("invalid board ID %q: %w", arg, err)
+				break
 			}
 			board, err := database.GetJiraBoardProfile(boardID)
 			if err != nil {
-				return fmt.Errorf("getting board %d: %w", boardID, err)
+				analyzeErr = fmt.Errorf("getting board %d: %w", boardID, err)
+				break
 			}
 			if board == nil {
-				return fmt.Errorf("board %d not found", boardID)
+				analyzeErr = fmt.Errorf("board %d not found", boardID)
+				break
 			}
 			if force {
 				board.ConfigHash = ""
 			}
 			profile, err := analyzer.AnalyzeBoard(cmd.Context(), *board)
 			if err != nil {
-				return fmt.Errorf("analyzing board %d: %w", boardID, err)
+				analyzeErr = fmt.Errorf("analyzing board %d: %w", boardID, err)
+				break
 			}
+			analyzed++
 			fmt.Fprintf(out, "Board %d (%s): %s\n", boardID, board.Name, profile.WorkflowSummary)
 		}
 	} else {
@@ -869,31 +1065,45 @@ func runJiraBoardsAnalyze(cmd *cobra.Command, args []string) error {
 		if force {
 			boards, err := database.GetJiraSelectedBoards()
 			if err != nil {
-				return fmt.Errorf("getting selected boards: %w", err)
-			}
-			for _, b := range boards {
-				full, err := database.GetJiraBoardProfile(b.ID)
-				if err != nil || full == nil {
-					full = &b
+				analyzeErr = fmt.Errorf("getting selected boards: %w", err)
+			} else {
+				for _, b := range boards {
+					full, err := database.GetJiraBoardProfile(b.ID)
+					if err != nil || full == nil {
+						full = &b
+					}
+					full.ConfigHash = ""
+					profile, err := analyzer.AnalyzeBoard(cmd.Context(), *full)
+					if err != nil {
+						fmt.Fprintf(out, "Warning: failed to analyze board %d (%s): %v\n", b.ID, b.Name, err)
+						continue
+					}
+					analyzed++
+					fmt.Fprintf(out, "Board %d (%s): %s\n", b.ID, b.Name, profile.WorkflowSummary)
 				}
-				full.ConfigHash = ""
-				profile, err := analyzer.AnalyzeBoard(cmd.Context(), *full)
-				if err != nil {
-					fmt.Fprintf(out, "Warning: failed to analyze board %d (%s): %v\n", b.ID, b.Name, err)
-					continue
-				}
-				fmt.Fprintf(out, "Board %d (%s): %s\n", b.ID, b.Name, profile.WorkflowSummary)
 			}
 		} else {
 			count, err := analyzer.AnalyzeAllSelected(cmd.Context())
 			if err != nil {
-				return fmt.Errorf("analyzing boards: %w", err)
+				analyzeErr = fmt.Errorf("analyzing boards: %w", err)
+			} else {
+				analyzed = count
+				fmt.Fprintf(out, "Analyzed %d boards.\n", count)
 			}
-			fmt.Fprintf(out, "Analyzed %d boards.\n", count)
 		}
 	}
 
-	return nil
+	// Record pipeline run with accumulated usage.
+	if runID > 0 {
+		errMsg := ""
+		if analyzeErr != nil {
+			errMsg = analyzeErr.Error()
+		}
+		inTok, outTok, totalAPI := analyzer.AccumulatedUsage()
+		_ = database.CompletePipelineRun(runID, analyzed, inTok, outTok, 0, totalAPI, nil, nil, errMsg)
+	}
+
+	return analyzeErr
 }
 
 func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
@@ -920,21 +1130,11 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 	defer database.Close()
 
 	staleFlag, _ := cmd.Flags().GetString("stale")
-	if staleFlag == "" {
-		return fmt.Errorf("--stale flag is required (e.g. 'Code Review=1,QA=2')")
-	}
+	terminalFlag, _ := cmd.Flags().GetString("terminal")
+	phaseFlag, _ := cmd.Flags().GetString("phase")
 
-	thresholds := make(map[string]int)
-	for _, part := range strings.Split(staleFlag, ",") {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			return fmt.Errorf("invalid stale threshold format: %q (expected 'Name=days')", part)
-		}
-		days, err := strconv.Atoi(strings.TrimSpace(kv[1]))
-		if err != nil {
-			return fmt.Errorf("invalid days value %q: %w", kv[1], err)
-		}
-		thresholds[strings.TrimSpace(kv[0])] = days
+	if staleFlag == "" && terminalFlag == "" && phaseFlag == "" {
+		return fmt.Errorf("at least one of --stale, --terminal, or --phase is required")
 	}
 
 	// Read existing overrides and merge new values on top.
@@ -949,11 +1149,54 @@ func runJiraBoardsOverride(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("parsing existing overrides for board %d: %w", boardID, err)
 		}
 	}
-	if overrides.StaleThresholds == nil {
-		overrides.StaleThresholds = make(map[string]int)
+
+	if staleFlag != "" {
+		if overrides.StaleThresholds == nil {
+			overrides.StaleThresholds = make(map[string]int)
+		}
+		for _, part := range strings.Split(staleFlag, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid stale threshold format: %q (expected 'Name=days')", part)
+			}
+			days, err := strconv.Atoi(strings.TrimSpace(kv[1]))
+			if err != nil {
+				return fmt.Errorf("invalid days value %q: %w", kv[1], err)
+			}
+			overrides.StaleThresholds[strings.TrimSpace(kv[0])] = days
+		}
 	}
-	for k, v := range thresholds {
-		overrides.StaleThresholds[k] = v
+
+	if terminalFlag != "" {
+		if overrides.TerminalStages == nil {
+			overrides.TerminalStages = make(map[string]bool)
+		}
+		for _, part := range strings.Split(terminalFlag, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid terminal format: %q (expected 'StageName=true|false')", part)
+			}
+			val := strings.TrimSpace(kv[1]) == "true"
+			overrides.TerminalStages[strings.TrimSpace(kv[0])] = val
+		}
+	}
+
+	validPhases := map[string]bool{"backlog": true, "active_work": true, "review": true, "testing": true, "done": true, "other": true}
+	if phaseFlag != "" {
+		if overrides.PhaseOverrides == nil {
+			overrides.PhaseOverrides = make(map[string]string)
+		}
+		for _, part := range strings.Split(phaseFlag, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid phase format: %q (expected 'StatusName=phase')", part)
+			}
+			phase := strings.TrimSpace(kv[1])
+			if !validPhases[phase] {
+				return fmt.Errorf("invalid phase %q; must be one of: backlog, active_work, review, testing, done, other", phase)
+			}
+			overrides.PhaseOverrides[strings.TrimSpace(kv[0])] = phase
+		}
 	}
 	overridesJSON, err := json.Marshal(overrides)
 	if err != nil {
@@ -1161,6 +1404,516 @@ func blockerUrgencyIcon(u jira.BlockerUrgency) string {
 
 func formatBlockingChain(chain []string) string {
 	return strings.Join(chain, " \u2190 ")
+}
+
+func runJiraProjectMap(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	if !jira.IsFeatureEnabled(cfg, "epic_progress") {
+		return fmt.Errorf("epic_progress feature is disabled; enable with 'watchtower jira features enable epic_progress'")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	epicFlag, _ := cmd.Flags().GetString("epic")
+
+	// Single epic detail mode.
+	if epicFlag != "" {
+		epic, err := jira.BuildProjectMapForEpic(database, cfg, epicFlag, time.Now())
+		if err != nil {
+			return fmt.Errorf("building project map for epic: %w", err)
+		}
+		if epic == nil {
+			fmt.Fprintf(out, "Epic %s not found or has too few issues.\n", epicFlag)
+			return nil
+		}
+
+		// Who to ping for this epic.
+		pingTargets, err := jira.ComputeWhoToPingForEpic(database, epicFlag)
+		if err != nil {
+			return fmt.Errorf("computing who to ping: %w", err)
+		}
+
+		if jsonFlag {
+			payload := struct {
+				*jira.ProjectMapEpic
+				WhoToPing []jira.PingTarget `json:"who_to_ping"`
+			}{epic, pingTargets}
+			data, err := json.MarshalIndent(payload, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshalling JSON: %w", err)
+			}
+			fmt.Fprintln(out, string(data))
+			return nil
+		}
+
+		// Text output — epic detail.
+		fmt.Fprintf(out, "Epic: %s — %s\n", epic.EpicKey, epic.EpicName)
+		fmt.Fprintf(out, "Progress: %.0f%% (%d/%d done, %d in progress)\n",
+			epic.ProgressPct, epic.DoneIssues, epic.TotalIssues, epic.InProgressIssues)
+		fmt.Fprintf(out, "Status: %s\n", epic.StatusBadge)
+		fmt.Fprintf(out, "Forecast: %.1f weeks at current velocity\n", epic.ForecastWeeks)
+		fmt.Fprintln(out)
+
+		// Issues table.
+		if len(epic.Issues) > 0 {
+			fmt.Fprintln(out, "Issues:")
+			fmt.Fprintf(out, "  %-12s %-30s %-15s %-13s %s\n", "KEY", "SUMMARY", "STATUS", "ASSIGNEE", "DAYS")
+			for _, iss := range epic.Issues {
+				assignee := iss.AssigneeName
+				if assignee == "" {
+					assignee = "unassigned"
+				}
+				staleMarker := ""
+				if iss.IsStale {
+					staleMarker = " \u26a0\ufe0f stale"
+				}
+				fmt.Fprintf(out, "  %-12s %-30s %-15s %-13s %d%s\n",
+					iss.Key, truncate(iss.Summary, 30), truncate(iss.Status, 15),
+					truncate("@"+assignee, 13), iss.DaysInStatus, staleMarker)
+			}
+			fmt.Fprintln(out)
+		}
+
+		// Stale issues.
+		if len(epic.StaleIssues) > 0 {
+			fmt.Fprintf(out, "Stale Issues (%d):\n", len(epic.StaleIssues))
+			for _, iss := range epic.StaleIssues {
+				fmt.Fprintf(out, "  %-12s %-30s %-15s %d days\n",
+					iss.Key, truncate(iss.Summary, 30), truncate(iss.Status, 15), iss.DaysInStatus)
+			}
+			fmt.Fprintln(out)
+		}
+
+		// Participants.
+		if len(epic.Participants) > 0 {
+			fmt.Fprintln(out, "Participants:")
+			parts := make([]string, len(epic.Participants))
+			for i, p := range epic.Participants {
+				name := p.DisplayName
+				if name == "" {
+					name = p.SlackUserID
+				}
+				parts[i] = fmt.Sprintf("@%s", name)
+			}
+			fmt.Fprintf(out, "  %s\n", strings.Join(parts, ", "))
+			fmt.Fprintln(out)
+		}
+
+		// Who to ping.
+		if len(pingTargets) > 0 {
+			fmt.Fprintln(out, "Who to Ping:")
+			for _, p := range pingTargets {
+				name := p.DisplayName
+				if name == "" {
+					name = p.SlackUserID
+				}
+				fmt.Fprintf(out, "  @%s — %s\n", name, p.Reason)
+			}
+		}
+
+		return nil
+	}
+
+	// List mode — all epics table.
+	epics, err := jira.BuildProjectMap(database, cfg, time.Now())
+	if err != nil {
+		return fmt.Errorf("building project map: %w", err)
+	}
+
+	if len(epics) == 0 {
+		fmt.Fprintln(out, "No epics found.")
+		return nil
+	}
+
+	if jsonFlag {
+		data, err := json.MarshalIndent(epics, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling JSON: %w", err)
+		}
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+
+	fmt.Fprintln(out, "Project Map — Epics")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%-12s %-23s %10s  %-10s %7s %6s %8s\n",
+		"KEY", "NAME", "PROGRESS", "STATUS", "ISSUES", "STALE", "BLOCKED")
+	for _, e := range epics {
+		fmt.Fprintf(out, "%-12s %-23s %9.0f%%  %-10s %7d %6d %8d\n",
+			e.EpicKey, truncate(e.EpicName, 23),
+			e.ProgressPct, e.StatusBadge,
+			e.TotalIssues, e.StaleCount, e.BlockedCount)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%d epics found.\n", len(epics))
+
+	return nil
+}
+
+func runJiraReleases(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	if !jira.IsFeatureEnabled(cfg, "release_dashboard") {
+		return fmt.Errorf("release_dashboard feature is disabled; enable with 'watchtower jira features enable release_dashboard'")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+	releaseFlag, _ := cmd.Flags().GetString("release")
+	now := time.Now()
+
+	// Single release detail mode.
+	if releaseFlag != "" {
+		entry, err := jira.BuildReleaseDetail(database, cfg, releaseFlag, now)
+		if err != nil {
+			return fmt.Errorf("building release detail: %w", err)
+		}
+		if entry == nil {
+			fmt.Fprintf(out, "Release %q not found.\n", releaseFlag)
+			return nil
+		}
+
+		if jsonFlag {
+			data, err := json.MarshalIndent(entry, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshalling JSON: %w", err)
+			}
+			fmt.Fprintln(out, string(data))
+			return nil
+		}
+
+		// Text output — release detail.
+		status := releaseStatus(entry)
+		fmt.Fprintf(out, "Release: %s\n", entry.Name)
+		fmt.Fprintf(out, "Date: %s\n", entry.ReleaseDate)
+		fmt.Fprintf(out, "Progress: %.0f%% (%d/%d done)\n", entry.ProgressPct, entry.DoneIssues, entry.TotalIssues)
+		fmt.Fprintf(out, "Status: %s", status)
+		if entry.AtRiskReason != "" {
+			fmt.Fprintf(out, " — %s", entry.AtRiskReason)
+		}
+		fmt.Fprintln(out)
+
+		// Epic progress table.
+		if len(entry.EpicProgress) > 0 {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "Epic Progress:")
+			fmt.Fprintf(out, "  %-12s %-23s %10s  %-10s\n", "EPIC", "NAME", "PROGRESS", "STATUS")
+			for _, ep := range entry.EpicProgress {
+				fmt.Fprintf(out, "  %-12s %-23s %9.0f%%  %-10s\n",
+					ep.EpicKey, truncate(ep.EpicName, 23), ep.ProgressPct, ep.StatusBadge)
+			}
+		}
+
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "Blocked Issues: %d\n", entry.BlockedCount)
+
+		if entry.ScopeChanges.AddedLastWeek > 0 {
+			fmt.Fprintf(out, "Scope Changes (last week): +%d added\n", entry.ScopeChanges.AddedLastWeek)
+		}
+
+		if entry.AtRiskReason != "" {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "At Risk Reason: %s\n", entry.AtRiskReason)
+		}
+
+		return nil
+	}
+
+	// List mode — all releases table.
+	entries, err := jira.BuildReleaseDashboard(database, cfg, "", now)
+	if err != nil {
+		return fmt.Errorf("building release dashboard: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No releases found.")
+		return nil
+	}
+
+	if jsonFlag {
+		data, err := json.MarshalIndent(entries, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling JSON: %w", err)
+		}
+		fmt.Fprintln(out, string(data))
+		return nil
+	}
+
+	fmt.Fprintln(out, "Releases")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%-14s %-13s %10s  %-12s %6s %8s\n",
+		"NAME", "DATE", "PROGRESS", "STATUS", "EPICS", "BLOCKED")
+	for _, e := range entries {
+		status := releaseStatus(&e)
+		fmt.Fprintf(out, "%-14s %-13s %9.0f%%  %-12s %6d %8d\n",
+			truncate(e.Name, 14), e.ReleaseDate,
+			e.ProgressPct, status,
+			len(e.EpicProgress), e.BlockedCount)
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "%d releases found.\n", len(entries))
+
+	return nil
+}
+
+func releaseStatus(e *jira.ReleaseEntry) string {
+	if e.Released {
+		return "released"
+	}
+	if e.IsOverdue {
+		return "overdue"
+	}
+	if e.AtRisk {
+		return "at_risk"
+	}
+	return "unreleased"
+}
+
+// ---------------------------------------------------------------------------
+// jira fields commands
+// ---------------------------------------------------------------------------
+
+func runJiraFields(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	usefulOnly, _ := cmd.Flags().GetBool("useful")
+	asJSON, _ := cmd.Flags().GetBool("json")
+	out := cmd.OutOrStdout()
+
+	var fields []db.JiraCustomField
+	if usefulOnly {
+		fields, err = database.GetUsefulJiraCustomFields()
+	} else {
+		fields, err = database.GetJiraCustomFields()
+	}
+	if err != nil {
+		return fmt.Errorf("fetching custom fields: %w", err)
+	}
+
+	if len(fields) == 0 {
+		fmt.Fprintln(out, "No custom fields discovered yet. Run 'watchtower jira fields discover' first.")
+		return nil
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(fields)
+	}
+
+	// Group by usage_hint for display.
+	grouped := make(map[string][]db.JiraCustomField)
+	var order []string
+	for _, f := range fields {
+		hint := f.UsageHint
+		if hint == "" {
+			hint = "(unclassified)"
+		}
+		if _, ok := grouped[hint]; !ok {
+			order = append(order, hint)
+		}
+		grouped[hint] = append(grouped[hint], f)
+	}
+
+	fmt.Fprintf(out, "Custom Fields (%d total)\n\n", len(fields))
+	fmt.Fprintf(out, "%-22s %-30s %-14s %-7s %s\n", "ID", "Name", "Type", "Useful", "Hint")
+	fmt.Fprintln(out, strings.Repeat("-", 90))
+
+	for _, hint := range order {
+		for _, f := range grouped[hint] {
+			useful := "no"
+			if f.IsUseful {
+				useful = "yes"
+			}
+			name := f.Name
+			if len(name) > 28 {
+				name = name[:25] + "..."
+			}
+			fmt.Fprintf(out, "%-22s %-30s %-14s %-7s %s\n",
+				f.ID, name, f.FieldType, useful, f.UsageHint)
+		}
+	}
+	return nil
+}
+
+func runJiraFieldsDiscover(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+	if cfg.Jira.CloudID == "" {
+		return fmt.Errorf("jira cloud_id not configured, run 'watchtower jira login' first")
+	}
+
+	store := jira.NewTokenStore(cfg.WorkspaceDir())
+	if !store.Exists() {
+		return fmt.Errorf("jira not connected, run 'watchtower jira login' first")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	jiraCfg := resolveJiraOAuthConfig()
+	client := jira.NewClient(cfg.Jira.CloudID, jiraCfg, store)
+
+	applyProviderOverride(cfg)
+	aiProvider := newAIClient(cfg, cfg.DBPath())
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "Discovering custom fields from Jira API...")
+
+	fd := jira.NewFieldDiscovery(client, database, aiProvider)
+	if err := fd.DiscoverAndClassify(cmd.Context()); err != nil {
+		return fmt.Errorf("field discovery: %w", err)
+	}
+
+	// Report results.
+	all, _ := database.GetJiraCustomFields()
+	useful, _ := database.GetUsefulJiraCustomFields()
+	fmt.Fprintf(out, "Discovered %d custom fields, %d classified as useful.\n", len(all), len(useful))
+	fmt.Fprintln(out, "Run 'watchtower jira fields' to see the full list.")
+	return nil
+}
+
+func runJiraFieldsMap(cmd *cobra.Command, args []string) error {
+	boardID, err := strconv.Atoi(args[0])
+	if err != nil {
+		return fmt.Errorf("invalid board ID %q: %w", args[0], err)
+	}
+
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+	if cfg.Jira.CloudID == "" {
+		return fmt.Errorf("jira cloud_id not configured, run 'watchtower jira login' first")
+	}
+
+	store := jira.NewTokenStore(cfg.WorkspaceDir())
+	if !store.Exists() {
+		return fmt.Errorf("jira not connected, run 'watchtower jira login' first")
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	force, _ := cmd.Flags().GetBool("force")
+	out := cmd.OutOrStdout()
+
+	// If mapping exists and not forcing, just show it.
+	if !force {
+		existing, err := database.GetJiraBoardFieldMap(boardID)
+		if err == nil && len(existing) > 0 {
+			fmt.Fprintf(out, "Field mapping for board %d (%d fields):\n\n", boardID, len(existing))
+			fmt.Fprintf(out, "%-22s %-20s\n", "Field ID", "Role")
+			fmt.Fprintln(out, strings.Repeat("-", 44))
+			for _, m := range existing {
+				fmt.Fprintf(out, "%-22s %-20s\n", m.FieldID, m.Role)
+			}
+			fmt.Fprintln(out, "\nUse --force to regenerate.")
+			return nil
+		}
+	}
+
+	// Need to generate — create client + AI provider.
+	jiraCfg := resolveJiraOAuthConfig()
+	client := jira.NewClient(cfg.Jira.CloudID, jiraCfg, store)
+
+	applyProviderOverride(cfg)
+	aiProvider := newAIClient(cfg, cfg.DBPath())
+
+	fd := jira.NewFieldDiscovery(client, database, aiProvider)
+
+	board, err := database.GetJiraBoardProfile(boardID)
+	if err != nil {
+		return fmt.Errorf("fetching board: %w", err)
+	}
+	if board == nil {
+		return fmt.Errorf("board %d not found, run 'watchtower jira boards' first", boardID)
+	}
+
+	fmt.Fprintf(out, "Generating field mapping for board %d (%s)...\n", board.ID, board.Name)
+	mappings, err := fd.MapFieldsForBoard(cmd.Context(), *board)
+	if err != nil {
+		return fmt.Errorf("field mapping: %w", err)
+	}
+
+	if len(mappings) == 0 {
+		fmt.Fprintln(out, "No useful custom fields found for this board.")
+		return nil
+	}
+
+	fmt.Fprintf(out, "\nField mapping for board %d (%d fields):\n\n", boardID, len(mappings))
+	fmt.Fprintf(out, "%-22s %-20s\n", "Field ID", "Role")
+	fmt.Fprintln(out, strings.Repeat("-", 44))
+	for _, m := range mappings {
+		fmt.Fprintf(out, "%-22s %-20s\n", m.FieldID, m.Role)
+	}
+	return nil
 }
 
 // truncate shortens a string to maxLen, appending "..." if needed.

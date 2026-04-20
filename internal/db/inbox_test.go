@@ -316,6 +316,26 @@ func TestCheckUserReplied(t *testing.T) {
 	assert.False(t, replied)
 }
 
+func TestCheckUserReplied_DMThreadReply(t *testing.T) {
+	db := openTestDB(t)
+
+	_, err := db.Exec(`INSERT INTO channels (id, name, type) VALUES ('D1', 'dm-olena', 'dm')`)
+	require.NoError(t, err)
+
+	// DM message from another user (top-level, no thread_ts)
+	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text) VALUES ('D1', '1000.001', 'U_OTHER', 'please do this')`)
+	require.NoError(t, err)
+
+	// User replies as a thread to that DM message
+	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text, thread_ts) VALUES ('D1', '1001.001', 'U_ME', 'done', '1000.001')`)
+	require.NoError(t, err)
+
+	// threadTS is empty because the original DM was top-level
+	replied, err := db.CheckUserReplied("U_ME", "D1", "1000.001", "")
+	require.NoError(t, err)
+	assert.True(t, replied, "should detect thread reply to a top-level DM")
+}
+
 func TestFindThreadRepliesToUser(t *testing.T) {
 	db := openTestDB(t)
 

@@ -7,13 +7,52 @@ struct TaskSubItem: Codable, Identifiable, Equatable {
     let id = UUID()
     var text: String
     var done: Bool
+    var dueDate: String?
 
     enum CodingKeys: String, CodingKey {
         case text, done
+        case dueDate = "due_date"
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.text == rhs.text && lhs.done == rhs.done
+        lhs.text == rhs.text && lhs.done == rhs.done && lhs.dueDate == rhs.dueDate
+    }
+
+    var dueDateParsed: Date? {
+        guard let dueDate, !dueDate.isEmpty else { return nil }
+        return TaskItem.parseDueDate(dueDate)
+    }
+
+    var isOverdue: Bool {
+        guard !done, let date = dueDateParsed else { return false }
+        return date < Date()
+    }
+}
+
+// MARK: - TaskNote
+
+struct TaskNote: Codable, Identifiable, Equatable {
+    let id = UUID()
+    var text: String
+    var createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case text
+        case createdAt = "created_at"
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.text == rhs.text && lhs.createdAt == rhs.createdAt
+    }
+
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime]
+        return fmt
+    }()
+
+    var createdDate: Date? {
+        Self.iso8601Formatter.date(from: createdAt)
     }
 }
 
@@ -32,6 +71,7 @@ struct TaskItem: FetchableRecord, Identifiable, Equatable {
     let blocking: String
     let tags: String            // JSON
     let subItems: String        // JSON
+    let notes: String           // JSON — [{text, created_at}]
     let sourceType: String      // "track", "digest", "briefing", "manual", "chat"
     let sourceID: String
     let createdAt: String
@@ -50,6 +90,7 @@ struct TaskItem: FetchableRecord, Identifiable, Equatable {
         blocking = row["blocking"] ?? ""
         tags = row["tags"] ?? "[]"
         subItems = row["sub_items"] ?? "[]"
+        notes = row["notes"] ?? "[]"
         sourceType = row["source_type"] ?? "manual"
         sourceID = row["source_id"] ?? ""
         createdAt = row["created_at"] ?? ""
@@ -123,6 +164,12 @@ struct TaskItem: FetchableRecord, Identifiable, Equatable {
         guard !subItems.isEmpty, subItems != "[]",
               let data = subItems.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([TaskSubItem].self, from: data)) ?? []
+    }
+
+    var decodedNotes: [TaskNote] {
+        guard !notes.isEmpty, notes != "[]",
+              let data = notes.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([TaskNote].self, from: data)) ?? []
     }
 
     /// Progress as "2/5" format, nil if no sub-items.

@@ -104,6 +104,22 @@ final class NotificationService: Sendable {
         UNUserNotificationCenter.current().add(request)
     }
 
+    func sendBoardConfigChangedNotification(boardName: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Board configuration changed"
+        content.body = "\(boardName) — consider re-analyzing"
+        content.sound = .default
+        content.userInfo = ["type": "board_config_changed"]
+
+        let stableHash = fnv1aHash(boardName)
+        let request = UNNotificationRequest(
+            identifier: "board-config-\(stableHash)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+
     func sendDailySummaryNotification(summary: String) {
         let content = UNMutableNotificationContent()
         content.title = "Daily summary ready"

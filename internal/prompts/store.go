@@ -30,6 +30,7 @@ const (
 	TracksExtractBatch = "tracks.extract_batch"
 	PeopleBatch        = "people.batch"
 	TasksGenerate      = "tasks.generate"
+	TasksUpdate        = "tasks.update"
 	MeetingPrep        = "meeting.prep"
 )
 

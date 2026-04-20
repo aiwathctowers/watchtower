@@ -7,6 +7,8 @@ final class WorkloadViewModel {
     var entries: [WorkloadEntry] = []
     var isLoading = true
     var errorMessage: String?
+    var searchText: String = ""
+    var signalFilter: WorkloadSignal?
 
     private let dbManager: DatabaseManager
     private var observationTask: Task<Void, Never>?
@@ -18,13 +20,24 @@ final class WorkloadViewModel {
         var slackUserID: String
         var displayName: String
         var openIssues: Int
-        var storyPoints: Double
+        var inProgressCount: Int
+        var testingCount: Int
         var overdueCount: Int
         var blockedCount: Int
         var avgCycleTimeDays: Double
-        var slackMessageCount: Int
-        var meetingHours: Double
         var signal: WorkloadSignal
+    }
+
+    var filteredEntries: [WorkloadEntry] {
+        var result = entries
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            result = result.filter { $0.displayName.lowercased().contains(q) }
+        }
+        if let filter = signalFilter {
+            result = result.filter { $0.signal == filter }
+        }
+        return result
     }
 
     enum WorkloadSignal: String {
@@ -93,78 +106,77 @@ final class WorkloadViewModel {
 
     func load() {
         isLoading = true
-        do {
-            let rows = try dbManager.dbPool.read { db in
-                try JiraQueries.fetchTeamWorkload(db)
-            }
-
-            let now = Date()
-            let sevenDaysAgo = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
-
-            var result: [WorkloadEntry] = []
-            for row in rows {
-                let slackMsgs: Int
-                let mtgHours: Double
-
-                do {
-                    slackMsgs = try dbManager.dbPool.read { db in
-                        try JiraQueries.fetchSlackMessageCount(
-                            db, userID: row.slackUserID, from: sevenDaysAgo, to: now
-                        )
+        Task {
+            do {
+                let result = try await Task.detached { [dbManager] in
+                    let testingStatuses: Set<String> = try dbManager.dbPool.read { db in
+                        let boards = try JiraBoard.filter(Column("is_selected") == true).fetchAll(db)
+                        var statuses = Set<String>()
+                        for board in boards where !board.llmProfileJSON.isEmpty {
+                            if let data = board.llmProfileJSON.data(using: .utf8) {
+                                let decoder = JSONDecoder()
+                                decoder.keyDecodingStrategy = .convertFromSnakeCase
+                                if let profile = try? decoder.decode(BoardProfileDisplay.self, from: data) {
+                                    for stage in profile.workflowStages where stage.phase == "testing" {
+                                        statuses.formUnion(stage.originalStatuses.map { $0.lowercased() })
+                                    }
+                                }
+                            }
+                        }
+                        return statuses
                     }
-                } catch {
-                    slackMsgs = 0
-                }
 
-                do {
-                    mtgHours = try dbManager.dbPool.read { db in
-                        try JiraQueries.fetchMeetingHours(
-                            db, userID: row.slackUserID, from: sevenDaysAgo, to: now
-                        )
+                    let rows = try dbManager.dbPool.read { db in
+                        try JiraQueries.fetchTeamWorkload(db)
                     }
-                } catch {
-                    mtgHours = 0
-                }
 
-                let signal = Self.computeSignal(
-                    openIssues: row.openIssues,
-                    overdueCount: row.overdueCount,
-                    blockedCount: row.blockedCount,
-                    slackMessages: slackMsgs
-                )
+                    var entries: [WorkloadEntry] = []
+                    for row in rows {
+                        let (inProg, testing) = try dbManager.dbPool.read { db -> (Int, Int) in
+                            let issues = try JiraQueries.fetchIssuesByAssignee(db, slackID: row.slackUserID)
+                            let inP = issues.filter { $0.statusCategory == "in_progress" || $0.statusCategory == "indeterminate" }.count
+                            let test = issues.filter { testingStatuses.contains($0.status.lowercased()) }.count
+                            return (inP, test)
+                        }
 
-                result.append(WorkloadEntry(
-                    slackUserID: row.slackUserID,
-                    displayName: row.displayName.isEmpty ? row.slackUserID : row.displayName,
-                    openIssues: row.openIssues,
-                    storyPoints: row.storyPoints,
-                    overdueCount: row.overdueCount,
-                    blockedCount: row.blockedCount,
-                    avgCycleTimeDays: (row.avgCycleTimeDays * 100).rounded() / 100,
-                    slackMessageCount: slackMsgs,
-                    meetingHours: (mtgHours * 10).rounded() / 10,
-                    signal: signal
-                ))
+                        let signal = WorkloadViewModel.computeSignal(
+                            openIssues: row.openIssues,
+                            overdueCount: row.overdueCount,
+                            blockedCount: row.blockedCount
+                        )
+
+                        entries.append(WorkloadEntry(
+                            slackUserID: row.slackUserID,
+                            displayName: row.displayName.isEmpty ? row.slackUserID : row.displayName,
+                            openIssues: row.openIssues,
+                            inProgressCount: inProg,
+                            testingCount: testing,
+                            overdueCount: row.overdueCount,
+                            blockedCount: row.blockedCount,
+                            avgCycleTimeDays: (row.avgCycleTimeDays * 100).rounded() / 100,
+                            signal: signal
+                        ))
+                    }
+
+                    entries.sort { $0.signal.sortOrder < $1.signal.sortOrder }
+                    return entries
+                }.value
+                entries = result
+                errorMessage = nil
+            } catch {
+                entries = []
+                errorMessage = error.localizedDescription
             }
-
-            // Sort: overload first, then watch, low, normal
-            result.sort { $0.signal.sortOrder < $1.signal.sortOrder }
-            entries = result
-            errorMessage = nil
-        } catch {
-            entries = []
-            errorMessage = error.localizedDescription
+            isLoading = false
         }
-        isLoading = false
     }
 
     // MARK: - Signal Logic (matches Go computeSignal)
 
-    static func computeSignal(
+    nonisolated static func computeSignal(
         openIssues: Int,
         overdueCount: Int,
-        blockedCount: Int,
-        slackMessages: Int
+        blockedCount: Int
     ) -> WorkloadSignal {
         if overdueCount > 2 || blockedCount > 3 || openIssues > 15 {
             return .overload
@@ -172,7 +184,7 @@ final class WorkloadViewModel {
         if overdueCount > 0 || blockedCount > 1 || openIssues > 10 {
             return .watch
         }
-        if openIssues == 0 && slackMessages < 5 {
+        if openIssues == 0 {
             return .low
         }
         return .normal

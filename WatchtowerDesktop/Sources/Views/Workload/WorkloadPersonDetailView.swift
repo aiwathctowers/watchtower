@@ -4,6 +4,7 @@ import GRDB
 struct WorkloadPersonDetailView: View {
     let entry: WorkloadViewModel.WorkloadEntry
     let dbManager: DatabaseManager
+    var onClose: (() -> Void)?
 
     @State private var issues: [JiraIssue] = []
     @State private var isLoading = true
@@ -44,6 +45,15 @@ struct WorkloadPersonDetailView: View {
                 Spacer()
 
                 signalBadge
+
+                if let onClose {
+                    Button { onClose() } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -80,12 +90,11 @@ struct WorkloadPersonDetailView: View {
             GridItem(.flexible())
         ], spacing: 12) {
             statCard("Open Issues", value: "\(entry.openIssues)", icon: "doc.text", color: .blue)
-            statCard("Story Points", value: String(format: "%.0f", entry.storyPoints), icon: "star", color: .purple)
+            statCard("In Progress", value: "\(entry.inProgressCount)", icon: "arrow.forward.circle", color: .blue)
+            statCard("Testing", value: "\(entry.testingCount)", icon: "checkmark.shield", color: .purple)
             statCard("Overdue", value: "\(entry.overdueCount)", icon: "exclamationmark.triangle", color: entry.overdueCount > 0 ? .red : .secondary)
             statCard("Blocked", value: "\(entry.blockedCount)", icon: "xmark.octagon", color: entry.blockedCount > 0 ? .orange : .secondary)
             statCard("Cycle Time", value: String(format: "%.1fd", entry.avgCycleTimeDays), icon: "clock", color: .secondary)
-            statCard("Slack Msgs", value: "\(entry.slackMessageCount)", icon: "message", color: .blue)
-            statCard("Meetings", value: String(format: "%.1fh", entry.meetingHours), icon: "video", color: .green)
         }
     }
 
@@ -133,10 +142,22 @@ struct WorkloadPersonDetailView: View {
     private func issueRow(_ issue: JiraIssue) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(issue.key)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundStyle(.blue)
+                Group {
+                    if let url = JiraHelpers.browseURL(siteURL: jiraSiteURL, issueKey: issue.key) {
+                        Link(destination: url) {
+                            Text(issue.key)
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.blue)
+                        }
+                        .help("Open in Jira")
+                    } else {
+                        Text(issue.key)
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.blue)
+                    }
+                }
 
                 statusBadge(issue)
 
@@ -216,8 +237,7 @@ struct WorkloadPersonDetailView: View {
             issues = try dbManager.dbPool.read { db in
                 try JiraQueries.fetchIssuesByAssignee(db, slackID: entry.slackUserID)
             }
-            let auth = JiraAuthService()
-            jiraSiteURL = auth.siteURL
+            jiraSiteURL = JiraConfigHelper.readSiteURL()
         } catch {
             issues = []
         }

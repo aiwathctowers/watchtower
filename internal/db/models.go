@@ -469,10 +469,17 @@ type Task struct {
 	Blocking    string
 	Tags        string // JSON
 	SubItems    string // JSON
+	Notes       string // JSON — [{"text":"...","created_at":"..."}]
 	SourceType  string // "track", "digest", "briefing", "manual", "chat"
 	SourceID    string
 	CreatedAt   string
 	UpdatedAt   string
+}
+
+// TaskNote represents a single note entry in a task's notes JSON array.
+type TaskNote struct {
+	Text      string `json:"text"`
+	CreatedAt string `json:"created_at"`
 }
 
 // TaskFilter specifies criteria for querying tasks.
@@ -646,12 +653,32 @@ type JiraIssue struct {
 	EpicKey                 string
 	Labels                  string // JSON array
 	Components              string // JSON array
+	FixVersions             string // JSON array of version names
 	CreatedAt               string
 	UpdatedAt               string
 	ResolvedAt              string
 	RawJSON                 string
+	CustomFieldsJSON        string
 	SyncedAt                string
 	IsDeleted               bool
+}
+
+// JiraCustomField represents a discovered Jira custom field.
+type JiraCustomField struct {
+	ID        string
+	Name      string
+	FieldType string
+	ItemsType string
+	IsUseful  bool
+	UsageHint string
+	SyncedAt  string
+}
+
+// JiraBoardFieldMap maps a custom field to a role on a specific board.
+type JiraBoardFieldMap struct {
+	BoardID int
+	FieldID string
+	Role    string
 }
 
 // JiraSprint represents a Jira sprint stored locally.
@@ -694,6 +721,18 @@ type JiraSyncState struct {
 	IssuesSynced int
 	LastError    string
 	LastErrorAt  string
+}
+
+// JiraRelease represents a Jira fix version (release) stored locally.
+type JiraRelease struct {
+	ID          int    `json:"id"`
+	ProjectKey  string `json:"project_key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ReleaseDate string `json:"release_date"`
+	Released    bool   `json:"released"`
+	Archived    bool   `json:"archived"`
+	SyncedAt    string `json:"synced_at"`
 }
 
 // SprintStats holds aggregated issue counts for an active sprint.

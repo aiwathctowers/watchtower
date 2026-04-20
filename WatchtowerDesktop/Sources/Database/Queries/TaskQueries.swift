@@ -218,6 +218,16 @@ enum TaskQueries {
         )
     }
 
+    static func updateNotes(_ db: Database, id: Int, notes: String) throws {
+        try db.execute(
+            sql: """
+                UPDATE tasks SET notes = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE id = ?
+                """,
+            arguments: [notes, id]
+        )
+    }
+
     static func snooze(_ db: Database, id: Int, until: String) throws {
         try db.execute(
             sql: """

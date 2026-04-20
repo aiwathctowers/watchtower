@@ -24,6 +24,7 @@ import (
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	"watchtower/internal/inbox"
+	"watchtower/internal/jira"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -279,6 +280,35 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			if cfg.Inbox.Enabled {
 				d.SetInboxPipeline(inbox.New(database, cfg, gen, logger))
+			}
+		}
+		// Wire Jira syncer if configured and token exists.
+		if cfg.Jira.Enabled && cfg.Jira.CloudID != "" {
+			jiraStore := jira.NewTokenStore(cfg.WorkspaceDir())
+			if jiraStore.Exists() {
+				jiraCfg := resolveJiraOAuthConfig()
+				jiraClient := jira.NewClient(cfg.Jira.CloudID, jiraCfg, jiraStore)
+				jiraMapper := jira.NewUserMapper(jiraClient, database)
+				boards, bErr := database.GetJiraSelectedBoards()
+				if bErr != nil {
+					logger.Printf("jira: failed to load selected boards: %v", bErr)
+				} else {
+					boardIDs := make([]int, len(boards))
+					for i, b := range boards {
+						boardIDs[i] = b.ID
+					}
+					jiraSyncer := jira.NewSyncer(jiraClient, database, jiraMapper, boardIDs)
+					jiraSyncer.SetLogger(logger)
+					// Wire board analyzer for auto-refresh of changed configs.
+					if cfg.Digest.Enabled {
+						aiProvider := newAIClient(cfg, cfg.DBPath())
+						analyzer := jira.NewBoardAnalyzer(jiraClient, database, aiProvider)
+						analyzer.SetLanguage(cfg.Digest.Language)
+						jiraSyncer.SetBoardAnalyzer(analyzer)
+						jiraSyncer.SetAutoRefresh(true)
+					}
+					d.SetJiraSyncer(jiraSyncer)
+				}
 			}
 		}
 		// Wire calendar syncer if token exists.

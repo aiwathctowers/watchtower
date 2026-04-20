@@ -23,6 +23,7 @@ struct TrackParticipant: Codable, Identifiable, Equatable {
 struct TrackSourceRef: Codable, Identifiable, Equatable {
     let ts: String
     let channelID: String?
+    let threadTS: String?
     let author: String
     let text: String
 
@@ -31,6 +32,7 @@ struct TrackSourceRef: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey {
         case ts
         case channelID = "channel_id"
+        case threadTS = "thread_ts"
         case author
         case text
     }

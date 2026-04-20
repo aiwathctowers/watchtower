@@ -178,16 +178,19 @@ func (c *Client) getWithQuery(ctx context.Context, path string, params url.Value
 	return c.get(ctx, path, result)
 }
 
-// SearchIssues executes a JQL search query.
-func (c *Client) SearchIssues(ctx context.Context, jql string, startAt, maxResults int) (*SearchResult, error) {
+// SearchIssues executes a JQL search query with cursor-based pagination.
+// Pass empty nextPageToken for the first page.
+func (c *Client) SearchIssues(ctx context.Context, jql string, maxResults int, nextPageToken string) (*SearchResult, error) {
 	params := url.Values{
 		"jql":        {jql},
-		"startAt":    {fmt.Sprintf("%d", startAt)},
 		"maxResults": {fmt.Sprintf("%d", maxResults)},
 		"fields":     {strings.Join(searchFields, ",")},
 	}
+	if nextPageToken != "" {
+		params.Set("nextPageToken", nextPageToken)
+	}
 	var result SearchResult
-	if err := c.getWithQuery(ctx, "/rest/api/3/search", params, &result); err != nil {
+	if err := c.getWithQuery(ctx, "/rest/api/3/search/jql", params, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -197,5 +200,15 @@ func (c *Client) SearchIssues(ctx context.Context, jql string, startAt, maxResul
 var searchFields = []string{
 	"summary", "description", "issuetype", "status", "assignee", "reporter",
 	"priority", "created", "updated", "duedate", "labels", "components",
-	"issuelinks", "sprint", "epic", "parent", "resolutiondate",
+	"issuelinks", "sprint", "epic", "parent", "resolutiondate", "fixVersions",
+}
+
+// GetProjectVersions fetches all fix versions (releases) for a project.
+func (c *Client) GetProjectVersions(ctx context.Context, projectKey string) ([]FixVersion, error) {
+	path := fmt.Sprintf("/rest/api/3/project/%s/versions", url.PathEscape(projectKey))
+	var versions []FixVersion
+	if err := c.get(ctx, path, &versions); err != nil {
+		return nil, fmt.Errorf("fetching versions for project %s: %w", projectKey, err)
+	}
+	return versions, nil
 }

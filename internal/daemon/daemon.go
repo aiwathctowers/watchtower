@@ -205,6 +205,20 @@ func (d *Daemon) runSync(ctx context.Context) {
 			}
 			d.lastJira = time.Now()
 
+			// Record board analyzer LLM usage if any boards were re-analyzed.
+			if d.db != nil {
+				inTok, outTok, totalAPI := d.jiraSyncer.BoardAnalyzerUsage()
+				if inTok > 0 || outTok > 0 {
+					if runID, runErr := d.db.CreatePipelineRun("jira-boards", "daemon", "auto"); runErr == nil {
+						errMsg := ""
+						if err != nil {
+							errMsg = err.Error()
+						}
+						_ = d.db.CompletePipelineRun(runID, 0, inTok, outTok, 0, totalAPI, nil, nil, errMsg)
+					}
+				}
+			}
+
 			// Sync task statuses from Jira issues after successful sync.
 			if err == nil && d.db != nil {
 				if synced, serr := d.db.SyncJiraTaskStatuses(); serr != nil {

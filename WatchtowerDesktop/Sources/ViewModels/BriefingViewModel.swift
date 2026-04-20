@@ -123,7 +123,7 @@ final class BriefingViewModel {
             process.environment = Constants.resolvedEnvironment()
 
             let stderr = Pipe()
-            process.standardOutput = Pipe()
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = stderr
 
             do {

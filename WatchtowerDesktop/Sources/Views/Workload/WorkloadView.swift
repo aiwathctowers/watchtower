@@ -14,7 +14,11 @@ struct WorkloadView: View {
                    let entry = vm.entries.first(where: { $0.slackUserID == userID }),
                    let dbManager = appState.databaseManager {
                     Divider()
-                    WorkloadPersonDetailView(entry: entry, dbManager: dbManager)
+                    WorkloadPersonDetailView(
+                        entry: entry,
+                        dbManager: dbManager,
+                        onClose: { selectedUserID = nil }
+                    )
                         .id(userID)
                         .frame(minWidth: 400, idealWidth: 500)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -68,10 +72,18 @@ struct WorkloadView: View {
 
             Divider()
 
+            // Search bar
+            searchBar(vm)
+
+            // Signal filter chips
+            signalFilterChips(vm)
+
+            Divider()
+
             if vm.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if vm.entries.isEmpty {
+            } else if vm.filteredEntries.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "gauge.with.dots.needle.33percent")
                         .font(.system(size: 48))
@@ -104,7 +116,7 @@ struct WorkloadView: View {
 
                 Divider()
 
-                ForEach(vm.entries) { entry in
+                ForEach(vm.filteredEntries) { entry in
                     tableRow(entry)
                         .contentShape(Rectangle())
                         .onTapGesture { selectedUserID = entry.slackUserID }
@@ -126,18 +138,16 @@ struct WorkloadView: View {
             Group {
                 Text("Open")
                     .frame(width: 40)
-                Text("SP")
-                    .frame(width: 40)
+                Text("In Prog")
+                    .frame(width: 50)
+                Text("Testing")
+                    .frame(width: 50)
                 Text("Late")
                     .frame(width: 40)
                 Text("Block")
                     .frame(width: 40)
                 Text("Cycle")
                     .frame(width: 50)
-                Text("Msgs")
-                    .frame(width: 40)
-                Text("Mtgs")
-                    .frame(width: 40)
                 Text("Signal")
                     .frame(width: 80)
             }
@@ -160,8 +170,12 @@ struct WorkloadView: View {
             Group {
                 Text("\(entry.openIssues)")
                     .frame(width: 40)
-                Text(String(format: "%.0f", entry.storyPoints))
-                    .frame(width: 40)
+                Text("\(entry.inProgressCount)")
+                    .foregroundStyle(Color.blue)
+                    .frame(width: 50)
+                Text("\(entry.testingCount)")
+                    .foregroundStyle(Color.purple)
+                    .frame(width: 50)
                 Text("\(entry.overdueCount)")
                     .foregroundStyle(entry.overdueCount > 0 ? Color.red : Color.primary)
                     .frame(width: 40)
@@ -170,15 +184,81 @@ struct WorkloadView: View {
                     .frame(width: 40)
                 Text(String(format: "%.1f", entry.avgCycleTimeDays))
                     .frame(width: 50)
-                Text("\(entry.slackMessageCount)")
-                    .frame(width: 40)
-                Text(String(format: "%.1f", entry.meetingHours))
-                    .frame(width: 40)
                 signalBadge(entry.signal)
                     .frame(width: 80)
             }
             .font(.caption)
         }
+    }
+
+    // MARK: - Search & Filter
+
+    private func searchBar(_ vm: WorkloadViewModel) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            @Bindable var vmBindable = vm
+            TextField("Filter people...", text: $vmBindable.searchText)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+
+            if !vm.searchText.isEmpty {
+                Button {
+                    vm.searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private func signalFilterChips(_ vm: WorkloadViewModel) -> some View {
+        HStack(spacing: 6) {
+            filterChip("All", isActive: vm.signalFilter == nil) {
+                vm.signalFilter = nil
+            }
+            ForEach(
+                [WorkloadViewModel.WorkloadSignal.overload, .watch, .normal, .low],
+                id: \.rawValue
+            ) { signal in
+                filterChip(signal.label, color: signalColor(signal), isActive: vm.signalFilter == signal) {
+                    vm.signalFilter = vm.signalFilter == signal ? nil : signal
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func filterChip(
+        _ label: String,
+        color: Color = .secondary,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    isActive ? color.opacity(0.2) : Color.secondary.opacity(0.08),
+                    in: Capsule()
+                )
+                .foregroundStyle(isActive ? color : .secondary)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Signal Badge

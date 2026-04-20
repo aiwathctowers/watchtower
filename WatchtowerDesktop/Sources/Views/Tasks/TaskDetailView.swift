@@ -17,6 +17,12 @@ struct TaskDetailView: View {
     @State private var newSubItemText: String = ""
     @State private var editingSubItemIndex: Int? = nil
     @State private var editingSubItemText: String = ""
+    @State private var subItemDueDateIndex: Int? = nil
+    @State private var subItemDueDate: Date = Date()
+    @State private var newNoteText: String = ""
+    @State private var aiInstruction: String = ""
+    @State private var isAIUpdating = false
+    @State private var aiErrorMessage: String?
     @State private var jiraIssue: JiraIssue?
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
@@ -30,6 +36,8 @@ struct TaskDetailView: View {
                 dueDateSection
                 detailsSection
                 subItemsSection
+                notesSection
+                aiUpdateSection
                 metaSection
                 sourceSection
                 jiraIssueSection
@@ -221,45 +229,7 @@ struct TaskDetailView: View {
 
             let items = task.decodedSubItems
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                HStack(spacing: 8) {
-                    Button {
-                        viewModel.toggleSubItem(task, index: index)
-                    } label: {
-                        Image(systemName: item.done
-                            ? "checkmark.circle.fill"
-                            : "circle")
-                            .foregroundStyle(item.done ? .green : .secondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    if editingSubItemIndex == index {
-                        TextField("Sub-item", text: $editingSubItemText)
-                            .font(.callout)
-                            .textFieldStyle(.plain)
-                            .onSubmit {
-                                viewModel.editSubItem(task, index: index, newText: editingSubItemText)
-                                editingSubItemIndex = nil
-                            }
-                    } else {
-                        Text(item.text)
-                            .font(.callout)
-                            .strikethrough(item.done)
-                            .foregroundStyle(
-                                item.done ? .secondary : .primary
-                            )
-                    }
-
-                    Spacer()
-                }
-                .contextMenu {
-                    Button("Edit") {
-                        editingSubItemIndex = index
-                        editingSubItemText = item.text
-                    }
-                    Button("Delete", role: .destructive) {
-                        viewModel.removeSubItem(task, index: index)
-                    }
-                }
+                subItemRow(index: index, item: item)
             }
 
             // Add new sub-item
@@ -273,6 +243,233 @@ struct TaskDetailView: View {
                         viewModel.addSubItem(task, text: newSubItemText)
                         newSubItemText = ""
                     }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subItemRow(index: Int, item: TaskSubItem) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            Button {
+                viewModel.toggleSubItem(task, index: index)
+            } label: {
+                Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.done ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            subItemContent(index: index, item: item)
+
+            Spacer(minLength: 0)
+
+            subItemActions(index: index, item: item)
+        }
+        .padding(.vertical, 2)
+        .draggable(String(index)) {
+            HStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.caption2)
+                Text(item.text)
+                    .font(.callout)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.background, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .dropDestination(for: String.self) { droppedItems, _ in
+            guard let fromStr = droppedItems.first,
+                  let from = Int(fromStr),
+                  from != index else { return false }
+            let dest = from < index ? index + 1 : index
+            viewModel.moveSubItem(task, from: IndexSet(integer: from), to: dest)
+            return true
+        }
+    }
+
+    @ViewBuilder
+    private func subItemContent(index: Int, item: TaskSubItem) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if editingSubItemIndex == index {
+                TextField("Sub-item", text: $editingSubItemText)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        viewModel.editSubItem(task, index: index, newText: editingSubItemText)
+                        editingSubItemIndex = nil
+                    }
+                    .onExitCommand { editingSubItemIndex = nil }
+            } else {
+                Text(item.text)
+                    .font(.callout)
+                    .strikethrough(item.done)
+                    .foregroundStyle(item.done ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        editingSubItemIndex = index
+                        editingSubItemText = item.text
+                    }
+            }
+
+            subItemDueDateRow(index: index, item: item)
+        }
+    }
+
+    @ViewBuilder
+    private func subItemDueDateRow(index: Int, item: TaskSubItem) -> some View {
+        if subItemDueDateIndex == index {
+            HStack(spacing: 4) {
+                DatePicker("", selection: $subItemDueDate, displayedComponents: [.date, .hourAndMinute])
+                    .labelsHidden()
+                    .controlSize(.small)
+                Button("Set") {
+                    let dateStr = TaskItem.formatDueDate(subItemDueDate)
+                    viewModel.updateSubItemDueDate(task, index: index, dueDate: dateStr)
+                    subItemDueDateIndex = nil
+                }
+                .controlSize(.small)
+                if item.dueDate != nil {
+                    Button("Clear") {
+                        viewModel.updateSubItemDueDate(task, index: index, dueDate: nil)
+                        subItemDueDateIndex = nil
+                    }
+                    .controlSize(.small)
+                }
+                Button("Cancel") { subItemDueDateIndex = nil }
+                    .controlSize(.small)
+            }
+        } else if let dueStr = item.dueDate, !dueStr.isEmpty {
+            Text("Due: \(subItemDueDateFormatted(dueStr))")
+                .font(.caption2)
+                .foregroundStyle(item.isOverdue ? .red : .secondary)
+                .onTapGesture {
+                    subItemDueDateIndex = index
+                    subItemDueDate = item.dueDateParsed ?? Date()
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func subItemActions(index: Int, item: TaskSubItem) -> some View {
+        Button {
+            if subItemDueDateIndex == index {
+                subItemDueDateIndex = nil
+            } else {
+                subItemDueDateIndex = index
+                subItemDueDate = item.dueDateParsed ?? Date()
+            }
+        } label: {
+            Image(systemName: "calendar")
+                .font(.caption)
+                .foregroundStyle(item.dueDate != nil ? Color.blue : Color.gray.opacity(0.5))
+        }
+        .buttonStyle(.plain)
+
+        Button {
+            viewModel.removeSubItem(task, index: index)
+        } label: {
+            Image(systemName: "xmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Notes
+
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notes")
+                .font(.headline)
+
+            let notes = task.decodedNotes
+            if notes.isEmpty {
+                Text("No notes yet")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(Array(notes.enumerated()), id: \.element.id) { index, note in
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(note.text)
+                                .font(.callout)
+                            if let date = note.createdDate {
+                                Text(date, style: .relative)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            } else {
+                                Text(note.createdAt)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            viewModel.removeNote(task, index: index)
+                        } label: {
+                            Image(systemName: "xmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 2)
+                    if index < notes.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle")
+                    .foregroundStyle(.secondary)
+                TextField("Add note...", text: $newNoteText)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        viewModel.addNote(task, text: newNoteText)
+                        newNoteText = ""
+                    }
+            }
+        }
+    }
+
+    // MARK: - AI Update
+
+    private var aiUpdateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("AI Update")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                TextField("Describe what to change...", text: $aiInstruction)
+                    .font(.callout)
+                    .textFieldStyle(.plain)
+                    .onSubmit { runAIUpdate() }
+                    .disabled(isAIUpdating)
+
+                Button {
+                    runAIUpdate()
+                } label: {
+                    if isAIUpdating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(aiInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isAIUpdating)
+            }
+
+            if let error = aiErrorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
     }
@@ -668,6 +865,119 @@ struct TaskDetailView: View {
         let trimmed = editingBallOn.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != task.ballOn else { return }
         viewModel.updateBallOn(task, to: trimmed)
+    }
+
+    private static let subItemDateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .short
+        fmt.timeStyle = .short
+        return fmt
+    }()
+
+    private func subItemDueDateFormatted(_ dateStr: String) -> String {
+        guard let date = TaskItem.parseDueDate(dateStr) else { return dateStr }
+        return Self.subItemDateFormatter.string(from: date)
+    }
+
+    private func runAIUpdate() {
+        let instruction = aiInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else { return }
+
+        guard let cliPath = Constants.findCLIPath() else {
+            aiErrorMessage = "watchtower binary not found"
+            return
+        }
+
+        isAIUpdating = true
+        aiErrorMessage = nil
+
+        Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = ["tasks", "ai-update", "\(task.id)", "--instruction", instruction]
+            process.environment = Constants.resolvedEnvironment()
+
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            do {
+                try process.run()
+
+                // Read pipes BEFORE waitUntilExit to avoid deadlock if buffer fills.
+                let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+
+                let outStr = String(data: outData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let errStr = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                await MainActor.run {
+                    isAIUpdating = false
+
+                    if process.terminationStatus != 0 {
+                        aiErrorMessage = errStr.isEmpty ? "AI update failed" : errStr
+                        return
+                    }
+
+                    applyAIUpdateResult(outStr)
+                    aiInstruction = ""
+                }
+            } catch {
+                await MainActor.run {
+                    isAIUpdating = false
+                    aiErrorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func applyAIUpdateResult(_ jsonStr: String) {
+        guard let data = jsonStr.data(using: .utf8) else {
+            aiErrorMessage = "Invalid response from AI"
+            return
+        }
+
+        struct UpdatedTask: Decodable {
+            let text: String?
+            let intent: String?
+            let priority: String?
+            // swiftlint:disable:next identifier_name
+            let due_date: String?
+            // swiftlint:disable:next identifier_name
+            let sub_items: [TaskSubItem]?
+        }
+
+        do {
+            let result = try JSONDecoder().decode(UpdatedTask.self, from: data)
+
+            if let t = result.text, !t.isEmpty, t != task.text {
+                viewModel.updateText(task, to: t)
+                editingText = t
+            }
+            if let i = result.intent {
+                viewModel.updateIntent(task, to: i)
+                editingIntent = i
+            }
+            if let p = result.priority, ["high", "medium", "low"].contains(p) {
+                viewModel.updatePriority(task, to: p)
+            }
+            if let d = result.due_date, !d.isEmpty {
+                viewModel.updateDueDate(task, to: d)
+                if let date = TaskItem.parseDueDate(d) {
+                    dueDate = date
+                    hasDueDate = true
+                }
+            }
+            if let items = result.sub_items, !items.isEmpty {
+                viewModel.replaceSubItems(task, items: items)
+            }
+        } catch {
+            aiErrorMessage = "Failed to parse AI response: \(error.localizedDescription)"
+        }
     }
 
     private func snoozeFor(days: Int) {

@@ -845,6 +845,153 @@ enum JiraQueries {
         return (blocks: blocks, blockedBy: blockedBy, relatesTo: relatesTo)
     }
 
+    // MARK: - Releases
+
+    /// Fetch releases for a project, sorted by release_date.
+    static func fetchReleases(
+        _ db: Database,
+        projectKey: String
+    ) throws -> [JiraRelease] {
+        try JiraRelease
+            .filter(Column("project_key") == projectKey)
+            .order(Column("release_date"))
+            .fetchAll(db)
+    }
+
+    /// Fetch unreleased, non-archived releases across all projects.
+    static func fetchUnreleasedReleases(
+        _ db: Database
+    ) throws -> [JiraRelease] {
+        try JiraRelease
+            .filter(Column("released") == false)
+            .filter(Column("archived") == false)
+            .order(Column("release_date"))
+            .fetchAll(db)
+    }
+
+    /// Fetch issues where fix_versions JSON array contains versionName.
+    static func fetchIssuesByFixVersion(
+        _ db: Database,
+        versionName: String
+    ) throws -> [JiraIssue] {
+        try JiraIssue.fetchAll(
+            db,
+            sql: """
+                SELECT ji.* FROM jira_issues ji
+                WHERE EXISTS (SELECT 1 FROM json_each(ji.fix_versions) WHERE value = ?)
+                  AND ji.is_deleted = 0
+                ORDER BY
+                  CASE ji.status_category WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END,
+                  ji.priority,
+                  ji.updated_at DESC
+                """,
+            arguments: [versionName]
+        )
+    }
+
+    /// Fetch all epic-type issues (non-deleted).
+    static func fetchAllEpics(_ db: Database) throws -> [JiraIssue] {
+        try JiraIssue.fetchAll(
+            db,
+            sql: """
+                SELECT *
+                FROM jira_issues
+                WHERE issue_type_category = 'epic'
+                  AND is_deleted = 0
+                ORDER BY updated_at DESC
+                """
+        )
+    }
+
+    /// Fetch non-deleted issues belonging to an epic.
+    static func fetchIssuesByEpicKey(
+        _ db: Database,
+        epicKey: String
+    ) throws -> [JiraIssue] {
+        try JiraIssue.fetchAll(
+            db,
+            sql: """
+                SELECT *
+                FROM jira_issues
+                WHERE epic_key = ?
+                  AND is_deleted = 0
+                ORDER BY
+                  CASE status_category WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END,
+                  priority,
+                  updated_at DESC
+                """,
+            arguments: [epicKey]
+        )
+    }
+
+    /// Fetch unique assignees (Slack ID + display name) for issues in an epic.
+    static func fetchParticipantsForEpic(
+        _ db: Database,
+        epicKey: String
+    ) throws -> [(slackID: String, name: String)] {
+        let rows = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT assignee_slack_id, assignee_display_name
+                FROM jira_issues
+                WHERE epic_key = ?
+                  AND assignee_slack_id != ''
+                  AND is_deleted = 0
+                ORDER BY assignee_display_name
+                """,
+            arguments: [epicKey]
+        )
+        return rows.compactMap { row in
+            guard let slackID: String = row["assignee_slack_id"],
+                  let name: String = row["assignee_display_name"] else { return nil }
+            return (slackID: slackID, name: name)
+        }
+    }
+
+    /// Batch-fetch Slack links for a set of issue keys.
+    static func fetchSlackLinksForIssueKeys(
+        _ db: Database,
+        keys: [String]
+    ) throws -> [JiraSlackLink] {
+        guard !keys.isEmpty else { return [] }
+        let placeholders = keys.map { _ in "?" }.joined(separator: ",")
+        return try JiraSlackLink.fetchAll(
+            db,
+            sql: """
+                SELECT *
+                FROM jira_slack_links
+                WHERE issue_key IN (\(placeholders))
+                ORDER BY detected_at DESC
+                """,
+            arguments: StatementArguments(keys)
+        )
+    }
+
+    /// Count issues added to / removed from a fix version since a given date.
+    /// "Added" = issues currently in the version with synced_at >= since.
+    /// "Removed" = approximated as 0 (fix_versions is current state, no history).
+    static func fetchScopeChanges(
+        _ db: Database,
+        versionName: String,
+        since: Date
+    ) throws -> (added: Int, removed: Int) {
+        let sinceStr = isoFormatter.string(from: since)
+        let added = try Int.fetchOne(
+            db,
+            sql: """
+                SELECT COUNT(*)
+                FROM jira_issues ji
+                WHERE EXISTS (SELECT 1 FROM json_each(ji.fix_versions) WHERE value = ?)
+                  AND ji.synced_at >= ?
+                  AND ji.is_deleted = 0
+                """,
+            arguments: [versionName, sinceStr]
+        ) ?? 0
+
+        // Removed count requires historical data not available in current schema.
+        return (added: added, removed: 0)
+    }
+
     // MARK: - Helpers
 
     /// Parse an array of JSON-encoded string arrays and return

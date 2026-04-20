@@ -92,7 +92,7 @@ struct JiraSyncInfoView: View {
                 Constants.processWorkingDirectory()
 
             let stderrPipe = Pipe()
-            process.standardOutput = Pipe()
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = stderrPipe
 
             do {

@@ -85,6 +85,11 @@ struct MeetingPrepDetailView: View {
                 peopleNotesSection(result.peopleNotes)
                 recommendationsSection(result.recommendations ?? [])
                 suggestedPrepSection(result.suggestedPrep)
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                MeetingNotesView(eventID: eventID)
             }
             .padding()
         }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BlockerCardView: View {
     let entry: BlockerMapViewModel.BlockerEntry
+    @State private var siteURL: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -14,10 +15,22 @@ struct BlockerCardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Row 1: Issue key + status + days
                 HStack(alignment: .center, spacing: 8) {
-                    Text(entry.issueKey)
-                        .font(.subheadline)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.blue)
+                    Group {
+                        if let url = JiraHelpers.browseURL(siteURL: siteURL, issueKey: entry.issueKey) {
+                            Link(destination: url) {
+                                Text(entry.issueKey)
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundStyle(.blue)
+                            }
+                            .help("Open in Jira")
+                        } else {
+                            Text(entry.issueKey)
+                                .font(.subheadline)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.blue)
+                        }
+                    }
 
                     statusBadge
 
@@ -105,6 +118,9 @@ struct BlockerCardView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
         )
+        .onAppear {
+            siteURL = JiraConfigHelper.readSiteURL()
+        }
     }
 
     // MARK: - Components
@@ -149,10 +165,22 @@ struct BlockerCardView: View {
                         .font(.system(size: 8))
                         .foregroundStyle(.tertiary)
                 }
-                Text(key)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.blue)
+                Group {
+                    if let url = JiraHelpers.browseURL(siteURL: siteURL, issueKey: key) {
+                        Link(destination: url) {
+                            Text(key)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.blue)
+                        }
+                        .help("Open in Jira")
+                    } else {
+                        Text(key)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.blue)
+                    }
+                }
             }
 
             if entry.blockingChain.count > 1 {

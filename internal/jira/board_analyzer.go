@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -61,22 +62,32 @@ type IssueSample struct {
 
 // BoardRawData is the collected raw data for a board before LLM analysis.
 type BoardRawData struct {
-	BoardName   string          `json:"board_name"`
-	ProjectKey  string          `json:"project_key"`
-	BoardType   string          `json:"board_type"`
-	Config      BoardConfig     `json:"config"`
-	Sprints     []SprintSummary `json:"sprints"`
-	IssueSample IssueSample     `json:"issue_sample"`
+	BoardName    string               `json:"board_name"`
+	ProjectKey   string               `json:"project_key"`
+	BoardType    string               `json:"board_type"`
+	Config       BoardConfig          `json:"config"`
+	Sprints      []SprintSummary      `json:"sprints"`
+	IssueSample  IssueSample          `json:"issue_sample"`
+	CustomFields []CustomFieldContext `json:"custom_fields,omitempty"`
+}
+
+// CustomFieldContext provides custom field mapping info for LLM context.
+type CustomFieldContext struct {
+	FieldID string `json:"field_id"`
+	Name    string `json:"name"`
+	Role    string `json:"role"`
+	Type    string `json:"type"`
 }
 
 // BoardProfile is the LLM-generated analysis of a board's workflow.
 type BoardProfile struct {
-	WorkflowStages     []WorkflowStage    `json:"workflow_stages"`
-	EstimationApproach EstimationApproach `json:"estimation_approach"`
-	IterationInfo      IterationInfo      `json:"iteration_info"`
-	WorkflowSummary    string             `json:"workflow_summary"`
-	StaleThresholds    map[string]int     `json:"stale_thresholds"`
-	HealthSignals      []string           `json:"health_signals"`
+	WorkflowStages     []WorkflowStage      `json:"workflow_stages"`
+	EstimationApproach EstimationApproach   `json:"estimation_approach"`
+	IterationInfo      IterationInfo        `json:"iteration_info"`
+	WorkflowSummary    string               `json:"workflow_summary"`
+	StaleThresholds    map[string]int       `json:"stale_thresholds"`
+	HealthSignals      []string             `json:"health_signals"`
+	CustomFields       []CustomFieldContext `json:"custom_fields,omitempty"`
 }
 
 // WorkflowStage represents a stage in the board's workflow.
@@ -103,7 +114,9 @@ type IterationInfo struct {
 
 // UserOverrides stores user-specified overrides for board analysis.
 type UserOverrides struct {
-	StaleThresholds map[string]int `json:"stale_thresholds,omitempty"`
+	StaleThresholds map[string]int    `json:"stale_thresholds,omitempty"`
+	TerminalStages  map[string]bool   `json:"terminal_stages,omitempty"` // status name → is_terminal override
+	PhaseOverrides  map[string]string `json:"phase_overrides,omitempty"` // status name → phase (backlog|active_work|review|testing|done|other)
 }
 
 // BoardAnalyzer performs LLM-based analysis of Jira boards.
@@ -111,7 +124,13 @@ type BoardAnalyzer struct {
 	client     *Client
 	db         *db.DB
 	aiProvider ai.Provider
+	language   string
 	logger     *log.Logger
+
+	// Accumulated usage from LLM calls.
+	totalInputTokens  int
+	totalOutputTokens int
+	totalAPITokens    int
 }
 
 // NewBoardAnalyzer creates a new BoardAnalyzer.
@@ -120,7 +139,30 @@ func NewBoardAnalyzer(client *Client, database *db.DB, aiProvider ai.Provider) *
 		client:     client,
 		db:         database,
 		aiProvider: aiProvider,
+		language:   "English",
 		logger:     log.New(os.Stderr, "[jira-analyzer] ", log.LstdFlags),
+	}
+}
+
+// AccumulatedUsage returns token counts accumulated across all LLM calls.
+func (a *BoardAnalyzer) AccumulatedUsage() (inputTokens, outputTokens, totalAPITokens int) {
+	return a.totalInputTokens, a.totalOutputTokens, a.totalAPITokens
+}
+
+// addUsage accumulates token usage from an LLM call.
+func (a *BoardAnalyzer) addUsage(usage *ai.Usage) {
+	if usage == nil {
+		return
+	}
+	a.totalInputTokens += usage.InputTokens
+	a.totalOutputTokens += usage.OutputTokens
+	a.totalAPITokens += usage.TotalAPITokens
+}
+
+// SetLanguage sets the output language for board analysis.
+func (a *BoardAnalyzer) SetLanguage(lang string) {
+	if lang != "" {
+		a.language = lang
 	}
 }
 
@@ -133,7 +175,7 @@ func (a *BoardAnalyzer) FetchBoardRawData(ctx context.Context, board db.JiraBoar
 	}
 
 	// Fetch board configuration (columns + estimation).
-	config, err := a.fetchBoardConfig(ctx, board.ID)
+	config, err := a.fetchBoardConfig(ctx, board.ID, board.ProjectKey)
 	if err != nil {
 		a.logger.Printf("warning: could not fetch board config for %d: %v", board.ID, err)
 	} else {
@@ -170,12 +212,49 @@ func (a *BoardAnalyzer) AnalyzeBoard(ctx context.Context, board db.JiraBoard) (*
 
 	hash := ComputeConfigHash(rawData)
 
-	// Check if config is unchanged and profile already exists.
-	if board.ConfigHash == hash && board.LLMProfileJSON != "" {
-		a.logger.Printf("board %d config unchanged (hash=%s), skipping", board.ID, hash[:8])
+	// Check if config is unchanged and profile already exists and is valid.
+	if board.ConfigHash == hash && hash != "" && board.LLMProfileJSON != "" {
 		var existing BoardProfile
-		if err := json.Unmarshal([]byte(board.LLMProfileJSON), &existing); err == nil {
+		if err := json.Unmarshal([]byte(board.LLMProfileJSON), &existing); err == nil && len(existing.WorkflowStages) > 0 {
+			a.logger.Printf("board %d config unchanged (hash=%s), skipping", board.ID, hash[:8])
 			return &existing, nil
+		}
+	}
+
+	// Enrich with custom field context (best-effort).
+	fd := NewFieldDiscovery(a.client, a.db, a.aiProvider)
+	if fd.NeedsDiscovery() {
+		if discErr := fd.DiscoverAndClassify(ctx); discErr != nil {
+			a.logger.Printf("warning: field discovery failed: %v", discErr)
+		}
+	}
+	mappings, _ := a.db.GetJiraBoardFieldMap(board.ID)
+	if len(mappings) == 0 {
+		if mapped, mapErr := fd.MapFieldsForBoard(ctx, board); mapErr != nil {
+			a.logger.Printf("warning: field mapping failed for board %d: %v", board.ID, mapErr)
+		} else {
+			mappings = mapped
+		}
+	}
+	// Collect usage from field discovery LLM calls.
+	fdIn, fdOut, fdAPI := fd.AccumulatedUsage()
+	a.totalInputTokens += fdIn
+	a.totalOutputTokens += fdOut
+	a.totalAPITokens += fdAPI
+	if len(mappings) > 0 {
+		usefulFields, _ := a.db.GetUsefulJiraCustomFields()
+		fieldIndex := make(map[string]db.JiraCustomField)
+		for _, f := range usefulFields {
+			fieldIndex[f.ID] = f
+		}
+		for _, m := range mappings {
+			f := fieldIndex[m.FieldID]
+			rawData.CustomFields = append(rawData.CustomFields, CustomFieldContext{
+				FieldID: m.FieldID,
+				Name:    f.Name,
+				Role:    m.Role,
+				Type:    f.FieldType,
+			})
 		}
 	}
 
@@ -185,10 +264,14 @@ func (a *BoardAnalyzer) AnalyzeBoard(ctx context.Context, board db.JiraBoard) (*
 	// Call LLM.
 	profile, err := a.callLLM(ctx, rawData)
 	if err != nil {
-		// On LLM failure, use fallback.
-		a.logger.Printf("LLM analysis failed for board %d, using fallback: %v", board.ID, err)
-		profile = BuildFallbackProfile(rawData)
+		return nil, fmt.Errorf("LLM analysis for board %d: %w", board.ID, err)
 	}
+	if len(profile.WorkflowStages) == 0 {
+		return nil, fmt.Errorf("LLM returned empty workflow for board %d", board.ID)
+	}
+
+	// Store custom field mappings in the profile.
+	profile.CustomFields = rawData.CustomFields
 
 	profileJSON, _ := json.Marshal(profile)
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -253,67 +336,147 @@ func (a *BoardAnalyzer) CheckConfigChanged(ctx context.Context) ([]int, error) {
 	return changed, nil
 }
 
-// BuildFallbackProfile creates a basic profile without LLM, from raw board data.
-func BuildFallbackProfile(rawData *BoardRawData) *BoardProfile {
-	profile := &BoardProfile{
-		StaleThresholds: map[string]int{},
-		HealthSignals:   []string{},
+// RefreshCooldown is the minimum interval between automatic re-analyses of a board.
+const RefreshCooldown = 24 * time.Hour
+
+// RefreshResult describes the outcome of a single board refresh attempt.
+type RefreshResult struct {
+	BoardID   int
+	BoardName string
+	Refreshed bool
+	Skipped   bool // true if cooldown not elapsed
+	Error     error
+}
+
+// CheckAndRefreshProfiles checks selected boards for config changes and re-analyzes
+// those whose config hash changed and whose cooldown (24h) has elapsed.
+// User overrides are preserved across re-analysis: after the new LLM profile is
+// generated, existing user_overrides_json stale_thresholds are merged on top.
+// If autoRefresh is false, only logs which boards need refresh without running LLM.
+func (a *BoardAnalyzer) CheckAndRefreshProfiles(ctx context.Context, autoRefresh bool) ([]RefreshResult, error) {
+	boards, err := a.db.GetJiraSelectedBoards()
+	if err != nil {
+		return nil, fmt.Errorf("getting selected boards: %w", err)
 	}
 
-	// Map columns to workflow stages.
-	for _, col := range rawData.Config.Columns {
-		phase := "active_work"
-		isTerminal := false
-		nameLower := strings.ToLower(col.Name)
-		if nameLower == "done" || nameLower == "closed" || nameLower == "resolved" {
-			phase = "done"
-			isTerminal = true
-		} else if nameLower == "backlog" || nameLower == "to do" || nameLower == "todo" || nameLower == "open" {
-			phase = "backlog"
+	var results []RefreshResult
+
+	for _, board := range boards {
+		full, err := a.db.GetJiraBoardProfile(board.ID)
+		if err != nil || full == nil {
+			// No profile yet — not a "changed config" case, skip.
+			continue
 		}
 
-		var statuses []string
-		for _, s := range col.Statuses {
-			statuses = append(statuses, s.Name)
+		// Fetch current raw data to compute fresh hash.
+		rawData, err := a.FetchBoardRawData(ctx, *full)
+		if err != nil {
+			a.logger.Printf("warning: could not fetch raw data for board %d: %v", board.ID, err)
+			continue
 		}
 
-		profile.WorkflowStages = append(profile.WorkflowStages, WorkflowStage{
-			Name:             col.Name,
-			OriginalStatuses: statuses,
-			Phase:            phase,
-			IsTerminal:       isTerminal,
+		newHash := ComputeConfigHash(rawData)
+		if newHash == full.ConfigHash {
+			continue // config unchanged
+		}
+
+		// Check cooldown.
+		if full.ProfileGeneratedAt != "" {
+			generated, err := time.Parse(time.RFC3339, full.ProfileGeneratedAt)
+			if err == nil && time.Since(generated) < RefreshCooldown {
+				a.logger.Printf("board %d (%s): config changed but cooldown not elapsed (generated %s ago)",
+					board.ID, board.Name, time.Since(generated).Truncate(time.Minute))
+				results = append(results, RefreshResult{
+					BoardID:   board.ID,
+					BoardName: board.Name,
+					Skipped:   true,
+				})
+				continue
+			}
+		}
+
+		a.logger.Printf("board %d (%s): config changed (hash %s -> %s)",
+			board.ID, board.Name, full.ConfigHash[:min(8, len(full.ConfigHash))], newHash[:min(8, len(newHash))])
+
+		if !autoRefresh {
+			a.logger.Printf("board %d (%s): needs re-analyze — run 'watchtower jira boards analyze' or use --auto",
+				board.ID, board.Name)
+			results = append(results, RefreshResult{
+				BoardID:   board.ID,
+				BoardName: board.Name,
+			})
+			continue
+		}
+
+		// Save existing user overrides before re-analysis.
+		existingOverrides := full.UserOverridesJSON
+
+		// Clear config hash to force re-analysis.
+		full.ConfigHash = ""
+		profile, err := a.AnalyzeBoard(ctx, *full)
+		if err != nil {
+			a.logger.Printf("warning: re-analysis failed for board %d (%s): %v", board.ID, board.Name, err)
+			results = append(results, RefreshResult{
+				BoardID:   board.ID,
+				BoardName: board.Name,
+				Error:     err,
+			})
+			continue
+		}
+
+		// Merge user overrides back on top of new profile.
+		if existingOverrides != "" {
+			if err := a.mergeUserOverrides(board.ID, profile, existingOverrides); err != nil {
+				a.logger.Printf("warning: failed to merge overrides for board %d: %v", board.ID, err)
+			}
+		}
+
+		a.logger.Printf("board %d (%s): re-analyzed successfully", board.ID, board.Name)
+		results = append(results, RefreshResult{
+			BoardID:   board.ID,
+			BoardName: board.Name,
+			Refreshed: true,
 		})
-
-		// Default stale threshold: 3 days for active_work, 7 for backlog.
-		if phase == "active_work" {
-			profile.StaleThresholds[col.Name] = 3
-		} else if phase == "backlog" {
-			profile.StaleThresholds[col.Name] = 7
-		}
 	}
 
-	// Estimation approach.
-	if rawData.Config.Estimation != nil {
-		profile.EstimationApproach = EstimationApproach{
-			Type:  "story_points",
-			Field: &rawData.Config.Estimation.FieldID,
-		}
-	} else {
-		profile.EstimationApproach = EstimationApproach{Type: "none"}
+	return results, nil
+}
+
+// mergeUserOverrides re-applies user override stale thresholds on top of a freshly
+// generated LLM profile and saves the updated profile to DB.
+func (a *BoardAnalyzer) mergeUserOverrides(boardID int, profile *BoardProfile, overridesJSON string) error {
+	var overrides UserOverrides
+	if err := json.Unmarshal([]byte(overridesJSON), &overrides); err != nil {
+		return fmt.Errorf("parsing user overrides: %w", err)
 	}
 
-	// Iteration info.
-	profile.IterationInfo.HasIterations = len(rawData.Sprints) > 0 || rawData.BoardType == "scrum"
-
-	// Workflow summary.
-	var stageNames []string
-	for _, s := range profile.WorkflowStages {
-		stageNames = append(stageNames, s.Name)
+	if len(overrides.StaleThresholds) == 0 {
+		return nil
 	}
-	profile.WorkflowSummary = fmt.Sprintf("%s board with stages: %s",
-		rawData.BoardType, strings.Join(stageNames, " -> "))
 
-	return profile
+	// Apply overrides on top of LLM-generated thresholds.
+	if profile.StaleThresholds == nil {
+		profile.StaleThresholds = make(map[string]int)
+	}
+	for k, v := range overrides.StaleThresholds {
+		profile.StaleThresholds[k] = v
+	}
+
+	// Re-save profile with merged thresholds.
+	profileJSON, err := json.Marshal(profile)
+	if err != nil {
+		return fmt.Errorf("marshaling merged profile: %w", err)
+	}
+
+	// We only need to update llm_profile_json; other columns stay the same.
+	board, err := a.db.GetJiraBoardProfile(boardID)
+	if err != nil || board == nil {
+		return fmt.Errorf("getting board for merge: %w", err)
+	}
+
+	return a.db.UpdateJiraBoardProfile(boardID,
+		board.RawColumnsJSON, board.RawConfigJSON, string(profileJSON),
+		board.WorkflowSummary, board.ConfigHash, board.ProfileGeneratedAt)
 }
 
 // ComputeConfigHash computes a SHA256 hash of the board configuration for change detection.
@@ -368,16 +531,16 @@ func GetEffectiveStaleThresholds(board db.JiraBoard) (map[string]int, error) {
 }
 
 // fetchBoardConfig fetches board configuration from the Jira API.
-func (a *BoardAnalyzer) fetchBoardConfig(ctx context.Context, boardID int) (*BoardConfig, error) {
-	config := &BoardConfig{}
-
+// Falls back to project statuses API when board configuration endpoint is unavailable.
+func (a *BoardAnalyzer) fetchBoardConfig(ctx context.Context, boardID int, projectKey string) (*BoardConfig, error) {
 	// Fetch board configuration.
 	type columnConfigResp struct {
 		ColumnConfig struct {
 			Columns []struct {
 				Name     string `json:"name"`
 				Statuses []struct {
-					ID string `json:"id"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
 				} `json:"statuses"`
 			} `json:"columns"`
 		} `json:"columnConfig"`
@@ -387,22 +550,100 @@ func (a *BoardAnalyzer) fetchBoardConfig(ctx context.Context, boardID int) (*Boa
 		} `json:"filter"`
 	}
 
-	var resp columnConfigResp
-	path := fmt.Sprintf("/rest/agile/1.0/board/%d/configuration", boardID)
-	if err := a.client.get(ctx, path, &resp); err != nil {
-		return nil, fmt.Errorf("fetching board configuration: %w", err)
+	// Primary: project statuses (always available with basic scopes).
+	config, err := a.fetchProjectStatuses(ctx, projectKey)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, col := range resp.ColumnConfig.Columns {
-		bc := BoardColumn{Name: col.Name}
-		for _, s := range col.Statuses {
-			bc.Statuses = append(bc.Statuses, BoardColumnStatus{ID: s.ID})
+	// Try to enrich with board-specific config (estimation, filter, column grouping).
+	var resp columnConfigResp
+	path := fmt.Sprintf("/rest/agile/1.0/board/%d/configuration", boardID)
+	if err := a.client.get(ctx, path, &resp); err == nil {
+		// Override columns with board-specific grouping if available.
+		if len(resp.ColumnConfig.Columns) > 0 {
+			config.Columns = nil
+			for _, col := range resp.ColumnConfig.Columns {
+				bc := BoardColumn{Name: col.Name}
+				for _, s := range col.Statuses {
+					bc.Statuses = append(bc.Statuses, BoardColumnStatus{ID: s.ID, Name: s.Name})
+				}
+				config.Columns = append(config.Columns, bc)
+			}
+		}
+		config.Estimation = resp.Estimation
+		config.FilterJQL = resp.Filter.Query
+	}
+
+	return config, nil
+}
+
+// fetchProjectStatuses builds board config from /rest/api/2/project/{key}/statuses.
+func (a *BoardAnalyzer) fetchProjectStatuses(ctx context.Context, projectKey string) (*BoardConfig, error) {
+	if projectKey == "" {
+		return nil, fmt.Errorf("no project key for status fallback")
+	}
+
+	type statusEntry struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		StatusCategory struct {
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"statusCategory"`
+	}
+	type issueTypeStatuses struct {
+		Statuses []statusEntry `json:"statuses"`
+	}
+
+	var resp []issueTypeStatuses
+	path := fmt.Sprintf("/rest/api/2/project/%s/statuses", url.PathEscape(projectKey))
+	if err := a.client.get(ctx, path, &resp); err != nil {
+		return nil, fmt.Errorf("fetching project statuses: %w", err)
+	}
+
+	// Deduplicate statuses and group by category.
+	type statusInfo struct {
+		ID          string
+		Name        string
+		CategoryKey string
+	}
+	seen := map[string]bool{}
+	categoryStatuses := map[string][]statusInfo{}
+	for _, it := range resp {
+		for _, s := range it.Statuses {
+			if seen[s.ID] {
+				continue
+			}
+			seen[s.ID] = true
+			catKey := s.StatusCategory.Key
+			categoryStatuses[catKey] = append(categoryStatuses[catKey], statusInfo{
+				ID: s.ID, Name: s.Name, CategoryKey: catKey,
+			})
+		}
+	}
+
+	// Map category keys to columns in workflow order.
+	catColumnOrder := []struct{ key, name string }{
+		{"new", "To Do"},
+		{"indeterminate", "In Progress"},
+		{"done", "Done"},
+	}
+
+	config := &BoardConfig{}
+	for _, cat := range catColumnOrder {
+		statuses, ok := categoryStatuses[cat.key]
+		if !ok {
+			continue
+		}
+		bc := BoardColumn{Name: cat.name}
+		for _, s := range statuses {
+			bc.Statuses = append(bc.Statuses, BoardColumnStatus{
+				ID: s.ID, Name: s.Name, CategoryKey: s.CategoryKey,
+			})
 		}
 		config.Columns = append(config.Columns, bc)
 	}
-
-	config.Estimation = resp.Estimation
-	config.FilterJQL = resp.Filter.Query
 
 	return config, nil
 }
@@ -451,20 +692,41 @@ Respond with ONLY valid JSON matching this structure:
   "estimation_approach": {"type":"story_points|time|none", "field":"fieldId or null"},
   "iteration_info": {"has_iterations":true, "typical_length_days":14, "avg_throughput":0},
   "workflow_summary": "One paragraph describing the workflow",
-  "stale_thresholds": {"Column Name": 3},
-  "health_signals": ["signal1", "signal2"]
+  "stale_thresholds": {"Status Name": 3},
+  "health_signals": ["signal1", "signal2", "signal3"]
 }
 
 Guidelines:
-- Group similar statuses into workflow stages
+- Group similar statuses into workflow stages (e.g. "Triage" and "New" → backlog; "Declined" → other or done)
 - Identify the phase for each stage: backlog, active_work, review, testing, done, other
-- Estimate reasonable stale thresholds (days) per stage
-- Suggest health signals relevant to this board's workflow`
+- Set DIFFERENT stale thresholds (days) per status based on expected duration in that phase:
+  - backlog statuses (Backlog, Triage, New): 7-14 days (items can wait)
+  - active_work (In Progress, On Track): 2-3 days (should move quickly)
+  - review (Code Review, DEV REVIEW): 1-2 days (fast feedback loops)
+  - testing (QA, Ready for test): 3-5 days (may need test cycles)
+  - NEVER set the same threshold for all statuses — different phases have different expected durations
+- IMPORTANT: Generate 3-8 specific, actionable health signals based on the board's workflow structure and issue data. Examples:
+  - "Review bottleneck risk — DEV REVIEW + Review have X issues" (when review stages have many items)
+  - "High WIP: N active issues across In Progress / On Track" (when active_work has high counts)
+  - "Missing estimation — T-Shirt Size field available but most issues lack estimates"
+  - "Backlog growing — N issues in Triage/New without assignee"
+  - "No sprint configured — consider time-boxing work for better predictability"
+  - "Testing backlog — Ready for test has N issues waiting"
+  - "Blocked issues — N issues in Declined status need attention"
+  - "Unbalanced workload — top assignee has X issues vs average Y"
+  Tailor signals to the actual issue_sample data (status_distribution, assignee_distribution, priority_distribution).
+  ALWAYS return at least 3 health signals. Never return an empty array.
+- If custom_fields are present, incorporate them into the analysis:
+  - Use estimation fields (story_points, tshirt_size) to set estimation_approach
+  - Mention relevant role fields (qa_assignee, developer) in workflow summary
+  - Note categorization fields (area, severity) as available dimensions for health signals
+- LANGUAGE: Write workflow_summary and health_signals in ` + a.language + `. Keep JSON keys and phase values in English.`
 
 	dataJSON, _ := json.Marshal(rawData)
 	userMessage := fmt.Sprintf("Analyze this Jira board:\n\n%s", string(dataJSON))
 
-	response, _, err := a.aiProvider.QuerySync(ctx, systemPrompt, userMessage, "board-analysis")
+	response, usage, err := a.aiProvider.QuerySync(ctx, systemPrompt, userMessage, "")
+	a.addUsage(usage)
 	if err != nil {
 		return nil, fmt.Errorf("LLM query: %w", err)
 	}

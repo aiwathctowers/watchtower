@@ -108,19 +108,27 @@ struct TrackDetailView: View {
         // Channels
         let channels = track.decodedChannelIDs
         if !channels.isEmpty {
-            HStack(spacing: 8) {
+            FlowLayout(spacing: 6) {
                 ForEach(channels, id: \.self) { chID in
                     let name = viewModel.channelName(for: chID) ?? chID
                     if let url = viewModel.slackChannelURL(channelID: chID) {
                         Link(destination: url) {
-                            Label("#\(name)", systemImage: "number")
+                            Text("#\(name)")
                                 .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.quaternary)
+                                .clipShape(Capsule())
                         }
                         .buttonStyle(.borderless)
                     } else {
-                        Label("#\(name)", systemImage: "number")
+                        Text("#\(name)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.quaternary)
+                            .clipShape(Capsule())
                     }
                 }
             }
@@ -385,7 +393,7 @@ struct TrackDetailView: View {
                         let refChannelID = ref.channelID ?? track.decodedChannelIDs.first
                         if let chID = refChannelID, !ref.ts.isEmpty {
                             if let url = viewModel.slackMessageURL(
-                                channelID: chID, messageTS: ref.ts
+                                channelID: chID, messageTS: ref.ts, threadTS: ref.threadTS
                             ) {
                                 Link(destination: url) {
                                     Image(systemName: "arrow.up.right.square")

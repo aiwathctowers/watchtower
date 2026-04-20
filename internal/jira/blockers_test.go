@@ -392,8 +392,8 @@ func TestBlockerMap_WhoToPing(t *testing.T) {
 	}
 
 	// First should be root cause assignee.
-	if targets[0].SlackUserID != "U-ROOT" || targets[0].Reason != "assignee" {
-		t.Errorf("first target should be root assignee, got %+v", targets[0])
+	if targets[0].SlackUserID != "U-ROOT" || targets[0].Reason != "assignee_blocker" {
+		t.Errorf("first target should be root assignee with reason assignee_blocker, got %+v", targets[0])
 	}
 	// Second should be issue's own assignee.
 	if targets[1].SlackUserID != "U-ASSIGNEE" || targets[1].Reason != "assignee" {

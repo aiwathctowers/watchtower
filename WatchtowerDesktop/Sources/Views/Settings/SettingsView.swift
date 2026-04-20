@@ -325,8 +325,15 @@ struct GeneralSettings: View {
                         .foregroundStyle(.green)
                     Text("Connected")
                     Spacer()
-                    Button("Disconnect") { googleAuth.disconnect() }
+                    Button("Disconnect") {
+                        googleAuth.disconnect()
+                        config.calendarEnabled = false
+                        saveConfig()
+                    }
                 }
+
+                Toggle("Enable calendar sync", isOn: $config.calendarEnabled)
+                    .onChange(of: config.calendarEnabled) { _, _ in saveConfig() }
 
                 Picker("Sync days ahead", selection: $config.calendarSyncDaysAhead) {
                     Text("2 days").tag(2)
@@ -346,8 +353,10 @@ struct GeneralSettings: View {
                         ProgressView().controlSize(.small)
                         Button("Cancel") { googleAuth.cancelConnect() }
                     } else {
-                        Button("Connect") { googleAuth.connect() }
-                            .buttonStyle(.borderedProminent)
+                        Button("Connect") {
+                            googleAuth.connect()
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 }
             }
@@ -356,6 +365,12 @@ struct GeneralSettings: View {
                 Text(err)
                     .font(.caption)
                     .foregroundStyle(.red)
+            }
+        }
+        .onChange(of: googleAuth.isConnected) { _, connected in
+            if connected && !config.calendarEnabled {
+                config.calendarEnabled = true
+                saveConfig()
             }
         }
     }
@@ -475,6 +490,17 @@ struct GeneralSettings: View {
             .padding(.vertical, 10)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    // MARK: - Helpers
+
+    private func saveConfig() {
+        do {
+            try config.save()
+            saveError = nil
+        } catch {
+            saveError = error.localizedDescription
+        }
     }
 
     // MARK: - Usage Link
