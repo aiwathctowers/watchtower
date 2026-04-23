@@ -26,6 +26,23 @@ Fallback (if MCP tools fail): sqlite3 -header -separator '|' "%s" "SQL"
 === DATABASE SCHEMA ===
 %s
 
+=== TARGETS & GOAL HIERARCHY ===
+The workspace uses a hierarchical goal system called "targets" (replaces the old flat "tasks").
+- Table: targets — personal action items and goals, each with a level tag: quarter, month, week, day, or custom.
+  level and period_start/period_end together express WHEN a target is due (e.g. a quarter OKR vs today's to-do).
+  parent_id links child targets to their parent for tree rendering and progress rollup (progress 0.0–1.0).
+- Table: target_links — typed edges between targets or to external refs (Jira keys, Slack permalinks).
+  relation is one of: contributes_to, blocks, related, duplicates.
+  target_target_id references another target; external_ref holds e.g. 'jira:PROJ-123' or 'slack:C123:ts'.
+  created_by is 'ai' (auto-linked) or 'user' (manually added).
+Useful queries:
+  -- Active day-level targets, highest priority first
+  SELECT id, text, priority, due_date FROM targets WHERE status IN ('todo','in_progress','blocked') AND level='day' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END;
+  -- Children of a target
+  SELECT id, text, status, progress FROM targets WHERE parent_id = 42;
+  -- Links for a target
+  SELECT relation, target_target_id, external_ref FROM target_links WHERE source_target_id = 42;
+
 === QUERY PATTERNS ===
 
 First, orient yourself — find what channels and users exist:
