@@ -24,10 +24,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T15: CLI day-plan generate | ✅ DONE | `662fa12` | implementer only | factory seam newDayPlanPipelineFactory for test injection |
 | T17: Swift models | ✅ DONE | `761cfca` | implementer only | 11 tests; renamed description→details (conflict with CustomStringConvertible); also seeded TestDatabase.swift |
 | T18: Swift queries with cascade | ✅ DONE | `2d60a0a` | implementer only | 9 tests; uses synchronous Database closure pattern (matches TaskQueries) |
-| T19: Swift DayPlanViewModel | ⏳ running | — | — | — |
-| T20: Swift DayPlanView + Timeline | pending | — | — | — |
-| T21: ItemRow + ConflictBanner | pending | — | — | — |
-| T22: Regenerate + Create sheets | pending | — | — | — |
+| T19: Swift DayPlanViewModel | ✅ DONE | `80cbece` | implementer only | 17 tests; introduced CLIRunnerProtocol (no existing abstraction) |
+| T20+T21+T22: all Swift views | ⏳ running (batched) | — | — | — |
 | T23: Settings panel | pending | — | — | — |
 | T24: Sidebar tab + route | pending | — | — | — |
 | T25: E2E verification + PR | pending | — | — | — |
