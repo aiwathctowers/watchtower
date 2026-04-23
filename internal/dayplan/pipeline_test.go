@@ -39,7 +39,7 @@ func validResponse() string {
 	return `{"timeblocks":[{"source_type":"focus","source_id":null,"title":"Deep work",` +
 		`"description":"Block for PR review","rationale":"3 PRs stacked",` +
 		`"start_time_local":"10:00","end_time_local":"11:30","priority":"high"}],` +
-		`"backlog":[{"source_type":"task","source_id":"42","title":"Task","description":"x","rationale":"y","priority":"medium"}],` +
+		`"backlog":[{"source_type":"focus","source_id":null,"title":"Task","description":"x","rationale":"y","priority":"medium"}],` +
 		`"summary":"Focused morning"}`
 }
 
@@ -209,9 +209,14 @@ func TestRun_GracefulInvalidAIResponse(t *testing.T) {
 func TestRun_DropsTimeblockOverlappingCalendar(t *testing.T) {
 	d := gatherTestDB(t)
 
-	today := time.Now().Format("2006-01-02")
+	now := time.Now()
+	today := now.Format("2006-01-02")
 
-	// Seed a calendar with an event 10:00-10:45.
+	// Build event times in local timezone so they overlap with local-parsed timeblocks.
+	evStart := time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, time.Local)
+	evEnd := time.Date(now.Year(), now.Month(), now.Day(), 10, 45, 0, 0, time.Local)
+
+	// Seed a calendar with an event 10:00-10:45 local.
 	require.NoError(t, d.UpsertCalendar(db.CalendarCalendar{
 		ID: "cal-001", Name: "Primary", IsPrimary: true,
 	}))
@@ -219,8 +224,8 @@ func TestRun_DropsTimeblockOverlappingCalendar(t *testing.T) {
 		ID:         "evt-overlap",
 		CalendarID: "cal-001",
 		Title:      "Standup",
-		StartTime:  today + "T10:00:00Z",
-		EndTime:    today + "T10:45:00Z",
+		StartTime:  evStart.Format(time.RFC3339),
+		EndTime:    evEnd.Format(time.RFC3339),
 		Attendees:  "[]",
 	}))
 
