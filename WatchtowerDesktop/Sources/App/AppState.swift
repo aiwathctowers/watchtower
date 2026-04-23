@@ -42,8 +42,8 @@ final class AppState {
     /// Set to navigate to a specific digest from anywhere in the app.
     var pendingDigestID: Int?
 
-    /// Set to navigate to a specific task from anywhere in the app.
-    var pendingTaskID: Int?
+    /// Set to navigate to a specific target from anywhere in the app.
+    var pendingTargetID: Int?
 
     /// Watches for new digests and sends notifications.
     private(set) var digestWatcher: DigestWatcher?
@@ -103,9 +103,9 @@ final class AppState {
         selectedDestination = .digests
     }
 
-    func navigateToTask(_ taskID: Int) {
-        pendingTaskID = taskID
-        selectedDestination = .tasks
+    func navigateToTarget(_ targetID: Int) {
+        pendingTargetID = targetID
+        selectedDestination = .targets
     }
 
     private var isInitializing = false

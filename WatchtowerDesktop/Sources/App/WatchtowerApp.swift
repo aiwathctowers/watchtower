@@ -41,7 +41,7 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             case "track", "track_update":
                 appState?.selectedDestination = .tracks
             case "task_overdue":
-                appState?.selectedDestination = .tasks
+                appState?.selectedDestination = .targets
             case "daily_summary":
                 appState?.selectedDestination = .digests
             default:
