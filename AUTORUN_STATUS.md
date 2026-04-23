@@ -14,8 +14,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T4: Prompt template day_plan.generate | ✅ DONE | `5ae8557` | implementer only | 14 placeholders confirmed |
 | T5: Config DayPlanConfig | ✅ DONE | `9bdfee4` | implementer only | uses viper SetDefault pattern |
 | T6: dayplan package skeleton | ✅ DONE | `0754b09` | implementer only | types + Pipeline stub; interfaces confirmed |
-| T7: Gather module | ⏳ running | — | — | — |
-| T8: Pipeline.Run orchestration | pending | — | — | — |
+| T7: Gather module | ✅ DONE | `d7b16b9` | implementer only | 4 tests PASS; graceful degradation for jira/people |
+| T8: Pipeline.Run orchestration | ⏳ running | — | — | — |
 | T9: buildItems validation + merge | pending | — | — | — |
 | T10: SyncCalendarItems | pending | — | — | — |
 | T11: DetectConflicts | pending | — | — | — |
