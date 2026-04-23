@@ -23,7 +23,7 @@ type URLMatch struct {
 	Source    string // "slack" or "jira"
 	RawURL    string
 	ChannelID string // Slack only
-	Ts        string // Slack only (normalized: "1714567890.123456")
+	TS        string // Slack only (normalized: "1714567890.123456")
 	Key       string // Jira only (e.g. "PROJ-123")
 }
 
@@ -75,7 +75,7 @@ func Extract(text string) []URLMatch {
 			Source:    "slack",
 			RawURL:    raw,
 			ChannelID: channelID,
-			Ts:        ts,
+			TS:        ts,
 		})
 	}
 
@@ -151,7 +151,7 @@ func (r *Resolver) Resolve(ctx context.Context, matches []URLMatch) []Enrichment
 func refForMatch(m URLMatch) string {
 	switch m.Source {
 	case "slack":
-		return fmt.Sprintf("slack:%s:%s", m.ChannelID, m.Ts)
+		return fmt.Sprintf("slack:%s:%s", m.ChannelID, m.TS)
 	case "jira":
 		return fmt.Sprintf("jira:%s", m.Key)
 	default:
@@ -171,7 +171,7 @@ func (s *SlackResolver) CanResolve(url string) bool {
 
 // Resolve looks up the message in the local DB and formats an Enrichment.
 func (s *SlackResolver) Resolve(ctx context.Context, m URLMatch) (*Enrichment, error) {
-	ref := fmt.Sprintf("slack:%s:%s", m.ChannelID, m.Ts)
+	ref := fmt.Sprintf("slack:%s:%s", m.ChannelID, m.TS)
 
 	type msgRow struct {
 		Text      string
@@ -183,16 +183,15 @@ func (s *SlackResolver) Resolve(ctx context.Context, m URLMatch) (*Enrichment, e
 	var row msgRow
 	err := s.db.QueryRowContext(ctx,
 		`SELECT text, user_id, channel_id, COALESCE(thread_ts,'') FROM messages WHERE channel_id = ? AND ts = ?`,
-		m.ChannelID, m.Ts,
+		m.ChannelID, m.TS,
 	).Scan(&row.Text, &row.UserID, &row.ChannelID, &row.ThreadTS)
 
 	if err != nil {
-		// Not found — annotate gracefully.
+		// Not found — annotate gracefully; no error returned to caller.
 		return &Enrichment{
 			Ref:    ref,
 			Body:   "[slack url not in local DB]",
 			Source: "local",
-			Error:  "",
 		}, nil
 	}
 
@@ -210,10 +209,11 @@ func (s *SlackResolver) Resolve(ctx context.Context, m URLMatch) (*Enrichment, e
 
 	// Parse timestamp for display (ts is unix seconds dot microseconds).
 	displayTime := ""
-	if parts := strings.SplitN(m.Ts, ".", 2); len(parts) == 2 {
+	if parts := strings.SplitN(m.TS, ".", 2); len(parts) == 2 {
 		var sec int64
-		fmt.Sscan(parts[0], &sec)
-		displayTime = time.Unix(sec, 0).UTC().Format("2006-01-02 15:04")
+		if _, serr := fmt.Sscan(parts[0], &sec); serr == nil {
+			displayTime = time.Unix(sec, 0).UTC().Format("2006-01-02 15:04")
+		}
 	}
 
 	body := truncateRunes(row.Text, 500)
@@ -311,10 +311,10 @@ func truncateRunes(s string, n int) string {
 	return string(runes[:n])
 }
 
-// truncate returns s truncated to max runes with "..." appended if cut.
-func truncate(s string, max int) string {
-	if len([]rune(s)) <= max {
+// truncate returns s truncated to n runes with "..." appended if cut.
+func truncate(s string, n int) string {
+	if len([]rune(s)) <= n {
 		return s
 	}
-	return truncateRunes(s, max) + "..."
+	return truncateRunes(s, n) + "..."
 }

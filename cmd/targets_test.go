@@ -529,4 +529,3 @@ func resetTargetsFlags() {
 	targetsFlagLevel = ""
 	targetsFlagSource = ""
 }
-

@@ -3248,20 +3248,22 @@ afterV48:
 			}
 			// Capture any pre-existing indexes on inbox_items before the DROP so
 			// they survive the rebuild (the canonical 5 are always recreated below).
-			var savedIndexes []string
-			{
+			savedIndexes := func() []string {
 				idxRows, idxErr := tx.Query(`SELECT sql FROM sqlite_master
 					WHERE tbl_name='inbox_items' AND type='index' AND sql IS NOT NULL`)
-				if idxErr == nil {
-					for idxRows.Next() {
-						var s string
-						if scanErr := idxRows.Scan(&s); scanErr == nil {
-							savedIndexes = append(savedIndexes, s)
-						}
-					}
-					idxRows.Close()
+				if idxErr != nil {
+					return nil
 				}
-			}
+				defer idxRows.Close()
+				var out []string
+				for idxRows.Next() {
+					var s string
+					if scanErr := idxRows.Scan(&s); scanErr == nil {
+						out = append(out, s)
+					}
+				}
+				return out
+			}()
 			if _, err := tx.Exec(`DROP TABLE inbox_items`); err != nil {
 				return fmt.Errorf("migration v67 drop inbox_items: %w", err)
 			}

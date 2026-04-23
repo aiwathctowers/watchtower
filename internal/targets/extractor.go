@@ -13,17 +13,17 @@ import (
 
 // ProposedTarget holds one AI-extracted target before DB persistence.
 type ProposedTarget struct {
-	Text               string
-	Intent             string
-	Level              string
-	CustomLabel        string
-	PeriodStart        string
-	PeriodEnd          string
-	Priority           string
-	DueDate            string
-	ParentID           sql.NullInt64
-	SecondaryLinks     []ProposedLink
-	AILevelConfidence  sql.NullFloat64
+	Text              string
+	Intent            string
+	Level             string
+	CustomLabel       string
+	PeriodStart       string
+	PeriodEnd         string
+	Priority          string
+	DueDate           string
+	ParentID          sql.NullInt64
+	SecondaryLinks    []ProposedLink
+	AILevelConfidence sql.NullFloat64
 }
 
 // ProposedLink is a secondary link proposal from the AI.
@@ -57,17 +57,17 @@ type aiExtractResponse struct {
 }
 
 type aiExtractedItem struct {
-	Text             string          `json:"text"`
-	Intent           string          `json:"intent"`
-	Level            string          `json:"level"`
-	CustomLabel      string          `json:"custom_label"`
-	LevelConfidence  float64         `json:"level_confidence"`
-	PeriodStart      string          `json:"period_start"`
-	PeriodEnd        string          `json:"period_end"`
-	Priority         string          `json:"priority"`
-	DueDate          string          `json:"due_date"`
-	ParentID         *int64          `json:"parent_id"`
-	SecondaryLinks   []aiSecondaryLink `json:"secondary_links"`
+	Text            string            `json:"text"`
+	Intent          string            `json:"intent"`
+	Level           string            `json:"level"`
+	CustomLabel     string            `json:"custom_label"`
+	LevelConfidence float64           `json:"level_confidence"`
+	PeriodStart     string            `json:"period_start"`
+	PeriodEnd       string            `json:"period_end"`
+	Priority        string            `json:"priority"`
+	DueDate         string            `json:"due_date"`
+	ParentID        *int64            `json:"parent_id"`
+	SecondaryLinks  []aiSecondaryLink `json:"secondary_links"`
 }
 
 type aiSecondaryLink struct {

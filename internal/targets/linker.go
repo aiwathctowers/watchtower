@@ -17,7 +17,7 @@ type LinkResult struct {
 
 // aiLinkResponse is the raw JSON for the link prompt response.
 type aiLinkResponse struct {
-	ParentID       *int64          `json:"parent_id"`
+	ParentID       *int64            `json:"parent_id"`
 	SecondaryLinks []aiSecondaryLink `json:"secondary_links"`
 }
 

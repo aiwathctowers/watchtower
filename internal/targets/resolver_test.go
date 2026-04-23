@@ -196,10 +196,10 @@ func TestSlackResolver_LocalMiss(t *testing.T) {
 // --- JiraResolver tests ---
 
 type mockMCPClient struct {
-	issue   *db.JiraIssue
-	err     error
-	delay   time.Duration
-	called  bool
+	issue  *db.JiraIssue
+	err    error
+	delay  time.Duration
+	called bool
 }
 
 func (m *mockMCPClient) GetJiraIssue(ctx context.Context, key string) (*db.JiraIssue, error) {

@@ -13,12 +13,12 @@ import (
 
 // Pipeline orchestrates target extraction, linking, and persistence.
 type Pipeline struct {
-	db        *db.DB
-	cfg       *config.TargetsConfig
-	gen       digest.Generator
-	resolver  *Resolver
-	store     *Store
-	logger    *log.Logger
+	db       *db.DB
+	cfg      *config.TargetsConfig
+	gen      digest.Generator
+	resolver *Resolver
+	store    *Store
+	logger   *log.Logger
 }
 
 // New creates a new Pipeline.

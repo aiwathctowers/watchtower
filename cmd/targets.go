@@ -21,21 +21,21 @@ import (
 )
 
 var (
-	targetsFlagStatus      string
-	targetsFlagPriority    string
-	targetsFlagOwnership   string
-	targetsFlagAll         bool
-	targetsFlagJSON        bool
-	targetsFlagText        string
-	targetsFlagIntent      string
-	targetsFlagDue         string
-	targetsFlagSourceType  string
-	targetsFlagSourceID    string
-	targetsFlagTags        string
-	targetsFlagBallOn      string
-	targetsFlagBlocking    string
-	targetsFlagSource      string
-	targetsFlagLevel       string
+	targetsFlagStatus     string
+	targetsFlagPriority   string
+	targetsFlagOwnership  string
+	targetsFlagAll        bool
+	targetsFlagJSON       bool
+	targetsFlagText       string
+	targetsFlagIntent     string
+	targetsFlagDue        string
+	targetsFlagSourceType string
+	targetsFlagSourceID   string
+	targetsFlagTags       string
+	targetsFlagBallOn     string
+	targetsFlagBlocking   string
+	targetsFlagSource     string
+	targetsFlagLevel      string
 	// targetsFlagPeriod removed — period filtering returns in V2 (DB filter not yet wired)
 	targetsFlagPeriodStart string
 	targetsFlagPeriodEnd   string

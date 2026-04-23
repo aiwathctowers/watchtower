@@ -14,12 +14,12 @@ import (
 
 func makeTarget(text, status, priority string) Target {
 	return Target{
-		Text:      text,
-		Status:    status,
-		Priority:  priority,
-		Ownership: "mine",
+		Text:       text,
+		Status:     status,
+		Priority:   priority,
+		Ownership:  "mine",
 		SourceType: "manual",
-		Level:     "day",
+		Level:      "day",
 	}
 }
 
