@@ -280,18 +280,18 @@ func TestRunInboxTask(t *testing.T) {
 
 	err := inboxTaskCmd.RunE(inboxTaskCmd, []string{"1"})
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Created task #")
+	assert.Contains(t, buf.String(), "Created target #")
 
 	database, err := openDBFromConfig()
 	require.NoError(t, err)
 	defer database.Close()
 
-	task, err := database.GetTaskByID(1)
+	target, err := database.GetTargetByID(1)
 	require.NoError(t, err)
-	assert.Equal(t, "Create task from this", task.Text)
-	assert.Equal(t, "high", task.Priority)
-	assert.Equal(t, "inbox", task.SourceType)
-	assert.Equal(t, "1", task.SourceID)
+	assert.Equal(t, "Create task from this", target.Text)
+	assert.Equal(t, "high", target.Priority)
+	assert.Equal(t, "inbox", target.SourceType)
+	assert.Equal(t, "1", target.SourceID)
 }
 
 func TestParseDuration(t *testing.T) {

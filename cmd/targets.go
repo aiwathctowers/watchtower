@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,155 +15,268 @@ import (
 	"watchtower/internal/db"
 	"watchtower/internal/jira"
 	"watchtower/internal/prompts"
+	"watchtower/internal/targets"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	tasksFlagStatus     string
-	tasksFlagPriority   string
-	tasksFlagOwnership  string
-	tasksFlagAll        bool
-	tasksFlagJSON       bool
-	tasksFlagText       string
-	tasksFlagIntent     string
-	tasksFlagDue        string
-	tasksFlagSourceType string
-	tasksFlagSourceID   string
-	tasksFlagTags       string
-	tasksFlagBallOn     string
-	tasksFlagBlocking   string
-	tasksFlagSource     string
+	targetsFlagStatus      string
+	targetsFlagPriority    string
+	targetsFlagOwnership   string
+	targetsFlagAll         bool
+	targetsFlagJSON        bool
+	targetsFlagText        string
+	targetsFlagIntent      string
+	targetsFlagDue         string
+	targetsFlagSourceType  string
+	targetsFlagSourceID    string
+	targetsFlagTags        string
+	targetsFlagBallOn      string
+	targetsFlagBlocking    string
+	targetsFlagSource      string
+	targetsFlagLevel       string
+	targetsFlagPeriod      string
+	targetsFlagPeriodStart string
+	targetsFlagPeriodEnd   string
+	targetsFlagParent      int
+	targetsFlagInstruction string
+
+	// link subcommand flags
+	targetsFlagLinkParent   int
+	targetsFlagLinkTo       int
+	targetsFlagLinkRelation string
+	targetsFlagLinkExternal string
+
+	// extract subcommand flags
+	targetsFlagExtractText      string
+	targetsFlagExtractSourceRef string
+	targetsFlagExtractFromInbox int
 )
 
-var tasksCmd = &cobra.Command{
-	Use:   "tasks",
-	Short: "Renamed to 'targets'. This command is deprecated.",
-	Long:  "Tasks have been renamed to targets. Use 'watchtower targets' instead.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Note: 'tasks' has been renamed to 'targets'. Please use 'watchtower targets'.")
-		return runTargetsCmd(cmd, args)
-	},
+var targetsCmd = &cobra.Command{
+	Use:   "targets",
+	Short: "Manage hierarchical goals (targets) with levels and relationships",
+	RunE:  runTargetsList,
 }
 
-var tasksShowCmd = &cobra.Command{
+var targetsShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show target details",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksShow,
+	RunE:  runTargetsShow,
 }
 
-var tasksCreateCmd = &cobra.Command{
+var targetsCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new target",
-	RunE:  runTasksCreate,
+	RunE:  runTargetsCreate,
 }
 
-var tasksDoneCmd = &cobra.Command{
+var targetsExtractCmd = &cobra.Command{
+	Use:   "extract",
+	Short: "Extract targets from text using AI",
+	Long:  "Run AI extraction on the provided text, preview each proposed target, and confirm before inserting.",
+	RunE:  runTargetsExtract,
+}
+
+var targetsLinkCmd = &cobra.Command{
+	Use:   "link <id>",
+	Short: "Add a link from a target to a parent, another target, or an external reference",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTargetsLink,
+}
+
+var targetsUnlinkCmd = &cobra.Command{
+	Use:   "unlink <link-id>",
+	Short: "Remove a target link by its link ID",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTargetsUnlink,
+}
+
+var targetsSuggestLinksCmd = &cobra.Command{
+	Use:   "suggest-links <id>",
+	Short: "Use AI to propose parent and secondary links for a target",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTargetsSuggestLinks,
+}
+
+var targetsDoneCmd = &cobra.Command{
 	Use:   "done <id>",
 	Short: "Mark a target as done",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksDone,
+	RunE:  runTargetsDone,
 }
 
-var tasksDismissCmd = &cobra.Command{
+var targetsDismissCmd = &cobra.Command{
 	Use:   "dismiss <id>",
 	Short: "Dismiss a target",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksDismiss,
+	RunE:  runTargetsDismiss,
 }
 
-var tasksSnoozeCmd = &cobra.Command{
-	Use:   "snooze <id> <YYYY-MM-DDTHH:MM>",
-	Short: "Snooze a target until a date+time",
+var targetsSnoozeCmd = &cobra.Command{
+	Use:   "snooze <id> <date>",
+	Short: "Snooze a target until a date",
 	Args:  cobra.ExactArgs(2),
-	RunE:  runTasksSnooze,
+	RunE:  runTargetsSnooze,
 }
 
-var tasksUpdateCmd = &cobra.Command{
+var targetsUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
 	Short: "Update a target",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksUpdate,
+	RunE:  runTargetsUpdate,
 }
 
-var tasksGenerateCmd = &cobra.Command{
+var targetsGenerateCmd = &cobra.Command{
 	Use:   "generate",
 	Short: "Generate target details with AI (checklist, priority, due date)",
 	Long:  "Uses AI to enrich a target description: breaks it into sub-items, suggests priority and due date. Outputs JSON to stdout.",
-	RunE:  runTasksGenerate,
+	RunE:  runTargetsGenerate,
 }
 
-var tasksNoteCmd = &cobra.Command{
+var targetsNoteCmd = &cobra.Command{
 	Use:   "note",
 	Short: "Manage target notes",
 }
 
-var tasksNoteAddCmd = &cobra.Command{
+var targetsNoteAddCmd = &cobra.Command{
 	Use:   "add <id> <text>",
 	Short: "Add a note to a target",
 	Args:  cobra.ExactArgs(2),
-	RunE:  runTasksNoteAdd,
+	RunE:  runTargetsNoteAdd,
 }
 
-var tasksNoteListCmd = &cobra.Command{
+var targetsNoteListCmd = &cobra.Command{
 	Use:   "list <id>",
 	Short: "List notes for a target",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksNoteList,
+	RunE:  runTargetsNoteList,
 }
 
-var tasksAIUpdateCmd = &cobra.Command{
+var targetsAIUpdateCmd = &cobra.Command{
 	Use:   "ai-update <id>",
 	Short: "Update a target using AI based on your instruction",
 	Long:  "Reads current target state, sends it with your instruction to AI, and outputs the updated target as JSON to stdout. The caller is responsible for applying the changes.",
 	Args:  cobra.ExactArgs(1),
-	RunE:  runTasksAIUpdate,
+	RunE:  runTargetsAIUpdate,
 }
-
-var tasksFlagInstruction string
 
 func init() {
-	rootCmd.AddCommand(tasksCmd)
-	tasksCmd.AddCommand(tasksShowCmd, tasksCreateCmd, tasksDoneCmd, tasksDismissCmd, tasksSnoozeCmd, tasksUpdateCmd, tasksGenerateCmd, tasksNoteCmd, tasksAIUpdateCmd)
-	tasksNoteCmd.AddCommand(tasksNoteAddCmd, tasksNoteListCmd)
+	rootCmd.AddCommand(targetsCmd)
+	targetsCmd.AddCommand(
+		targetsShowCmd,
+		targetsCreateCmd,
+		targetsExtractCmd,
+		targetsLinkCmd,
+		targetsUnlinkCmd,
+		targetsSuggestLinksCmd,
+		targetsDoneCmd,
+		targetsDismissCmd,
+		targetsSnoozeCmd,
+		targetsUpdateCmd,
+		targetsGenerateCmd,
+		targetsNoteCmd,
+		targetsAIUpdateCmd,
+	)
+	targetsNoteCmd.AddCommand(targetsNoteAddCmd, targetsNoteListCmd)
 
-	tasksCmd.Flags().StringVar(&tasksFlagStatus, "status", "", "filter by status (todo, in_progress, blocked, done, dismissed, snoozed)")
-	tasksCmd.Flags().StringVar(&tasksFlagPriority, "priority", "", "filter by priority (high, medium, low)")
-	tasksCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "", "filter by ownership (mine, delegated, watching)")
-	tasksCmd.Flags().BoolVar(&tasksFlagAll, "all", false, "include done and dismissed targets")
-	tasksCmd.Flags().BoolVar(&tasksFlagJSON, "json", false, "output as JSON")
-	tasksCmd.Flags().StringVar(&tasksFlagSource, "source", "", "filter by source (all, jira, slack, manual, track, digest, inbox)")
+	// targets (list) flags
+	targetsCmd.Flags().StringVar(&targetsFlagStatus, "status", "", "filter by status (todo, in_progress, blocked, done, dismissed, snoozed)")
+	targetsCmd.Flags().StringVar(&targetsFlagPriority, "priority", "", "filter by priority (high, medium, low)")
+	targetsCmd.Flags().StringVar(&targetsFlagOwnership, "ownership", "", "filter by ownership (mine, delegated, watching)")
+	targetsCmd.Flags().BoolVar(&targetsFlagAll, "all", false, "include done and dismissed targets")
+	targetsCmd.Flags().BoolVar(&targetsFlagJSON, "json", false, "output as JSON")
+	targetsCmd.Flags().StringVar(&targetsFlagSource, "source", "", "filter by source (all, jira, slack, manual, track, digest, inbox)")
+	targetsCmd.Flags().StringVar(&targetsFlagLevel, "level", "", "filter by level (quarter, month, week, day, custom)")
+	targetsCmd.Flags().StringVar(&targetsFlagPeriod, "period", "", "period preset: this-week, this-month, this-quarter, all, or YYYY-MM-DD:YYYY-MM-DD range")
 
-	tasksCreateCmd.Flags().StringVar(&tasksFlagText, "text", "", "target text (required)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "target intent/context")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagPriority, "priority", "medium", "priority (high, medium, low)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "mine", "ownership (mine, delegated, watching)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagDue, "due", "", "due date+time (YYYY-MM-DDTHH:MM)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagSourceType, "source-type", "manual", "source type (track, digest, briefing, manual, chat)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagSourceID, "source-id", "", "source entity ID")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagTags, "tags", "", "comma-separated tags")
+	// create flags
+	targetsCreateCmd.Flags().StringVar(&targetsFlagText, "text", "", "target text (required)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagIntent, "intent", "", "target intent/context")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagPriority, "priority", "medium", "priority (high, medium, low)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagOwnership, "ownership", "mine", "ownership (mine, delegated, watching)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagLevel, "level", "day", "level (quarter, month, week, day, custom)")
+	targetsCreateCmd.Flags().IntVar(&targetsFlagParent, "parent", 0, "parent target ID")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagPeriodStart, "period-start", "", "period start date (YYYY-MM-DD)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagPeriodEnd, "period-end", "", "period end date (YYYY-MM-DD)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagDue, "due", "", "due date+time (YYYY-MM-DDTHH:MM)")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagSourceType, "source-type", "manual", "source type")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagSourceID, "source-id", "", "source entity ID")
+	targetsCreateCmd.Flags().StringVar(&targetsFlagTags, "tags", "", "comma-separated tags")
 
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagText, "text", "", "new target text")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "new intent")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagPriority, "priority", "", "new priority")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagStatus, "status", "", "new status")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "", "new ownership")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagBallOn, "ball-on", "", "who has the ball")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagDue, "due", "", "new due date+time (YYYY-MM-DDTHH:MM)")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagBlocking, "blocking", "", "what this target blocks")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagTags, "tags", "", "comma-separated tags")
+	// extract flags
+	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractText, "text", "", "raw text to extract targets from")
+	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractSourceRef, "source-ref", "", "source reference (e.g. slack:C123:ts, inbox:42)")
+	targetsExtractCmd.Flags().IntVar(&targetsFlagExtractFromInbox, "from-inbox", 0, "load raw text from inbox item with this ID")
 
-	tasksGenerateCmd.Flags().StringVar(&tasksFlagText, "text", "", "target description (required)")
-	tasksGenerateCmd.Flags().StringVar(&tasksFlagSourceType, "source-type", "", "source type for context (track, digest)")
-	tasksGenerateCmd.Flags().StringVar(&tasksFlagSourceID, "source-id", "", "source entity ID for context")
+	// link flags
+	targetsLinkCmd.Flags().IntVar(&targetsFlagLinkParent, "parent", 0, "set parent target ID")
+	targetsLinkCmd.Flags().IntVar(&targetsFlagLinkTo, "to", 0, "target ID to link to")
+	targetsLinkCmd.Flags().StringVar(&targetsFlagLinkRelation, "relation", "", "relation type (contributes_to, blocks, related, duplicates)")
+	targetsLinkCmd.Flags().StringVar(&targetsFlagLinkExternal, "external", "", "external ref (e.g. jira:PROJ-123)")
 
-	tasksAIUpdateCmd.Flags().StringVar(&tasksFlagInstruction, "instruction", "", "what to change (required)")
-	_ = tasksAIUpdateCmd.MarkFlagRequired("instruction")
+	// update flags
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagText, "text", "", "new target text")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagIntent, "intent", "", "new intent")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagPriority, "priority", "", "new priority")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagStatus, "status", "", "new status")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagOwnership, "ownership", "", "new ownership")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagBallOn, "ball-on", "", "who has the ball")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagDue, "due", "", "new due date+time (YYYY-MM-DDTHH:MM)")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagBlocking, "blocking", "", "what this target blocks")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagTags, "tags", "", "comma-separated tags")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagLevel, "level", "", "new level (quarter, month, week, day, custom)")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagPeriodStart, "period-start", "", "new period start date (YYYY-MM-DD)")
+	targetsUpdateCmd.Flags().StringVar(&targetsFlagPeriodEnd, "period-end", "", "new period end date (YYYY-MM-DD)")
+	targetsUpdateCmd.Flags().IntVar(&targetsFlagParent, "parent", 0, "new parent target ID (0 = clear)")
+
+	// generate flags
+	targetsGenerateCmd.Flags().StringVar(&targetsFlagText, "text", "", "target description (required)")
+	targetsGenerateCmd.Flags().StringVar(&targetsFlagSourceType, "source-type", "", "source type for context (track, digest)")
+	targetsGenerateCmd.Flags().StringVar(&targetsFlagSourceID, "source-id", "", "source entity ID for context")
+
+	// ai-update flags
+	targetsAIUpdateCmd.Flags().StringVar(&targetsFlagInstruction, "instruction", "", "what to change (required)")
+	_ = targetsAIUpdateCmd.MarkFlagRequired("instruction")
 }
 
-// runTargetsCmd is the shared implementation for the tasks→targets redirect.
-func runTargetsCmd(cmd *cobra.Command, _ []string) error {
+// periodPresetDates resolves a --period preset to (start, end) date strings.
+// Returns ("", "") for "all" or unrecognised values (no filter applied).
+func periodPresetDates(preset string) (string, string) {
+	today := time.Now()
+	switch preset {
+	case "this-week":
+		weekday := int(today.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		mon := today.AddDate(0, 0, -(weekday - 1))
+		sun := mon.AddDate(0, 0, 6)
+		return mon.Format("2006-01-02"), sun.Format("2006-01-02")
+	case "this-month":
+		first := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, time.Local)
+		last := first.AddDate(0, 1, -1)
+		return first.Format("2006-01-02"), last.Format("2006-01-02")
+	case "this-quarter":
+		q := (int(today.Month()) - 1) / 3
+		qStart := time.Date(today.Year(), time.Month(q*3+1), 1, 0, 0, 0, 0, time.Local)
+		qEnd := qStart.AddDate(0, 3, -1)
+		return qStart.Format("2006-01-02"), qEnd.Format("2006-01-02")
+	case "", "all":
+		return "", ""
+	default:
+		// Accept YYYY-MM-DD:YYYY-MM-DD range
+		parts := strings.SplitN(preset, ":", 2)
+		if len(parts) == 2 {
+			return parts[0], parts[1]
+		}
+		return "", ""
+	}
+}
+
+func runTargetsList(cmd *cobra.Command, _ []string) error {
 	database, err := openDBFromConfig()
 	if err != nil {
 		return err
@@ -169,17 +285,22 @@ func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 
-	sourceFilter := tasksFlagSource
+	sourceFilter := targetsFlagSource
 	if sourceFilter == "all" {
 		sourceFilter = ""
 	}
 
+	periodStart, periodEnd := periodPresetDates(targetsFlagPeriod)
+
+	_ = periodStart // period filtering not yet in TargetFilter; used for future extension
+	_ = periodEnd
 	f := db.TargetFilter{
-		Status:      tasksFlagStatus,
-		Priority:    tasksFlagPriority,
-		Ownership:   tasksFlagOwnership,
+		Status:      targetsFlagStatus,
+		Priority:    targetsFlagPriority,
+		Ownership:   targetsFlagOwnership,
+		Level:       targetsFlagLevel,
 		SourceType:  sourceFilter,
-		IncludeDone: tasksFlagAll,
+		IncludeDone: targetsFlagAll,
 	}
 
 	items, err := database.GetTargets(f)
@@ -187,7 +308,7 @@ func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("querying targets: %w", err)
 	}
 
-	if tasksFlagJSON {
+	if targetsFlagJSON {
 		data, err := json.MarshalIndent(items, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
@@ -226,7 +347,6 @@ func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 
 		line := fmt.Sprintf(" %s  [#%d] %s", pLabel, item.ID, item.Text)
 
-		// Jira badge for targets sourced from Jira.
 		if item.SourceType == "jira" && item.SourceID != "" {
 			issue, err := database.GetJiraIssueByKey(item.SourceID)
 			if err == nil && issue != nil {
@@ -236,12 +356,16 @@ func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 			}
 		}
 
+		if item.Level != "" && item.Level != "day" {
+			line += fmt.Sprintf("  (%s)", item.Level)
+		}
+
 		if item.DueDate != "" {
 			line += fmt.Sprintf("    due: %s", item.DueDate)
 		}
 
 		if item.Status != "todo" {
-			line += fmt.Sprintf("  (%s)", item.Status)
+			line += fmt.Sprintf("  [%s]", item.Status)
 		}
 
 		fmt.Fprintln(out, line)
@@ -250,7 +374,7 @@ func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runTasksShow(cmd *cobra.Command, args []string) error {
+func runTargetsShow(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -287,16 +411,17 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(out, "Blocking: %s\n", target.Blocking)
 	}
 	if target.PeriodStart != "" {
-		fmt.Fprintf(out, "Period: %s – %s\n", target.PeriodStart, target.PeriodEnd)
+		fmt.Fprintf(out, "Period: %s - %s\n", target.PeriodStart, target.PeriodEnd)
+	}
+	if target.ParentID.Valid {
+		fmt.Fprintf(out, "Parent: #%d\n", target.ParentID.Int64)
 	}
 
-	// Tags
 	var tags []string
 	if json.Unmarshal([]byte(target.Tags), &tags) == nil && len(tags) > 0 {
 		fmt.Fprintf(out, "Tags: %s\n", strings.Join(tags, ", "))
 	}
 
-	// Sub-items
 	if target.SubItems != "" && target.SubItems != "[]" {
 		type subItem struct {
 			Text    string `json:"text"`
@@ -320,7 +445,6 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Notes
 	if target.Notes != "" && target.Notes != "[]" {
 		var notes []db.TargetNote
 		if json.Unmarshal([]byte(target.Notes), &notes) == nil && len(notes) > 0 {
@@ -335,6 +459,22 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	links, err := database.GetLinksForTarget(int64(target.ID), "both")
+	if err == nil && len(links) > 0 {
+		fmt.Fprintf(out, "\nLinks:\n")
+		for _, l := range links {
+			if l.TargetTargetID.Valid {
+				if l.TargetTargetID.Int64 == int64(target.ID) {
+					fmt.Fprintf(out, "  [link #%d] <- target #%d (%s)\n", l.ID, l.SourceTargetID, l.Relation)
+				} else {
+					fmt.Fprintf(out, "  [link #%d] -> target #%d (%s)\n", l.ID, l.TargetTargetID.Int64, l.Relation)
+				}
+			} else {
+				fmt.Fprintf(out, "  [link #%d] -> %s (%s)\n", l.ID, l.ExternalRef, l.Relation)
+			}
+		}
+	}
+
 	fmt.Fprintf(out, "\nSource: %s", target.SourceType)
 	if target.SourceID != "" {
 		fmt.Fprintf(out, " #%s", target.SourceID)
@@ -345,8 +485,8 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksCreate(cmd *cobra.Command, _ []string) error {
-	if tasksFlagText == "" {
+func runTargetsCreate(cmd *cobra.Command, _ []string) error {
+	if targetsFlagText == "" {
 		return fmt.Errorf("--text is required")
 	}
 
@@ -356,19 +496,41 @@ func runTasksCreate(cmd *cobra.Command, _ []string) error {
 	}
 	defer database.Close()
 
-	target := db.Target{
-		Text:       tasksFlagText,
-		Intent:     tasksFlagIntent,
-		Status:     "todo",
-		Priority:   tasksFlagPriority,
-		Ownership:  tasksFlagOwnership,
-		DueDate:    tasksFlagDue,
-		SourceType: tasksFlagSourceType,
-		SourceID:   tasksFlagSourceID,
+	today := time.Now().Format("2006-01-02")
+	periodStart := targetsFlagPeriodStart
+	if periodStart == "" {
+		periodStart = today
+	}
+	periodEnd := targetsFlagPeriodEnd
+	if periodEnd == "" {
+		periodEnd = today
 	}
 
-	if tasksFlagTags != "" {
-		parts := strings.Split(tasksFlagTags, ",")
+	level := targetsFlagLevel
+	if level == "" {
+		level = "day"
+	}
+
+	target := db.Target{
+		Text:        targetsFlagText,
+		Intent:      targetsFlagIntent,
+		Level:       level,
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+		Status:      "todo",
+		Priority:    targetsFlagPriority,
+		Ownership:   targetsFlagOwnership,
+		DueDate:     targetsFlagDue,
+		SourceType:  targetsFlagSourceType,
+		SourceID:    targetsFlagSourceID,
+	}
+
+	if targetsFlagParent > 0 {
+		target.ParentID = sql.NullInt64{Int64: int64(targetsFlagParent), Valid: true}
+	}
+
+	if targetsFlagTags != "" {
+		parts := strings.Split(targetsFlagTags, ",")
 		for i := range parts {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
@@ -385,7 +547,297 @@ func runTasksCreate(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func runTasksDone(cmd *cobra.Command, args []string) error {
+func runTargetsExtract(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	rawText := targetsFlagExtractText
+	sourceRef := targetsFlagExtractSourceRef
+
+	if targetsFlagExtractFromInbox > 0 {
+		item, err := database.GetInboxItemByID(targetsFlagExtractFromInbox)
+		if err != nil {
+			return fmt.Errorf("inbox item #%d not found: %w", targetsFlagExtractFromInbox, err)
+		}
+		rawText = item.RawText
+		if rawText == "" {
+			rawText = item.Snippet
+		}
+		if sourceRef == "" {
+			sourceRef = fmt.Sprintf("inbox:%d", targetsFlagExtractFromInbox)
+		}
+	}
+
+	if rawText == "" {
+		return fmt.Errorf("--text or --from-inbox is required")
+	}
+
+	applyProviderOverride(cfg)
+	gen := cliGenerator(cfg)
+	pipe := targets.New(database, &cfg.Targets, gen, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := pipe.Extract(ctx, targets.ExtractRequest{
+		RawText:    rawText,
+		EntryPoint: "cli",
+		SourceRef:  sourceRef,
+	})
+	if err != nil {
+		return fmt.Errorf("extraction failed: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+
+	if len(result.Extracted) == 0 {
+		fmt.Fprintln(out, "No targets extracted.")
+		return nil
+	}
+
+	if result.OmittedCount > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: AI omitted %d additional items (cap reached).\n", result.OmittedCount)
+	}
+	if result.Notes != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "AI notes: %s\n", result.Notes)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	var confirmed []targets.ProposedTarget
+
+	fmt.Fprintf(out, "\nExtracted %d target(s):\n\n", len(result.Extracted))
+
+	for i, pt := range result.Extracted {
+		fmt.Fprintf(out, "[%d/%d] %s\n", i+1, len(result.Extracted), pt.Text)
+		fmt.Fprintf(out, "      Level: %s | Priority: %s | Period: %s - %s\n",
+			pt.Level, pt.Priority, pt.PeriodStart, pt.PeriodEnd)
+		if pt.Intent != "" {
+			fmt.Fprintf(out, "      Intent: %s\n", pt.Intent)
+		}
+		if pt.ParentID.Valid {
+			fmt.Fprintf(out, "      Parent: #%d\n", pt.ParentID.Int64)
+		}
+		fmt.Fprintf(out, "      Create? [y/N]: ")
+
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(strings.ToLower(line))
+		if line == "y" || line == "yes" {
+			confirmed = append(confirmed, pt)
+		}
+		fmt.Fprintln(out)
+	}
+
+	if len(confirmed) == 0 {
+		fmt.Fprintln(out, "No targets created.")
+		return nil
+	}
+
+	ids, err := pipe.CreateFromExtraction(ctx, confirmed, "extract", sourceRef)
+	if err != nil {
+		return fmt.Errorf("creating targets: %w", err)
+	}
+
+	fmt.Fprintf(out, "Created %d target(s):", len(ids))
+	for _, id := range ids {
+		fmt.Fprintf(out, " #%d", id)
+	}
+	fmt.Fprintln(out)
+	return nil
+}
+
+func runTargetsLink(cmd *cobra.Command, args []string) error {
+	id, err := strconv.Atoi(args[0])
+	if err != nil || id <= 0 {
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
+	}
+
+	database, err := openDBFromConfig()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	// --parent: update parent_id on the target itself
+	if targetsFlagLinkParent > 0 {
+		target, err := database.GetTargetByID(id)
+		if err != nil {
+			return fmt.Errorf("target #%d not found: %w", id, err)
+		}
+		target.ParentID = sql.NullInt64{Int64: int64(targetsFlagLinkParent), Valid: true}
+		if err := database.UpdateTarget(*target); err != nil {
+			return fmt.Errorf("updating parent: %w", err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Target #%d parent set to #%d\n", id, targetsFlagLinkParent)
+		return nil
+	}
+
+	// --to or --external: create a target_link record
+	if targetsFlagLinkTo == 0 && targetsFlagLinkExternal == "" {
+		return fmt.Errorf("one of --parent, --to, or --external is required")
+	}
+	if targetsFlagLinkRelation == "" {
+		return fmt.Errorf("--relation is required (contributes_to, blocks, related, duplicates)")
+	}
+
+	link := db.TargetLink{
+		SourceTargetID: id,
+		Relation:       targetsFlagLinkRelation,
+		CreatedBy:      "user",
+	}
+
+	if targetsFlagLinkTo > 0 {
+		link.TargetTargetID = sql.NullInt64{Int64: int64(targetsFlagLinkTo), Valid: true}
+	}
+	if targetsFlagLinkExternal != "" {
+		link.ExternalRef = targetsFlagLinkExternal
+	}
+
+	linkID, err := database.CreateTargetLink(link)
+	if err != nil {
+		return fmt.Errorf("creating link: %w", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Link #%d created\n", linkID)
+	return nil
+}
+
+func runTargetsUnlink(cmd *cobra.Command, args []string) error {
+	id, err := strconv.Atoi(args[0])
+	if err != nil || id <= 0 {
+		return fmt.Errorf("invalid link ID %q: must be a positive integer", args[0])
+	}
+
+	database, err := openDBFromConfig()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if err := database.DeleteTargetLink(id); err != nil {
+		return fmt.Errorf("deleting link #%d: %w", id, err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Link #%d removed\n", id)
+	return nil
+}
+
+func runTargetsSuggestLinks(cmd *cobra.Command, args []string) error {
+	id, err := strconv.Atoi(args[0])
+	if err != nil || id <= 0 {
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
+	}
+
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	applyProviderOverride(cfg)
+	gen := cliGenerator(cfg)
+	pipe := targets.New(database, &cfg.Targets, gen, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := pipe.LinkExisting(ctx, int64(id))
+	if err != nil {
+		return fmt.Errorf("suggest-links failed: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Suggested links for target #%d:\n\n", id)
+
+	if result.ParentID.Valid {
+		fmt.Fprintf(out, "  Parent: #%d\n", result.ParentID.Int64)
+	}
+
+	for _, l := range result.SecondaryLinks {
+		if l.TargetID.Valid {
+			fmt.Fprintf(out, "  -> target #%d (%s)\n", l.TargetID.Int64, l.Relation)
+		} else {
+			fmt.Fprintf(out, "  -> %s (%s)\n", l.ExternalRef, l.Relation)
+		}
+	}
+
+	if !result.ParentID.Valid && len(result.SecondaryLinks) == 0 {
+		fmt.Fprintln(out, "  No links suggested.")
+		return nil
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Fprintf(out, "\nApply these links? [y/N]: ")
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(strings.ToLower(line))
+	if line != "y" && line != "yes" {
+		fmt.Fprintln(out, "Aborted.")
+		return nil
+	}
+
+	if result.ParentID.Valid {
+		target, err := database.GetTargetByID(id)
+		if err != nil {
+			return fmt.Errorf("loading target: %w", err)
+		}
+		target.ParentID = sql.NullInt64{Int64: result.ParentID.Int64, Valid: true}
+		if err := database.UpdateTarget(*target); err != nil {
+			return fmt.Errorf("setting parent: %w", err)
+		}
+		fmt.Fprintf(out, "Parent set to #%d\n", result.ParentID.Int64)
+	}
+
+	for _, l := range result.SecondaryLinks {
+		link := db.TargetLink{
+			SourceTargetID: id,
+			Relation:       l.Relation,
+			CreatedBy:      "ai",
+		}
+		if l.TargetID.Valid {
+			link.TargetTargetID = sql.NullInt64{Int64: l.TargetID.Int64, Valid: true}
+		}
+		if l.ExternalRef != "" {
+			link.ExternalRef = l.ExternalRef
+		}
+		if l.Confidence.Valid {
+			link.Confidence = sql.NullFloat64{Float64: l.Confidence.Float64, Valid: true}
+		}
+		linkID, err := database.CreateTargetLink(link)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not create link: %v\n", err)
+			continue
+		}
+		fmt.Fprintf(out, "Link #%d created\n", linkID)
+	}
+
+	return nil
+}
+
+func runTargetsDone(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -405,7 +857,7 @@ func runTasksDone(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksDismiss(cmd *cobra.Command, args []string) error {
+func runTargetsDismiss(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -425,7 +877,7 @@ func runTasksDismiss(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksSnooze(cmd *cobra.Command, args []string) error {
+func runTargetsSnooze(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -453,7 +905,7 @@ func runTasksSnooze(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksUpdate(cmd *cobra.Command, args []string) error {
+func runTargetsUpdate(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -471,31 +923,47 @@ func runTasksUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if cmd.Flags().Changed("text") {
-		target.Text = tasksFlagText
+		target.Text = targetsFlagText
 	}
 	if cmd.Flags().Changed("intent") {
-		target.Intent = tasksFlagIntent
+		target.Intent = targetsFlagIntent
 	}
 	if cmd.Flags().Changed("priority") {
-		target.Priority = tasksFlagPriority
+		target.Priority = targetsFlagPriority
 	}
 	if cmd.Flags().Changed("status") {
-		target.Status = tasksFlagStatus
+		target.Status = targetsFlagStatus
 	}
 	if cmd.Flags().Changed("ownership") {
-		target.Ownership = tasksFlagOwnership
+		target.Ownership = targetsFlagOwnership
 	}
 	if cmd.Flags().Changed("ball-on") {
-		target.BallOn = tasksFlagBallOn
+		target.BallOn = targetsFlagBallOn
 	}
 	if cmd.Flags().Changed("due") {
-		target.DueDate = tasksFlagDue
+		target.DueDate = targetsFlagDue
 	}
 	if cmd.Flags().Changed("blocking") {
-		target.Blocking = tasksFlagBlocking
+		target.Blocking = targetsFlagBlocking
+	}
+	if cmd.Flags().Changed("level") {
+		target.Level = targetsFlagLevel
+	}
+	if cmd.Flags().Changed("period-start") {
+		target.PeriodStart = targetsFlagPeriodStart
+	}
+	if cmd.Flags().Changed("period-end") {
+		target.PeriodEnd = targetsFlagPeriodEnd
+	}
+	if cmd.Flags().Changed("parent") {
+		if targetsFlagParent == 0 {
+			target.ParentID = sql.NullInt64{}
+		} else {
+			target.ParentID = sql.NullInt64{Int64: int64(targetsFlagParent), Valid: true}
+		}
 	}
 	if cmd.Flags().Changed("tags") {
-		parts := strings.Split(tasksFlagTags, ",")
+		parts := strings.Split(targetsFlagTags, ",")
 		for i := range parts {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
@@ -511,8 +979,8 @@ func runTasksUpdate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksGenerate(cmd *cobra.Command, _ []string) error {
-	if tasksFlagText == "" {
+func runTargetsGenerate(cmd *cobra.Command, _ []string) error {
+	if targetsFlagText == "" {
 		return fmt.Errorf("--text is required")
 	}
 
@@ -527,18 +995,16 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Build source context if provided.
 	var sourceContext string
-	if tasksFlagSourceType != "" && tasksFlagSourceID != "" {
+	if targetsFlagSourceType != "" && targetsFlagSourceID != "" {
 		database, err := db.Open(cfg.DBPath())
 		if err != nil {
 			return fmt.Errorf("opening database: %w", err)
 		}
-		sourceContext = loadSourceContext(database, tasksFlagSourceType, tasksFlagSourceID)
+		sourceContext = loadSourceContext(database, targetsFlagSourceType, targetsFlagSourceID)
 		database.Close()
 	}
 
-	// Build prompt — use Store for user-customized prompts, fallback to defaults.
 	now := time.Now().Format("2006-01-02T15:04 (Monday)")
 	promptTmpl := prompts.Defaults[prompts.TasksGenerate]
 	if promptDB, dbErr := db.Open(cfg.DBPath()); dbErr == nil {
@@ -550,12 +1016,11 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 	}
 	systemPrompt := fmt.Sprintf(promptTmpl, now)
 
-	userMessage := tasksFlagText
+	userMessage := targetsFlagText
 	if sourceContext != "" {
 		userMessage += "\n\n=== SOURCE CONTEXT ===\n" + sourceContext
 	}
 
-	// Call AI.
 	applyProviderOverride(cfg)
 	gen := cliGenerator(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -566,7 +1031,6 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("AI generation failed: %w", err)
 	}
 
-	// Record usage in pipeline_runs.
 	database, err := db.Open(cfg.DBPath())
 	if err == nil {
 		model := cfg.AI.Provider + "/sonnet"
@@ -583,10 +1047,7 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 		database.Close()
 	}
 
-	// Extract JSON from result (AI may wrap it in markdown code blocks).
 	jsonStr := extractJSON(result)
-
-	// Output raw JSON to stdout for the desktop app to parse.
 	fmt.Fprintln(cmd.OutOrStdout(), jsonStr)
 	return nil
 }
@@ -622,17 +1083,14 @@ func loadSourceContext(database *db.DB, sourceType, sourceID string) string {
 // extractJSON finds and returns the first JSON object in the string,
 // handling cases where AI wraps JSON in markdown code blocks.
 func extractJSON(s string) string {
-	// Try to find ```json ... ``` block first.
 	if idx := strings.Index(s, "```json"); idx >= 0 {
 		start := idx + len("```json")
 		if end := strings.Index(s[start:], "```"); end >= 0 {
 			return strings.TrimSpace(s[start : start+end])
 		}
 	}
-	// Try to find ``` ... ``` block.
 	if idx := strings.Index(s, "```"); idx >= 0 {
 		start := idx + len("```")
-		// Skip optional language tag on same line.
 		if nl := strings.Index(s[start:], "\n"); nl >= 0 {
 			start += nl + 1
 		}
@@ -640,7 +1098,6 @@ func extractJSON(s string) string {
 			return strings.TrimSpace(s[start : start+end])
 		}
 	}
-	// Try to find raw JSON object.
 	if idx := strings.Index(s, "{"); idx >= 0 {
 		if end := strings.LastIndex(s, "}"); end > idx {
 			return s[idx : end+1]
@@ -649,7 +1106,7 @@ func extractJSON(s string) string {
 	return s
 }
 
-func runTasksNoteAdd(cmd *cobra.Command, args []string) error {
+func runTargetsNoteAdd(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -671,7 +1128,6 @@ func runTasksNoteAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	// Append note to existing notes JSON array.
 	var notes []db.TargetNote
 	if target.Notes != "" && target.Notes != "[]" {
 		_ = json.Unmarshal([]byte(target.Notes), &notes)
@@ -691,7 +1147,7 @@ func runTasksNoteAdd(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksNoteList(cmd *cobra.Command, args []string) error {
+func runTargetsNoteList(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
@@ -708,11 +1164,11 @@ func runTasksNoteList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	var notes []db.TargetNote
 	if target.Notes == "" || target.Notes == "[]" {
 		fmt.Fprintf(cmd.OutOrStdout(), "No notes for target #%d\n", id)
 		return nil
 	}
+	var notes []db.TargetNote
 	if err := json.Unmarshal([]byte(target.Notes), &notes); err != nil {
 		return fmt.Errorf("parsing notes: %w", err)
 	}
@@ -729,13 +1185,13 @@ func runTasksNoteList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
+func runTargetsAIUpdate(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
-	if tasksFlagInstruction == "" {
+	if targetsFlagInstruction == "" {
 		return fmt.Errorf("--instruction is required")
 	}
 
@@ -761,7 +1217,6 @@ func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	// Build current target context for the prompt.
 	targetContext := fmt.Sprintf("Title: %s\nIntent: %s\nPriority: %s\nDue: %s\nStatus: %s\nSub-items: %s\nNotes: %s",
 		target.Text, target.Intent, target.Priority, target.DueDate, target.Status, target.SubItems, target.Notes)
 
@@ -773,18 +1228,16 @@ func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 	}
 	systemPrompt := fmt.Sprintf(promptTmpl, now, targetContext)
 
-	// Call AI.
 	applyProviderOverride(cfg)
 	gen := cliGenerator(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	result, usage, _, err := gen.Generate(ctx, systemPrompt, tasksFlagInstruction, "")
+	result, usage, _, err := gen.Generate(ctx, systemPrompt, targetsFlagInstruction, "")
 	if err != nil {
 		return fmt.Errorf("AI update failed: %w", err)
 	}
 
-	// Record usage.
 	model := cfg.AI.Provider + "/sonnet"
 	runID, runErr := database.CreatePipelineRun("targets", "cli", model)
 	if runErr == nil {
