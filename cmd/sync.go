@@ -20,11 +20,13 @@ import (
 	"watchtower/internal/calendar"
 	"watchtower/internal/config"
 	"watchtower/internal/daemon"
+	"watchtower/internal/dayplan"
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	"watchtower/internal/inbox"
 	"watchtower/internal/jira"
+	"watchtower/internal/prompts"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -280,6 +282,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			if cfg.Inbox.Enabled {
 				d.SetInboxPipeline(inbox.New(database, cfg, gen, logger))
+			}
+			if cfg.DayPlan.Enabled {
+				dayPlanPipe := dayplan.New(database, cfg, gen, logger)
+				dayPlanPipe.SetPromptStore(prompts.New(database, nil))
+				d.SetDayPlanPipeline(dayPlanPipe)
 			}
 		}
 		// Wire Jira syncer if configured and token exists.

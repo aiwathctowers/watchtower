@@ -17,6 +17,7 @@ import (
 
 	"watchtower/internal/config"
 	"watchtower/internal/db"
+	"watchtower/internal/dayplan"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	watchtowerslack "watchtower/internal/slack"
@@ -697,4 +698,136 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "snoozed", task2.Status)
 	assert.Equal(t, "2099-12-31", task2.SnoozeUntil)
+}
+
+// fakeDayPlanRunner implements DayPlanRunner for testing. Run inserts a real
+// plan row into database so the dedup check in shouldRunDayPlan fires on the
+// second call.
+type fakeDayPlanRunner struct {
+	database     *db.DB
+	runCalls     int
+	detectCalls  int
+	syncCalls    int
+}
+
+func (f *fakeDayPlanRunner) Run(_ context.Context, opts dayplan.RunOptions) (*db.DayPlan, error) {
+	f.runCalls++
+	if f.database != nil {
+		plan := &db.DayPlan{
+			UserID:          opts.UserID,
+			PlanDate:        opts.Date,
+			Status:          "active",
+			GeneratedAt:     time.Now(),
+			FeedbackHistory: "[]",
+		}
+		_, _ = f.database.UpsertDayPlan(plan)
+	}
+	return nil, nil
+}
+
+func (f *fakeDayPlanRunner) DetectConflicts(_ context.Context, _, _ string) error {
+	f.detectCalls++
+	return nil
+}
+
+func (f *fakeDayPlanRunner) SyncCalendarItemsForDate(_ context.Context, _, _ string) error {
+	f.syncCalls++
+	return nil
+}
+
+func TestDaemon_RunsDayPlanAfterBriefing(t *testing.T) {
+	orch, cfg, _ := testDaemonWithTempHome(t)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	wsDir := dir + "/.local/share/watchtower/test-ws"
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+
+	database, err := db.Open(wsDir + "/watchtower.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Seed workspace + current user so shouldRunDayPlan can resolve a userID.
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{
+		ID:     "T024BE7LD",
+		Name:   "test-ws",
+		Domain: "test-ws",
+	}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+
+	cfg.DayPlan = config.DayPlanConfig{Enabled: true, Hour: 0}
+
+	fp := &fakeDayPlanRunner{database: database}
+
+	d := New(orch, cfg)
+	d.SetLogger(log.New(os.Stderr, "[test-dayplan] ", 0))
+	d.SetDB(database)
+	d.SetDayPlanPipeline(fp)
+
+	testTime := time.Date(2026, 4, 23, 8, 0, 0, 0, time.Local)
+
+	// First call: hour matches, no plan → Run should be called once.
+	d.runDayPlanPhase(context.Background(), testTime)
+	assert.Equal(t, 1, fp.runCalls, "Run should be called once on first invocation")
+
+	// Second call same day: plan now exists (fake inserted it) → dedup, not called again.
+	d.runDayPlanPhase(context.Background(), testTime.Add(time.Hour))
+	assert.Equal(t, 1, fp.runCalls, "Run should not be called again on same day")
+}
+
+func TestDaemon_DayPlanConflictPhase(t *testing.T) {
+	orch, cfg, _ := testDaemonWithTempHome(t)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	wsDir := dir + "/.local/share/watchtower/test-ws"
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+
+	database, err := db.Open(wsDir + "/watchtower.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{
+		ID:     "T024BE7LD",
+		Name:   "test-ws",
+		Domain: "test-ws",
+	}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+
+	// Insert a plan so conflict phase has something to work on.
+	testDate := "2026-04-23"
+	plan := &db.DayPlan{
+		UserID:          "U001",
+		PlanDate:        testDate,
+		Status:          "active",
+		GeneratedAt:     time.Now(),
+		FeedbackHistory: "[]",
+	}
+	_, err = database.UpsertDayPlan(plan)
+	require.NoError(t, err)
+
+	fp := &fakeDayPlanRunner{database: database}
+
+	d := New(orch, cfg)
+	d.SetLogger(log.New(os.Stderr, "[test-dayplan-conflict] ", 0))
+	d.SetDB(database)
+	d.SetDayPlanPipeline(fp)
+
+	testTime := time.Date(2026, 4, 23, 10, 0, 0, 0, time.Local)
+	d.runDayPlanConflictPhase(context.Background(), testTime)
+
+	assert.Equal(t, 1, fp.syncCalls, "SyncCalendarItemsForDate should be called once")
+	assert.Equal(t, 1, fp.detectCalls, "DetectConflicts should be called once")
+}
+
+func TestDaemon_DayPlanNilPipeline(t *testing.T) {
+	orch, cfg, _ := testDaemonWithTempHome(t)
+
+	d := New(orch, cfg)
+	d.SetLogger(log.New(os.Stderr, "[test-nil-dayplan] ", 0))
+
+	// Should not panic when pipeline is nil.
+	testTime := time.Date(2026, 4, 23, 8, 0, 0, 0, time.Local)
+	d.runDayPlanPhase(context.Background(), testTime)
+	d.runDayPlanConflictPhase(context.Background(), testTime)
 }

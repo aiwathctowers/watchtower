@@ -16,6 +16,7 @@ import (
 	"watchtower/internal/calendar"
 	"watchtower/internal/config"
 	"watchtower/internal/db"
+	"watchtower/internal/dayplan"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	"watchtower/internal/inbox"
@@ -25,6 +26,15 @@ import (
 	"watchtower/internal/tracks"
 )
 
+// DayPlanRunner is the interface the daemon uses to generate day plans and
+// keep calendar items / conflicts in sync every cycle. *dayplan.Pipeline
+// satisfies this interface.
+type DayPlanRunner interface {
+	Run(ctx context.Context, opts dayplan.RunOptions) (*db.DayPlan, error)
+	DetectConflicts(ctx context.Context, userID, date string) error
+	SyncCalendarItemsForDate(ctx context.Context, userID, date string) error
+}
+
 // minPollInterval is the minimum allowed poll interval. Values below this
 // (e.g. nanosecond-scale durations from misconfigured integer values) are
 // replaced with DefaultPollInterval. Tests may lower this for fast execution.
@@ -32,22 +42,24 @@ var minPollInterval = 1 * time.Second
 
 // Daemon runs periodic incremental syncs on a timer and after wake-from-sleep events.
 type Daemon struct {
-	orchestrator   *sync.Orchestrator
-	config         *config.Config
-	logger         *log.Logger
-	wakeCh         <-chan struct{}
-	pidPath        string
-	db             *db.DB
-	digestPipe     *digest.Pipeline
-	tracksPipe     *tracks.Pipeline
-	peoplePipe     *guide.Pipeline
-	briefingPipe   *briefing.Pipeline
-	inboxPipe      *inbox.Pipeline
-	calendarSyncer *calendar.Syncer
-	jiraSyncer     *jira.Syncer
-	lastJira       time.Time
-	lastPeople     time.Time // when people cards last ran (once per day)
-	lastBriefing   time.Time // when briefing last ran (once per day)
+	orchestrator    *sync.Orchestrator
+	config          *config.Config
+	logger          *log.Logger
+	wakeCh          <-chan struct{}
+	pidPath         string
+	db              *db.DB
+	digestPipe      *digest.Pipeline
+	tracksPipe      *tracks.Pipeline
+	peoplePipe      *guide.Pipeline
+	briefingPipe    *briefing.Pipeline
+	inboxPipe       *inbox.Pipeline
+	calendarSyncer  *calendar.Syncer
+	jiraSyncer      *jira.Syncer
+	dayPlanPipeline DayPlanRunner
+	lastJira        time.Time
+	lastPeople      time.Time // when people cards last ran (once per day)
+	lastBriefing    time.Time // when briefing last ran (once per day)
+	lastDayPlanDate string    // YYYY-MM-DD of last generation, for dedup
 }
 
 // New creates a Daemon that runs incremental syncs via the given orchestrator.
@@ -102,6 +114,12 @@ func (d *Daemon) SetJiraSyncer(s *jira.Syncer) {
 // SetPeoplePipeline sets the people card pipeline (REDUCE phase).
 func (d *Daemon) SetPeoplePipeline(p *guide.Pipeline) {
 	d.peoplePipe = p
+}
+
+// SetDayPlanPipeline sets the day-plan pipeline for post-briefing generation
+// and per-cycle calendar sync + conflict detection.
+func (d *Daemon) SetDayPlanPipeline(p DayPlanRunner) {
+	d.dayPlanPipeline = p
 }
 
 // SetPIDPath sets the path where the daemon will write its PID file.
@@ -441,6 +459,13 @@ func (d *Daemon) runSync(ctx context.Context) {
 			_ = d.db.CompletePipelineRun(briefingRunID, items, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
 		}
 	}
+
+	// Phase 7: Day plan generation (once per day, after briefing).
+	now := time.Now()
+	d.runDayPlanPhase(ctx, now)
+
+	// Phase 8: Sync calendar items + detect conflicts on today's plan (every cycle).
+	d.runDayPlanConflictPhase(ctx, now)
 }
 
 // autoMarkRead marks digests as read based on Slack read cursors.
@@ -525,5 +550,94 @@ func (d *Daemon) saveLastBriefing() {
 	data := strconv.FormatInt(d.lastBriefing.Unix(), 10)
 	if err := os.WriteFile(d.lastBriefingPath(), []byte(data), 0o600); err != nil {
 		d.logger.Printf("failed to save last briefing time: %v", err)
+	}
+}
+
+// shouldRunDayPlan returns true when the day-plan pipeline should generate a
+// plan: enabled, hour gate passed, no plan yet for today.
+func (d *Daemon) shouldRunDayPlan(now time.Time) bool {
+	if d.dayPlanPipeline == nil {
+		return false
+	}
+	cfg := d.config.DayPlan
+	if !cfg.Enabled {
+		return false
+	}
+	targetHour := cfg.Hour
+	if targetHour <= 0 {
+		targetHour = config.DefaultDayPlanHour
+	}
+	if now.Hour() < targetHour {
+		return false
+	}
+	date := now.Format("2006-01-02")
+	if d.lastDayPlanDate == date {
+		return false
+	}
+	if d.db == nil {
+		return true
+	}
+	userID, _ := d.db.GetCurrentUserID()
+	if userID == "" {
+		return false
+	}
+	existing, _ := d.db.GetDayPlan(userID, date)
+	return existing == nil
+}
+
+// runDayPlanPhase is Phase 7: generate today's day plan once per day after
+// the configured hour, immediately after the briefing phase.
+func (d *Daemon) runDayPlanPhase(ctx context.Context, now time.Time) {
+	if !d.shouldRunDayPlan(now) {
+		return
+	}
+	if d.db == nil {
+		return
+	}
+	userID, _ := d.db.GetCurrentUserID()
+	if userID == "" {
+		return
+	}
+	date := now.Format("2006-01-02")
+	if _, err := d.dayPlanPipeline.Run(ctx, dayplan.RunOptions{UserID: userID, Date: date}); err != nil {
+		d.logger.Printf("dayplan: generation failed: %v", err)
+		return
+	}
+	d.lastDayPlanDate = date
+	d.logger.Printf("dayplan: generated plan for %s", date)
+}
+
+// runDayPlanConflictPhase is Phase 8: every cycle, sync calendar items and
+// re-detect conflicts on today's plan. Fires a log notice on false→true flip.
+func (d *Daemon) runDayPlanConflictPhase(ctx context.Context, now time.Time) {
+	if d.dayPlanPipeline == nil || d.db == nil {
+		return
+	}
+	userID, _ := d.db.GetCurrentUserID()
+	if userID == "" {
+		return
+	}
+	date := now.Format("2006-01-02")
+
+	prev, _ := d.db.GetDayPlan(userID, date)
+	if prev == nil {
+		return
+	}
+	prevHad := prev.HasConflicts
+
+	if err := d.dayPlanPipeline.SyncCalendarItemsForDate(ctx, userID, date); err != nil {
+		d.logger.Printf("dayplan: sync calendar items: %v", err)
+	}
+	if err := d.dayPlanPipeline.DetectConflicts(ctx, userID, date); err != nil {
+		d.logger.Printf("dayplan: detect conflicts: %v", err)
+	}
+
+	updated, _ := d.db.GetDayPlan(userID, date)
+	if updated != nil && !prevHad && updated.HasConflicts {
+		summary := ""
+		if updated.ConflictSummary.Valid {
+			summary = updated.ConflictSummary.String
+		}
+		d.logger.Printf("dayplan: conflicts detected: %s", summary)
 	}
 }
