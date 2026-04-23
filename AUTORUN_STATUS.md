@@ -23,8 +23,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T13+14+16: CLI show/list/reset/check-conflicts | ✅ DONE | `a123bb7` | implementer only (batched) | 8 tests PASS; DeleteDayPlan via raw DELETE (no helper) |
 | T15: CLI day-plan generate | ✅ DONE | `662fa12` | implementer only | factory seam newDayPlanPipelineFactory for test injection |
 | T17: Swift models | ✅ DONE | `761cfca` | implementer only | 11 tests; renamed description→details (conflict with CustomStringConvertible); also seeded TestDatabase.swift |
-| T18: Swift queries with cascade | ⏳ running | — | — | — |
-| T19: Swift DayPlanViewModel | pending | — | — | — |
+| T18: Swift queries with cascade | ✅ DONE | `2d60a0a` | implementer only | 9 tests; uses synchronous Database closure pattern (matches TaskQueries) |
+| T19: Swift DayPlanViewModel | ⏳ running | — | — | — |
 | T20: Swift DayPlanView + Timeline | pending | — | — | — |
 | T21: ItemRow + ConflictBanner | pending | — | — | — |
 | T22: Regenerate + Create sheets | pending | — | — | — |
