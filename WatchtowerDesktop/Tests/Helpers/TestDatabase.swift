@@ -707,6 +707,43 @@ enum TestDatabase {
         created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
+    CREATE TABLE IF NOT EXISTS day_plans (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id             TEXT NOT NULL,
+        plan_date           TEXT NOT NULL,
+        status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+        has_conflicts       INTEGER NOT NULL DEFAULT 0,
+        conflict_summary    TEXT,
+        generated_at        TEXT NOT NULL,
+        last_regenerated_at TEXT,
+        regenerate_count    INTEGER NOT NULL DEFAULT 0,
+        feedback_history    TEXT,
+        prompt_version      TEXT,
+        briefing_id         INTEGER,
+        read_at             TEXT,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (user_id, plan_date)
+    );
+    CREATE TABLE IF NOT EXISTS day_plan_items (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        day_plan_id  INTEGER NOT NULL REFERENCES day_plans(id) ON DELETE CASCADE,
+        kind         TEXT NOT NULL CHECK (kind IN ('timeblock','backlog')),
+        source_type  TEXT NOT NULL CHECK (source_type IN ('task','briefing_attention','jira','calendar','manual','focus')),
+        source_id    TEXT,
+        title        TEXT NOT NULL,
+        description  TEXT,
+        rationale    TEXT,
+        start_time   TEXT,
+        end_time     TEXT,
+        duration_min INTEGER,
+        priority     TEXT CHECK (priority IS NULL OR priority IN ('high','medium','low')),
+        status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','skipped')),
+        order_index  INTEGER NOT NULL DEFAULT 0,
+        tags         TEXT,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
     """
 
     // MARK: - Briefing Fixtures
@@ -923,5 +960,61 @@ enum TestDatabase {
                              startTime, endTime, organizerEmail, attendees,
                              isRecurring ? 1 : 0, isAllDay ? 1 : 0, eventStatus,
                              eventType, htmlLink, updatedAt])
+    }
+
+    // MARK: - Day Plan Fixtures
+
+    @discardableResult
+    static func insertDayPlan(
+        _ db: Database,
+        userID: String = "U001",
+        planDate: String = "2026-04-23",
+        status: String = "active",
+        hasConflicts: Bool = false,
+        conflictSummary: String? = nil,
+        generatedAt: String = "2026-04-23T08:00:00Z",
+        lastRegeneratedAt: String? = nil,
+        regenerateCount: Int = 0,
+        feedbackHistory: String? = nil,
+        promptVersion: String? = nil,
+        briefingID: Int? = nil,
+        readAt: String? = nil
+    ) throws -> Int64 {
+        try db.execute(sql: """
+            INSERT INTO day_plans (user_id, plan_date, status, has_conflicts, conflict_summary,
+                generated_at, last_regenerated_at, regenerate_count, feedback_history,
+                prompt_version, briefing_id, read_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [userID, planDate, status, hasConflicts ? 1 : 0, conflictSummary,
+                             generatedAt, lastRegeneratedAt, regenerateCount, feedbackHistory,
+                             promptVersion, briefingID, readAt])
+        return db.lastInsertedRowID
+    }
+
+    static func insertDayPlanItem(
+        _ db: Database,
+        dayPlanID: Int64 = 1,
+        kind: String = "timeblock",
+        sourceType: String = "manual",
+        sourceID: String? = nil,
+        title: String = "Review PR",
+        description: String? = nil,
+        rationale: String? = nil,
+        startTime: String? = nil,
+        endTime: String? = nil,
+        durationMin: Int? = nil,
+        priority: String? = "medium",
+        status: String = "pending",
+        orderIndex: Int = 0,
+        tags: String? = nil
+    ) throws {
+        try db.execute(sql: """
+            INSERT INTO day_plan_items (day_plan_id, kind, source_type, source_id, title,
+                description, rationale, start_time, end_time, duration_min, priority,
+                status, order_index, tags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [dayPlanID, kind, sourceType, sourceID, title,
+                             description, rationale, startTime, endTime, durationMin,
+                             priority, status, orderIndex, tags])
     }
 }
