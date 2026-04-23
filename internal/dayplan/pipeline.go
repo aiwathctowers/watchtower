@@ -168,17 +168,7 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 	return p.db.GetDayPlanByID(planID)
 }
 
-// ── stubs for T10 / T11 ───────────────────────────────────────────────────────
-
-// syncCalendarItems creates/updates calendar-sourced DayPlanItems to mirror
-// today's calendar events.  Full implementation in T10.
-//
-// TODO(T10): implement — create 'calendar' source_type items for each event,
-// upsert on event_id, remove stale calendar items.
-func (p *Pipeline) syncCalendarItems(_ int64, _ string, _ []db.CalendarEvent) error {
-	// Stub: no-op.
-	return nil
-}
+// ── stubs for T11 ────────────────────────────────────────────────────────────
 
 // DetectConflicts scans the plan items for overlapping timeblocks or items
 // clashing with calendar events and updates the plan's has_conflicts field.

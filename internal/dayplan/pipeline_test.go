@@ -246,8 +246,11 @@ func TestRun_DropsTimeblockOverlappingCalendar(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, it := range items {
-		require.NotEqual(t, "timeblock", it.Kind,
-			"overlapping timeblock must not be persisted, got item: %+v", it)
+		// Calendar-sourced timeblocks are legitimate (added by syncCalendarItems).
+		// Only AI-generated timeblocks that overlap the calendar event must be dropped.
+		if it.Kind == "timeblock" && it.SourceType != "calendar" {
+			t.Errorf("AI timeblock must not be persisted when it overlaps a calendar event, got item: %+v", it)
+		}
 	}
 
 	// Backlog item should survive.
