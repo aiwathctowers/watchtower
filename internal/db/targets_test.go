@@ -369,6 +369,61 @@ func TestRecomputeParentProgress_AllDismissedChildren(t *testing.T) {
 	assert.InDelta(t, 0.5, parent.Progress, 0.001)
 }
 
+// ── UpdateTarget / progress recompute ───────────────────────────────────────
+
+func TestUpdateTarget_RecomputesParentProgress(t *testing.T) {
+	db := openTestDB(t)
+
+	// Create parent and two children attached to it.
+	parentID, err := db.CreateTarget(makeTarget("Parent", "todo", "high"))
+	require.NoError(t, err)
+
+	child1 := makeTarget("Child done", "done", "medium")
+	child1.ParentID = sql.NullInt64{Int64: parentID, Valid: true}
+	child1ID, err := db.CreateTarget(child1)
+	require.NoError(t, err)
+
+	child2 := makeTarget("Child todo", "todo", "medium")
+	child2.ParentID = sql.NullInt64{Int64: parentID, Valid: true}
+	_, err = db.CreateTarget(child2)
+	require.NoError(t, err)
+
+	// Progress after two children: AVG(1.0, 0.0) = 0.5.
+	parent, err := db.GetTargetByID(int(parentID))
+	require.NoError(t, err)
+	assert.InDelta(t, 0.5, parent.Progress, 0.001, "initial parent progress")
+
+	// Update child1 from done→todo via UpdateTarget.
+	got1, err := db.GetTargetByID(int(child1ID))
+	require.NoError(t, err)
+	got1.Status = "todo"
+	require.NoError(t, db.UpdateTarget(*got1))
+
+	// Parent progress must now be AVG(0.0, 0.0) = 0.0.
+	parent, err = db.GetTargetByID(int(parentID))
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, parent.Progress, 0.001, "parent progress after child reverted to todo")
+
+	// Now create a second parent and move child1 to it.
+	parent2ID, err := db.CreateTarget(makeTarget("Parent2", "todo", "medium"))
+	require.NoError(t, err)
+	got1, err = db.GetTargetByID(int(child1ID))
+	require.NoError(t, err)
+	got1.ParentID = sql.NullInt64{Int64: parent2ID, Valid: true}
+	got1.Status = "done"
+	require.NoError(t, db.UpdateTarget(*got1))
+
+	// Old parent (parent1) should now only have child2 (todo=0.0).
+	parent, err = db.GetTargetByID(int(parentID))
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, parent.Progress, 0.001, "old parent progress after child moved away")
+
+	// New parent (parent2) should have AVG(done=1.0) = 1.0.
+	parent2, err := db.GetTargetByID(int(parent2ID))
+	require.NoError(t, err)
+	assert.InDelta(t, 1.0, parent2.Progress, 0.001, "new parent progress after child moved in as done")
+}
+
 // ── GetTargetCounts ──────────────────────────────────────────────────────────
 
 func TestGetTargetCounts(t *testing.T) {

@@ -77,7 +77,17 @@ func (db *DB) CreateTarget(t Target) (int64, error) {
 }
 
 // UpdateTarget updates all mutable fields of an existing target.
+// It captures the old parent_id before the update, recomputes progress
+// (mirroring UpdateTargetStatus semantics for leaf targets), and propagates
+// progress to both old and new parents when parent_id changes.
 func (db *DB) UpdateTarget(t Target) error {
+	// Capture old parent before mutating.
+	var oldParentID sql.NullInt64
+	_ = db.QueryRow(`SELECT parent_id FROM targets WHERE id = ?`, t.ID).Scan(&oldParentID)
+
+	// Derive progress from status (applied when target has no non-dismissed children).
+	progress := statusToProgress(t.Status)
+
 	_, err := db.Exec(`UPDATE targets SET
 		text = ?, intent = ?, level = ?, custom_label = ?, period_start = ?, period_end = ?,
 		parent_id = ?, status = ?, priority = ?, ownership = ?,
@@ -93,6 +103,20 @@ func (db *DB) UpdateTarget(t Target) error {
 	)
 	if err != nil {
 		return fmt.Errorf("updating target %d: %w", t.ID, err)
+	}
+
+	// Update own progress when it has no non-dismissed children (leaf semantics).
+	_, _ = db.Exec(`UPDATE targets SET progress = ? WHERE id = ? AND
+		NOT EXISTS (SELECT 1 FROM targets c WHERE c.parent_id = targets.id AND c.status != 'dismissed')`,
+		progress, t.ID)
+
+	// Propagate progress to parent(s). Always recompute new parent.
+	if t.ParentID.Valid {
+		_ = db.RecomputeParentProgress(t.ParentID.Int64)
+	}
+	// If parent changed, also recompute old parent (so its average no longer includes this target).
+	if oldParentID.Valid && oldParentID.Int64 != t.ParentID.Int64 {
+		_ = db.RecomputeParentProgress(oldParentID.Int64)
 	}
 	return nil
 }
