@@ -21,6 +21,9 @@ TASK-*.md
 # Git worktrees
 .worktrees/
 
+# OMC / Ralph scratch files (PRD, progress log, session state)
+.omc/
+
 # Environment and secrets
 .env*
 *.pem
