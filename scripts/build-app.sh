@@ -134,6 +134,18 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << PLIST
             </array>
         </dict>
     </array>
+    <key>INIntentsSupported</key>
+    <array/>
+    <key>NSUserActivityTypes</key>
+    <array/>
+    <key>NSCoreSpotlightContinuation</key>
+    <false/>
+    <key>CSSupportsSearchableItems</key>
+    <false/>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
 </dict>
 </plist>
 PLIST
@@ -145,8 +157,13 @@ if [ -f "$DESKTOP_DIR/Resources/AppIcon.icns" ]; then
 fi
 
 # Code sign
+# Even in dev mode: do ad-hoc sign with entitlements so TCC can identify the bundle
+# by its signature. Without a signature, macOS Tahoe (26+) issues TCC prompts for
+# Downloads/Documents/Desktop on every launch via AppIntents/Spotlight preflight.
 if $DEV_MODE; then
-    echo "==> Skipping code signing (dev mode)"
+    echo "==> Ad-hoc code signing (dev mode)..."
+    codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE/Contents/MacOS/watchtower"
+    codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
 elif [ "$SIGN_IDENTITY" != "-" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
     echo "==> Code signing with: $SIGN_IDENTITY"
     codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/watchtower"
