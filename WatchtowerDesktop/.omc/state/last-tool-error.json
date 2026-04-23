@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd WatchtowerDesktop && swift build 2>&1 | tail -30\",\"description\":\"Wait for full build completion\"}",
+  "error": "Exit code 1\n(eval):cd:1: no such file or directory: WatchtowerDesktop",
+  "timestamp": "2026-04-23T09:01:25.745Z",
+  "retry_count": 1
+}

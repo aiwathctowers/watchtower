@@ -30,6 +30,9 @@ final class AppState {
     /// Calendar ViewModel — persists across tab switches.
     private(set) var calendarViewModel: CalendarViewModel?
 
+    /// Day Plan ViewModel — persists across tab switches.
+    private(set) var dayPlanViewModel: DayPlanViewModel?
+
     /// Whether legacy people analytics is enabled (analysis.legacy_mode in config).
     var analysisLegacyMode: Bool = false
 
@@ -149,6 +152,7 @@ final class AppState {
                 isLoading = false
                 loadCustomEmoji(from: manager)
                 initCalendar(dbPool: manager.dbPool)
+                initDayPlan(dbPool: manager.dbPool)
                 startDigestWatcher(dbPool: manager.dbPool)
                 // Resume pipelines if app was closed mid-generation
                 if !needsOnboarding && !UserDefaults.standard.bool(forKey: Constants.pipelinesCompletedKey) {
@@ -242,6 +246,11 @@ final class AppState {
 
     private func initCalendar(dbPool: DatabasePool) {
         calendarViewModel = CalendarViewModel(dbPool: dbPool)
+    }
+
+    private func initDayPlan(dbPool: DatabasePool) {
+        guard let runner = ProcessCLIRunner.makeDefault() else { return }
+        dayPlanViewModel = DayPlanViewModel(databasePool: dbPool, cliRunner: runner)
     }
 
     private func startDigestWatcher(dbPool: DatabasePool) {

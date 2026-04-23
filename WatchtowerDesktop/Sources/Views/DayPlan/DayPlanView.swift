@@ -1,33 +1,13 @@
 import SwiftUI
 
 struct DayPlanView: View {
-    @Environment(AppState.self) private var appState
-    @State private var vm: DayPlanViewModel?
+    @Bindable var vm: DayPlanViewModel
     @State private var showRegen = false
     @State private var showCreate = false
 
     var body: some View {
-        Group {
-            if let vm {
-                mainContent(vm)
-            } else {
-                ProgressView("Loading...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .onAppear { initViewModel() }
-        .onChange(of: appState.isDBAvailable) { initViewModel() }
-    }
-
-    // MARK: - Init ViewModel
-
-    private func initViewModel() {
-        guard vm == nil,
-              let db = appState.databaseManager,
-              let cli = ProcessCLIRunner.makeDefault() else { return }
-        let newVM = DayPlanViewModel(databasePool: db.dbPool, cliRunner: cli)
-        vm = newVM
-        Task { await newVM.loadFor(date: todayString()) }
+        mainContent(vm)
+            .task { await vm.loadFor(date: todayString()) }
     }
 
     // MARK: - Main Content

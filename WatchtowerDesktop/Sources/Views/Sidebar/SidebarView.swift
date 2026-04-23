@@ -131,33 +131,41 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func badgeCount(for item: SidebarDestination) -> some View {
-        let count: Int = {
-            switch item {
-            case .briefings: return unreadBriefingCount
-            case .inbox: return inboxPendingCount
-            case .tasks: return overdueTaskCount > 0 ? overdueTaskCount : activeTaskCount
-            case .tracks: return updatedTrackCount
-            case .digests: return unreadDigestCount
-            case .statistics: return recommendationCount
-            default: return 0
+        if item == .dayPlan {
+            if appState.dayPlanViewModel?.hasConflicts == true {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 6, height: 6)
             }
-        }()
-        if count > 0 {
-            Text("\(count)")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(
-                    item == .tracks ? .orange
-                        : item == .inbox && inboxHighPriorityCount > 0 ? .red
-                        : item == .inbox ? .blue
-                        : item == .tasks && overdueTaskCount > 0 ? .red
-                        : item == .tasks ? .blue
-                        : .red,
-                    in: Capsule()
-                )
+        } else {
+            let count: Int = {
+                switch item {
+                case .briefings: return unreadBriefingCount
+                case .inbox: return inboxPendingCount
+                case .tasks: return overdueTaskCount > 0 ? overdueTaskCount : activeTaskCount
+                case .tracks: return updatedTrackCount
+                case .digests: return unreadDigestCount
+                case .statistics: return recommendationCount
+                default: return 0
+                }
+            }()
+            if count > 0 {
+                Text("\(count)")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(
+                        item == .tracks ? .orange
+                            : item == .inbox && inboxHighPriorityCount > 0 ? .red
+                            : item == .inbox ? .blue
+                            : item == .tasks && overdueTaskCount > 0 ? .red
+                            : item == .tasks ? .blue
+                            : .red,
+                        in: Capsule()
+                    )
+            }
         }
     }
 
