@@ -101,6 +101,16 @@ func (db *DB) UpdateInboxItemSnippet(id int, messageTS, senderUserID, snippet, c
 	return nil
 }
 
+// GetInboxItem returns a single inbox item by ID (int64 variant).
+func (db *DB) GetInboxItem(id int64) (InboxItem, error) {
+	row := db.QueryRow(`SELECT `+inboxItemColumns+` FROM inbox_items WHERE id=?`, id)
+	it, err := scanInboxItem(row)
+	if err != nil {
+		return InboxItem{}, fmt.Errorf("getting inbox item %d: %w", id, err)
+	}
+	return *it, nil
+}
+
 // GetInboxItemByID returns a single inbox item by ID.
 func (db *DB) GetInboxItemByID(id int) (*InboxItem, error) {
 	row := db.QueryRow(`SELECT `+inboxSelectCols+` FROM inbox_items WHERE id = ?`, id)
