@@ -25,6 +25,8 @@ var Defaults = map[string]string{
 	TasksUpdate:        defaultTasksUpdate,
 	MeetingPrep:        defaultMeetingPrep,
 	DayPlanGenerate:    defaultDayPlanGenerate,
+	TargetsExtract:     defaultTargetsExtract,
+	TargetsLink:        defaultTargetsLink,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -48,6 +50,8 @@ var AllIDs = []string{
 	TasksUpdate,
 	MeetingPrep,
 	DayPlanGenerate,
+	TargetsExtract,
+	TargetsLink,
 }
 
 // DefaultVersions tracks the current version of each built-in prompt template.
@@ -74,6 +78,8 @@ var DefaultVersions = map[string]int{
 	TasksUpdate:        1, // v1: AI task update from user instruction
 	MeetingPrep:        3, // v3: Jira context for attendees (workload, shared issues)
 	DayPlanGenerate:    1, // v1: initial day plan template
+	TargetsExtract:     1, // v1: multi-target extraction with URL enrichments and active snapshot
+	TargetsLink:        1, // v1: single-target link proposal against active snapshot
 }
 
 // DefaultFor returns the hard-coded default template for a given key.
@@ -101,6 +107,8 @@ var Descriptions = map[string]string{
 	TasksUpdate:        "Task update — AI-powered task modification from user instruction",
 	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
 	DayPlanGenerate:    "Day plan generation — AI-powered daily schedule with timeblocks, backlog, and calendar conflict avoidance",
+	TargetsExtract:     "Target extraction — multi-target AI extraction from raw text with URL enrichments and hierarchy linking",
+	TargetsLink:        "Target linking — single-target parent and secondary link proposal against active snapshot",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -580,10 +588,10 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 
 {
   "attention": [
-    {"text": "What needs attention and why", "source_type": "track|digest|people|inbox", "source_id": "123", "priority": "high|medium", "reason": "Why this matters now"}
+    {"text": "What needs attention and why", "source_type": "track|digest|people|inbox|target", "source_id": "123", "priority": "high|medium", "reason": "Why this matters now"}
   ],
   "your_day": [
-    {"text": "Suggested action based on track", "track_id": 123, "priority": "high|medium|low", "status": "active"}
+    {"text": "Suggested action based on track or target", "track_id": 123, "target_id": 0, "priority": "high|medium|low", "status": "active"}
   ],
   "what_happened": [
     {"text": "Notable event or decision", "digest_id": 456, "channel_name": "#channel", "item_type": "decision|summary|topic", "importance": "high|medium|low"}
@@ -597,18 +605,19 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 }
 
 Rules:
-- attention: max 5 items. Flag overdue/blocked tasks. PRIORITIZE tracks with high priority or recent updates.
-  - Include source_type and source_id for traceability. Use source_type='task' for task-sourced items, 'inbox' for inbox items.
-  - Use suggest_task=true on tracks where the user should create a task.
-- your_day: Prioritize user's actual tasks (task_id) over track suggestions. Include overdue tasks first. Order by priority.
-  - If no active tasks or tracks exist, leave this array empty — do NOT invent items.
+- attention: max 5 items. Flag overdue/blocked targets. PRIORITIZE tracks with high priority or recent updates.
+  - Include source_type and source_id for traceability. Use source_type='target' for target-sourced items, 'inbox' for inbox items.
+  - Use suggest_target=true on tracks where the user should create a target.
+- your_day: Prioritize user's actual targets (target_id) over track suggestions. Include overdue targets first. Order by priority.
+  - Targets have a level (quarter/month/week/day/custom) — prefer day-level targets for scheduling today's work.
+  - If no active targets or tracks exist, leave this array empty — do NOT invent items.
 - what_happened: max 7 items from channel digests. Include digest_id, channel_name. Focus on decisions and blockers.
 - team_pulse: signals from people cards. Include user_id. Flag volume changes, red flags, conflicts.
 - coaching: max 3 items. Grounded in observed patterns — not generic advice. Include related_user_id when applicable.
-  - When suggesting actions, consider existing tasks. Use suggest_task=true on tracks where user should create a task.
+  - When suggesting actions, consider existing targets. Use suggest_target=true on tracks where user should create a target.
 - CALENDAR INTEGRATION: When calendar events are present, cross-reference attendees with tracks, inbox, and people data.
   - In "attention": flag meetings in the next 2 hours with unresolved items involving attendees.
-  - In "your_day": interleave meetings with tasks/tracks, ordered chronologically. Add prep suggestions before important meetings.
+  - In "your_day": interleave meetings with targets/tracks, ordered chronologically. Add prep suggestions before important meetings.
   - In "coaching": suggest conversation points based on people cards of attendees.
   - If a meeting attendee has a people card with red_flags, mention it in team_pulse.
   - Do NOT list meetings as standalone items — always cross-reference with work data.
@@ -624,7 +633,7 @@ Rules:
 - %s
 - Return valid JSON only
 
-=== YOUR TASKS ===
+=== YOUR TARGETS ===
 %s
 
 === INBOX (awaiting your response) ===
@@ -1003,3 +1012,78 @@ Rules:
 
 === USER NOTES ===
 %s`
+
+const defaultTargetsExtract = `You are a goal-extraction assistant. Given raw text (a Slack message, email paste, or form input), extract actionable targets (goals, tasks, deliverables) and return them as structured JSON.
+
+=== RAW TEXT ===
+%s
+=== /RAW TEXT ===
+
+%s
+
+%s
+
+=== CURRENT DATE ===
+%s
+=== /CURRENT DATE ===
+
+%s
+
+Return ONLY a JSON object (no markdown fences, no explanation) matching this exact schema:
+
+{
+  "extracted": [
+    {
+      "text": "string (required, <=280 chars)",
+      "intent": "string (optional — why this target matters)",
+      "level": "quarter|month|week|day|custom",
+      "custom_label": "string (required iff level=custom, empty otherwise)",
+      "level_confidence": 0.85,
+      "period_start": "YYYY-MM-DD",
+      "period_end": "YYYY-MM-DD",
+      "priority": "high|medium|low",
+      "due_date": "YYYY-MM-DDTHH:MM or empty string",
+      "parent_id": 123,
+      "secondary_links": [
+        {"target_id": 7, "relation": "contributes_to", "confidence": 0.72},
+        {"external_ref": "jira:PROJ-123", "relation": "contributes_to"}
+      ]
+    }
+  ],
+  "omitted_count": 0,
+  "notes": "optional message shown to user in preview"
+}
+
+Rules:
+- Extract up to 10 targets. If there are more, set omitted_count to the number not extracted and explain briefly in notes.
+- level guidance: timeframe >1 month → quarter; 1-4 weeks → month or week; within this week → week; today-only → day; unclear → custom (set custom_label).
+- period_start and period_end must be YYYY-MM-DD. period_end >= period_start always.
+- parent_id must be an id from the ACTIVE TARGETS snapshot, or null. Do not invent ids.
+- secondary_links: max 3 per target. Relation must be one of: contributes_to, blocks, related, duplicates.
+  Use target_id (from snapshot) OR external_ref (e.g. "jira:PROJ-123", "slack:C123:1714567890.123456"), never both.
+- If a URL in the enrichments block is referenced by an extracted target, include it as a secondary link with external_ref.
+- text must be <=280 chars. intent is optional but helpful.
+- Return empty extracted array if no actionable targets found.`
+
+const defaultTargetsLink = `You are a goal-linking assistant. Given an existing target and a snapshot of active targets, propose a parent_id and up to 3 secondary links.
+
+=== TARGET ===
+[id=%d level=%s period=%s..%s priority=%s status=%s] %s
+%s
+=== /TARGET ===
+
+%s
+
+Return ONLY a JSON object (no markdown fences):
+{
+  "parent_id": 123,
+  "secondary_links": [
+    {"target_id": 7, "relation": "contributes_to", "confidence": 0.8},
+    {"external_ref": "jira:PROJ-1", "relation": "related"}
+  ]
+}
+
+Rules:
+- parent_id must be an id from the ACTIVE TARGETS snapshot, or null.
+- secondary_links: max 3, relation must be contributes_to|blocks|related|duplicates.
+- Only propose links that make semantic sense. Return null parent_id and empty secondary_links if nothing fits.`
