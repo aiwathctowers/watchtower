@@ -275,18 +275,18 @@ func TestAttentionItem(t *testing.T) {
 	assert.Equal(t, "high", result.Attention[0].Priority)
 }
 
-func TestGatherTasks_NoTasks(t *testing.T) {
+func TestGatherTargets_NoTargets(t *testing.T) {
 	database := testDB(t)
 	pipe := New(database, testConfig(), &mockGenerator{}, log.New(io.Discard, "", 0))
 
-	ctx, hasReal := pipe.gatherTasks()
+	ctx, hasReal := pipe.gatherTargets()
 	assert.False(t, hasReal)
-	assert.Contains(t, ctx, "No active tasks")
+	assert.Contains(t, ctx, "No active targets")
 }
 
-func TestGatherTasks_WithTasks(t *testing.T) {
+func TestGatherTargets_WithTargets(t *testing.T) {
 	database := testDB(t)
-	_, err := database.CreateTask(db.Task{
+	_, err := database.CreateTarget(db.Target{
 		Text:       "Review PR #42",
 		Intent:     "Check API changes",
 		Status:     "todo",
@@ -297,7 +297,7 @@ func TestGatherTasks_WithTasks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = database.CreateTask(db.Task{
+	_, err = database.CreateTarget(db.Target{
 		Text:       "Deploy v2",
 		Status:     "in_progress",
 		Priority:   "medium",
@@ -307,9 +307,9 @@ func TestGatherTasks_WithTasks(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Done task should not appear
-	_, err = database.CreateTask(db.Task{
-		Text:       "Old task",
+	// Done target should not appear
+	_, err = database.CreateTarget(db.Target{
+		Text:       "Old target",
 		Status:     "done",
 		Priority:   "low",
 		Ownership:  "mine",
@@ -319,25 +319,25 @@ func TestGatherTasks_WithTasks(t *testing.T) {
 
 	pipe := New(database, testConfig(), &mockGenerator{}, log.New(io.Discard, "", 0))
 
-	ctx, hasReal := pipe.gatherTasks()
+	ctx, hasReal := pipe.gatherTargets()
 	assert.True(t, hasReal)
 	assert.Contains(t, ctx, "Review PR #42")
 	assert.Contains(t, ctx, "OVERDUE")
 	assert.Contains(t, ctx, "Check API changes")
 	assert.Contains(t, ctx, "Deploy v2")
 	assert.Contains(t, ctx, "Blocking: release pipeline")
-	assert.NotContains(t, ctx, "Old task")
+	assert.NotContains(t, ctx, "Old target")
 }
 
-func TestBriefingHasDataWithTasksOnly(t *testing.T) {
+func TestBriefingHasDataWithTargetsOnly(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T1", Name: "test", Domain: "test"}))
 	require.NoError(t, database.SetCurrentUserID("U001"))
 	require.NoError(t, database.UpsertUser(db.User{ID: "U001", Name: "alice"}))
 
-	// Create a task but no digests/tracks
-	_, err := database.CreateTask(db.Task{
-		Text:       "Urgent task",
+	// Create a target but no digests/tracks
+	_, err := database.CreateTarget(db.Target{
+		Text:       "Urgent target",
 		Status:     "todo",
 		Priority:   "high",
 		Ownership:  "mine",
@@ -347,8 +347,8 @@ func TestBriefingHasDataWithTasksOnly(t *testing.T) {
 
 	gen := &mockGenerator{
 		response: `{
-			"attention": [{"text": "Do urgent task", "source_type": "task", "source_id": "1", "priority": "high", "reason": "overdue"}],
-			"your_day": [{"text": "Urgent task", "task_id": 1, "priority": "high", "status": "todo", "ownership": "mine"}],
+			"attention": [{"text": "Do urgent target", "source_type": "target", "source_id": "1", "priority": "high", "reason": "overdue"}],
+			"your_day": [{"text": "Urgent target", "target_id": 1, "priority": "high", "status": "todo", "ownership": "mine"}],
 			"what_happened": [],
 			"team_pulse": [],
 			"coaching": []
@@ -361,12 +361,12 @@ func TestBriefingHasDataWithTasksOnly(t *testing.T) {
 	today := time.Now().Format("2006-01-02")
 	id, err := pipe.RunForDate(context.Background(), today)
 	require.NoError(t, err)
-	assert.Greater(t, id, 0) // Should generate — tasks count as data
+	assert.Greater(t, id, 0) // Should generate — targets count as data
 }
 
-func TestAttentionItemSuggestTask(t *testing.T) {
+func TestAttentionItemSuggestTarget(t *testing.T) {
 	input := `{
-		"attention": [{"text": "track needs task", "source_type": "track", "source_id": "1", "priority": "high", "reason": "no task", "suggest_task": true}],
+		"attention": [{"text": "track needs target", "source_type": "track", "source_id": "1", "priority": "high", "reason": "no target", "suggest_target": true}],
 		"your_day": [],
 		"what_happened": [],
 		"team_pulse": [],
@@ -375,13 +375,13 @@ func TestAttentionItemSuggestTask(t *testing.T) {
 	result, err := parseBriefingResult(input)
 	require.NoError(t, err)
 	require.Len(t, result.Attention, 1)
-	assert.True(t, result.Attention[0].SuggestTask)
+	assert.True(t, result.Attention[0].SuggestTarget)
 }
 
-func TestYourDayItemTaskID(t *testing.T) {
+func TestYourDayItemTargetID(t *testing.T) {
 	input := `{
 		"attention": [],
-		"your_day": [{"text": "Do the task", "task_id": 42, "priority": "high", "status": "todo", "ownership": "mine"}],
+		"your_day": [{"text": "Do the target", "target_id": 42, "priority": "high", "status": "todo", "ownership": "mine"}],
 		"what_happened": [],
 		"team_pulse": [],
 		"coaching": []
@@ -389,5 +389,5 @@ func TestYourDayItemTaskID(t *testing.T) {
 	result, err := parseBriefingResult(input)
 	require.NoError(t, err)
 	require.Len(t, result.YourDay, 1)
-	assert.Equal(t, 42, result.YourDay[0].TaskID)
+	assert.Equal(t, 42, result.YourDay[0].TargetID)
 }
