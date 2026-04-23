@@ -168,19 +168,6 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 	return p.db.GetDayPlanByID(planID)
 }
 
-// ── stubs for T11 ────────────────────────────────────────────────────────────
-
-// DetectConflicts scans the plan items for overlapping timeblocks or items
-// clashing with calendar events and updates the plan's has_conflicts field.
-// Full implementation in T11.
-//
-// TODO(T11): implement — find overlaps, build conflict_summary, call
-// db.SetHasConflicts.
-func (p *Pipeline) DetectConflicts(_ context.Context, _ string, _ string) error {
-	// Stub: no-op.
-	return nil
-}
-
 // ── internal helpers ───────────────────────────────────────────────────────────
 
 // normalizePriority ensures a priority string is one of the known values.
