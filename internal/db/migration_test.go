@@ -90,7 +90,7 @@ func TestMigrationFromV20_CreatesChains(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// Verify chains/chain_refs tables are DROPPED by v43
 	var n string
@@ -133,7 +133,7 @@ func TestMigrationFromV21_ChainsAndInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// After v43: chains/chain_refs dropped, user_interactions should exist
 	var n string
@@ -166,7 +166,7 @@ func TestMigrationFromV22_UserInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// Insert and query to verify table structure
 	err = db2.UpsertUserInteractions([]UserInteraction{
@@ -205,7 +205,7 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// v45 creates new tracks table — should be usable
 	_, err = db2.UpsertTrack(Track{Text: "new track", Priority: "high"})
@@ -236,7 +236,7 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// After v43: chains table should not exist
 	var n string
@@ -269,7 +269,7 @@ func TestMigrationIdempotent_V23HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// Data should survive
 	interactions, err := db2.GetUserInteractions("U1", 1000, 2000)
@@ -284,7 +284,95 @@ func TestUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
+}
+
+// TestMigrationV65_DayPlans verifies that migration v65 creates day_plans and
+// day_plan_items tables with the expected columns, constraints, and indexes.
+func TestMigrationV65_DayPlans(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "watchtower.db")
+
+	// Open a fresh DB (runs bootstrap to v65), then downgrade to v64, drop the
+	// new tables, and reopen so that the incremental v65 migration runs.
+	db1, err := Open(dbPath)
+	require.NoError(t, err)
+
+	_, err = db1.Exec("DROP TABLE IF EXISTS day_plan_items")
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP TABLE IF EXISTS day_plans")
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP INDEX IF EXISTS idx_day_plans_date")
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP INDEX IF EXISTS idx_day_plans_user_date")
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP INDEX IF EXISTS idx_day_plan_items_plan")
+	require.NoError(t, err)
+	_, err = db1.Exec("DROP INDEX IF EXISTS idx_day_plan_items_source")
+	require.NoError(t, err)
+
+	setUserVersion(t, db1, 64)
+	db1.Close()
+
+	// Reopen — migration v65 should run.
+	db2, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	// 1. user_version must be >= 65.
+	v, err := db2.UserVersion()
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, v, 65, "expected user_version >= 65 after migration")
+
+	// 2. day_plans must have all expected columns.
+	wantPlanCols := []string{
+		"id", "user_id", "plan_date", "status", "has_conflicts",
+		"conflict_summary", "generated_at", "last_regenerated_at",
+		"regenerate_count", "feedback_history", "prompt_version",
+		"briefing_id", "read_at", "created_at", "updated_at",
+	}
+	for _, col := range wantPlanCols {
+		assert.True(t, hasColumn(db2.DB, "day_plans", col),
+			"day_plans should have column %q", col)
+	}
+
+	// 3. day_plan_items must have all expected columns.
+	wantItemCols := []string{
+		"id", "day_plan_id", "kind", "source_type", "source_id",
+		"title", "description", "rationale", "start_time", "end_time",
+		"duration_min", "priority", "status", "order_index", "tags",
+		"created_at", "updated_at",
+	}
+	for _, col := range wantItemCols {
+		assert.True(t, hasColumn(db2.DB, "day_plan_items", col),
+			"day_plan_items should have column %q", col)
+	}
+
+	// 4. UNIQUE(user_id, plan_date) prevents duplicate inserts.
+	_, err = db2.Exec(`INSERT INTO day_plans (user_id, plan_date, generated_at) VALUES ('U1', '2026-04-23', '2026-04-23T08:00:00Z')`)
+	require.NoError(t, err)
+	_, err = db2.Exec(`INSERT INTO day_plans (user_id, plan_date, generated_at) VALUES ('U1', '2026-04-23', '2026-04-23T09:00:00Z')`)
+	assert.Error(t, err, "inserting a duplicate (user_id, plan_date) should fail")
+
+	// 5. Cascade delete: removing a day_plans row removes its day_plan_items.
+	var planID int64
+	err = db2.QueryRow(`SELECT id FROM day_plans WHERE user_id='U1' AND plan_date='2026-04-23'`).Scan(&planID)
+	require.NoError(t, err)
+
+	_, err = db2.Exec(`INSERT INTO day_plan_items (day_plan_id, kind, source_type, title) VALUES (?, 'timeblock', 'task', 'Write tests')`, planID)
+	require.NoError(t, err)
+
+	var itemCount int
+	err = db2.QueryRow(`SELECT COUNT(*) FROM day_plan_items WHERE day_plan_id=?`, planID).Scan(&itemCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, itemCount)
+
+	_, err = db2.Exec(`DELETE FROM day_plans WHERE id=?`, planID)
+	require.NoError(t, err)
+
+	err = db2.QueryRow(`SELECT COUNT(*) FROM day_plan_items WHERE day_plan_id=?`, planID).Scan(&itemCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, itemCount, "day_plan_items should be cascade-deleted when parent day_plans row is deleted")
 }
 
 // TestUserVersion_CustomValue verifies UserVersion after manual set.
@@ -532,7 +620,7 @@ PRAGMA user_version = 1;
 	// Verify schema version is now 23
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 64, v)
+	assert.Equal(t, 65, v)
 
 	// Verify data survived all migrations
 	var wsName string

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 64"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 65"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2961,6 +2961,81 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v64: %w", err)
 		}
 		version = 64
+	}
+
+	if version < 65 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v65: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS day_plans (
+			id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id              TEXT NOT NULL,
+			plan_date            TEXT NOT NULL,
+			status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+			has_conflicts        INTEGER NOT NULL DEFAULT 0,
+			conflict_summary     TEXT,
+			generated_at         TEXT NOT NULL,
+			last_regenerated_at  TEXT,
+			regenerate_count     INTEGER NOT NULL DEFAULT 0,
+			feedback_history     TEXT,
+			prompt_version       TEXT,
+			briefing_id          INTEGER,
+			read_at              TEXT,
+			created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			UNIQUE (user_id, plan_date),
+			FOREIGN KEY (briefing_id) REFERENCES briefings(id) ON DELETE SET NULL
+		)`); err != nil {
+			return fmt.Errorf("migration v65 create day_plans: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_day_plans_date ON day_plans(plan_date DESC)`); err != nil {
+			return fmt.Errorf("migration v65 create idx_day_plans_date: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_day_plans_user_date ON day_plans(user_id, plan_date DESC)`); err != nil {
+			return fmt.Errorf("migration v65 create idx_day_plans_user_date: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS day_plan_items (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			day_plan_id  INTEGER NOT NULL,
+			kind         TEXT NOT NULL CHECK (kind IN ('timeblock','backlog')),
+			source_type  TEXT NOT NULL CHECK (source_type IN ('task','briefing_attention','jira','calendar','manual','focus')),
+			source_id    TEXT,
+			title        TEXT NOT NULL,
+			description  TEXT,
+			rationale    TEXT,
+			start_time   TEXT,
+			end_time     TEXT,
+			duration_min INTEGER,
+			priority     TEXT CHECK (priority IS NULL OR priority IN ('high','medium','low')),
+			status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','skipped')),
+			order_index  INTEGER NOT NULL DEFAULT 0,
+			tags         TEXT,
+			created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			FOREIGN KEY (day_plan_id) REFERENCES day_plans(id) ON DELETE CASCADE
+		)`); err != nil {
+			return fmt.Errorf("migration v65 create day_plan_items: %w", err)
+		}
+
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_day_plan_items_plan ON day_plan_items(day_plan_id)`); err != nil {
+			return fmt.Errorf("migration v65 create idx_day_plan_items_plan: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_day_plan_items_source ON day_plan_items(source_type, source_id)`); err != nil {
+			return fmt.Errorf("migration v65 create idx_day_plan_items_source: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 65"); err != nil {
+			return fmt.Errorf("setting schema version v65: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v65: %w", err)
+		}
+		version = 65
 	}
 
 	_ = version // silence unused variable if this is the last migration
