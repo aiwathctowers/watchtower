@@ -161,6 +161,12 @@ func runCalendarLogin(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("saving token: %w", err)
 	}
 
+	// Clear any previously recorded auth failure so the Desktop popup dismisses.
+	if database, dbErr := db.Open(cfg.DBPath()); dbErr == nil {
+		_ = database.SetCalendarAuthState("ok", "")
+		database.Close()
+	}
+
 	fmt.Fprintf(out, "\nGoogle Calendar connected!\n")
 	fmt.Fprintf(out, "Token saved to: %s\n", store.Path())
 	fmt.Fprintf(out, "Run 'watchtower calendar sync' to fetch events.\n")
@@ -194,6 +200,9 @@ func runCalendarLogout(cmd *cobra.Command, _ []string) error {
 	if err := database.ClearCalendarEvents(); err != nil {
 		return fmt.Errorf("clearing events: %w", err)
 	}
+
+	// Clear auth state — user intentionally disconnected, not a token failure.
+	_ = database.SetCalendarAuthState("ok", "")
 
 	fmt.Fprintln(cmd.OutOrStdout(), "Google Calendar disconnected. Token and events removed.")
 	return nil

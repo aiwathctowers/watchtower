@@ -1,6 +1,8 @@
 package db
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -283,6 +285,41 @@ func (db *DB) DeleteMeetingPrepCache(eventID string) error {
 	_, err := db.Exec(`DELETE FROM meeting_prep_cache WHERE event_id = ?`, eventID)
 	if err != nil {
 		return fmt.Errorf("deleting meeting prep cache for %s: %w", eventID, err)
+	}
+	return nil
+}
+
+// CalendarAuthState reflects whether the Google refresh token is still valid.
+type CalendarAuthState struct {
+	Status    string // "ok" | "revoked" | "error"
+	Error     string
+	UpdatedAt string
+}
+
+// GetCalendarAuthState returns the current calendar auth state.
+// If the row is missing, a zero-value state with Status="ok" is returned.
+func (db *DB) GetCalendarAuthState() (CalendarAuthState, error) {
+	var s CalendarAuthState
+	err := db.QueryRow(`SELECT status, error, updated_at FROM calendar_auth_state WHERE id = 1`).
+		Scan(&s.Status, &s.Error, &s.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CalendarAuthState{Status: "ok"}, nil
+		}
+		return CalendarAuthState{}, fmt.Errorf("reading calendar_auth_state: %w", err)
+	}
+	return s, nil
+}
+
+// SetCalendarAuthState upserts the auth state. status is one of "ok", "revoked", "error".
+func (db *DB) SetCalendarAuthState(status, errMsg string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(`INSERT INTO calendar_auth_state (id, status, error, updated_at)
+		VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET status = excluded.status, error = excluded.error, updated_at = excluded.updated_at`,
+		status, errMsg, now)
+	if err != nil {
+		return fmt.Errorf("upserting calendar_auth_state: %w", err)
 	}
 	return nil
 }

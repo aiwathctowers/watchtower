@@ -121,6 +121,16 @@ struct SplashView: View {
 struct MainNavigationView: View {
     @Environment(AppState.self) private var appState
     @State private var showMenu = true
+    @State private var googleAuth = GoogleAuthService()
+    @State private var dismissedAuthTimestamp: String = UserDefaults.standard.string(forKey: "dismissedCalendarAuthAt") ?? ""
+
+    /// Show the reconnect popup when the daemon has flagged the calendar auth as broken
+    /// AND the user hasn't already dismissed this specific revocation.
+    private var shouldShowReconnectAlert: Bool {
+        guard let auth = appState.calendarViewModel?.authState else { return false }
+        guard auth.status == "revoked" else { return false }
+        return auth.updatedAt != dismissedAuthTimestamp
+    }
 
     private var sidebarToggleRow: some View {
         HStack(spacing: 8) {
@@ -177,6 +187,44 @@ struct MainNavigationView: View {
             StatusBarView()
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .alert(
+            "Google Calendar disconnected",
+            isPresented: Binding(
+                get: { shouldShowReconnectAlert },
+                set: { newValue in
+                    if !newValue, let auth = appState.calendarViewModel?.authState {
+                        dismissedAuthTimestamp = auth.updatedAt
+                        UserDefaults.standard.set(auth.updatedAt, forKey: "dismissedCalendarAuthAt")
+                    }
+                }
+            )
+        ) {
+            Button("Reconnect") {
+                appState.selectedDestination = .calendar
+                reconnectAndRestartDaemon()
+            }
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("Your Google authorization expired or was revoked. Reconnect to resume calendar sync.")
+        }
+    }
+
+    /// Runs the OAuth flow and, on success, restarts the daemon so the in-memory
+    /// refresh token is replaced with the freshly saved one.
+    private func reconnectAndRestartDaemon() {
+        googleAuth.connect()
+        Task {
+            while googleAuth.isAuthenticating {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard googleAuth.isConnected else { return }
+            let daemon = DaemonManager()
+            daemon.resolvePathIfNeeded()
+            guard DaemonManager.checkDaemonRunning() else { return }
+            await daemon.stopDaemon()
+            try? await Task.sleep(for: .milliseconds(500))
+            await daemon.startDaemon()
+        }
     }
 
     @ViewBuilder

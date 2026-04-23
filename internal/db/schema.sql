@@ -824,6 +824,15 @@ CREATE TABLE IF NOT EXISTS meeting_notes (
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_notes_event ON meeting_notes(event_id);
 
+-- Calendar auth state (tracks whether the Google refresh token is still valid)
+CREATE TABLE IF NOT EXISTS calendar_auth_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    status TEXT NOT NULL DEFAULT 'ok',
+    error TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+INSERT OR IGNORE INTO calendar_auth_state (id, status, error) VALUES (1, 'ok', '');
+
 -- Jira releases (fix versions)
 CREATE TABLE IF NOT EXISTS jira_releases (
     id INTEGER NOT NULL,

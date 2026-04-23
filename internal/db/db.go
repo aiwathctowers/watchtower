@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 64"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 65"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2961,6 +2961,34 @@ func (db *DB) migrate() error {
 			return fmt.Errorf("committing migration v64: %w", err)
 		}
 		version = 64
+	}
+
+	if version < 65 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v65: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS calendar_auth_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			status TEXT NOT NULL DEFAULT 'ok',
+			error TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v65 create calendar_auth_state: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO calendar_auth_state (id, status, error) VALUES (1, 'ok', '')`); err != nil {
+			return fmt.Errorf("migration v65 seed calendar_auth_state: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 65"); err != nil {
+			return fmt.Errorf("setting schema version v65: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v65: %w", err)
+		}
+		version = 65
 	}
 
 	_ = version // silence unused variable if this is the last migration

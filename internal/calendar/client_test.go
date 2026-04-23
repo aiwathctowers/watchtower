@@ -128,3 +128,21 @@ func TestGoogleCalendarListParsing(t *testing.T) {
 	assert.Equal(t, "work@example.com", result.Items[1].ID)
 	assert.False(t, result.Items[1].Primary)
 }
+
+func TestIsInvalidGrant(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"google revoked response", `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`, true},
+		{"other oauth error", `{"error":"invalid_client"}`, false},
+		{"plain text fallback", `invalid_grant encountered`, true},
+		{"empty body", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isInvalidGrant([]byte(tc.body)))
+		})
+	}
+}

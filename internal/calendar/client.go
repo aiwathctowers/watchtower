@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,10 @@ import (
 const (
 	calendarAPIBase = "https://www.googleapis.com/calendar/v3"
 )
+
+// ErrAuthRevoked is returned when Google reports the refresh token is expired
+// or revoked (invalid_grant). It signals that the user must re-authenticate.
+var ErrAuthRevoked = errors.New("google calendar auth revoked")
 
 // Client wraps Google Calendar API calls using raw net/http.
 // Client is not safe for concurrent use.
@@ -36,6 +41,18 @@ func NewClient(ctx context.Context, refreshToken string, cfg GoogleOAuthConfig) 
 		return nil, fmt.Errorf("obtaining access token: %w", err)
 	}
 	return c, nil
+}
+
+// isInvalidGrant detects the "invalid_grant" error in Google's token endpoint response body,
+// which indicates the refresh token is expired or revoked.
+func isInvalidGrant(body []byte) bool {
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &resp); err == nil && resp.Error == "invalid_grant" {
+		return true
+	}
+	return strings.Contains(string(body), "invalid_grant")
 }
 
 // refreshAccessToken exchanges the refresh token for a new access token.
@@ -61,6 +78,9 @@ func (c *Client) refreshAccessToken(ctx context.Context) error {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		if isInvalidGrant(body) {
+			return fmt.Errorf("%w: %s", ErrAuthRevoked, body)
+		}
 		return fmt.Errorf("token refresh failed (%d): %s", resp.StatusCode, body)
 	}
 

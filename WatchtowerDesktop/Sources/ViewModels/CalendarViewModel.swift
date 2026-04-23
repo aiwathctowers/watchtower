@@ -14,6 +14,10 @@ final class CalendarViewModel {
     var nextEvent: CalendarEvent?
     var isConnected: Bool = false
 
+    /// Non-nil when the daemon has detected that the Google refresh token is revoked or failing.
+    /// The Desktop shows a reconnect popup while this is present.
+    var authState: CalendarQueries.AuthState?
+
     private let dbPool: DatabasePool
     private var observationTask: Task<Void, Never>?
 
@@ -47,7 +51,7 @@ final class CalendarViewModel {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
 
-        let result = try? dbPool.read { db -> ([DayEvents], CalendarEvent?) in
+        let result = try? dbPool.read { db -> ([DayEvents], CalendarEvent?, CalendarQueries.AuthState?) in
             var days: [DayEvents] = []
             for offset in 0..<self.daysAhead {
                 let dayStart = today.addingTimeInterval(Double(offset) * 86400)
@@ -59,11 +63,19 @@ final class CalendarViewModel {
                 }
             }
             let next = try CalendarQueries.fetchNextEvent(db)
-            return (days, next)
+            let auth = (try? CalendarQueries.fetchAuthState(db)) ?? nil
+            return (days, next, auth)
         }
 
         dailyEvents = result?.0 ?? []
         nextEvent = result?.1
+
+        let auth = result?.2
+        if let auth, auth.status == "revoked" || auth.status == "error" {
+            authState = auth
+        } else {
+            authState = nil
+        }
 
         let hasEvents = (try? dbPool.read { db in
             try CalendarQueries.eventCount(db) > 0
