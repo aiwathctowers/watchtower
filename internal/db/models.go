@@ -518,6 +518,10 @@ type InboxItem struct {
 	ReadAt         string
 	CreatedAt      string
 	UpdatedAt      string
+	ItemClass      string // "actionable" or "ambient"
+	Pinned         bool
+	ArchivedAt     string // empty if not archived
+	ArchiveReason  string
 }
 
 // InboxCandidate is a potential inbox item found by detection queries.

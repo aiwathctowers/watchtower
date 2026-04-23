@@ -11,20 +11,44 @@ import (
 const inboxSelectCols = `id, channel_id, message_ts, thread_ts, sender_user_id,
 	trigger_type, snippet, context, raw_text, permalink, status, priority,
 	ai_reason, resolved_reason, snooze_until, COALESCE(waiting_user_ids,''), task_id,
-	COALESCE(read_at,''), created_at, updated_at`
+	COALESCE(read_at,''), created_at, updated_at,
+	COALESCE(item_class,'actionable'), COALESCE(pinned,0), COALESCE(archived_at,''), COALESCE(archive_reason,'')`
+
+// inboxItemColumns is an alias for inboxSelectCols used by feed/pinned queries.
+const inboxItemColumns = inboxSelectCols
 
 // scanInboxItem scans an InboxItem from a row with the standard SELECT column list.
 func scanInboxItem(row interface{ Scan(...any) error }) (*InboxItem, error) {
 	var it InboxItem
+	var pinned int
 	if err := row.Scan(
 		&it.ID, &it.ChannelID, &it.MessageTS, &it.ThreadTS, &it.SenderUserID,
 		&it.TriggerType, &it.Snippet, &it.Context, &it.RawText, &it.Permalink, &it.Status, &it.Priority,
 		&it.AIReason, &it.ResolvedReason, &it.SnoozeUntil, &it.WaitingUserIDs, &it.TaskID,
 		&it.ReadAt, &it.CreatedAt, &it.UpdatedAt,
+		&it.ItemClass, &pinned, &it.ArchivedAt, &it.ArchiveReason,
 	); err != nil {
 		return nil, err
 	}
+	it.Pinned = pinned != 0
 	return &it, nil
+}
+
+// scanInboxItems scans all rows into a slice of InboxItem.
+func scanInboxItems(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}) ([]InboxItem, error) {
+	var items []InboxItem
+	for rows.Next() {
+		it, err := scanInboxItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *it)
+	}
+	return items, rows.Err()
 }
 
 // CreateInboxItem inserts a new inbox item and returns its ID.
@@ -605,6 +629,91 @@ func (db *DB) GetThreadContext(channelID, threadTS string, limit int) ([]struct 
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
 	return msgs, rows.Err()
+}
+
+// SetInboxItemClass sets the item_class ('actionable' or 'ambient') for an inbox item.
+func (db *DB) SetInboxItemClass(id int64, class string) error {
+	_, err := db.Exec(`UPDATE inbox_items SET item_class=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`,
+		class, id)
+	return err
+}
+
+// SetInboxPinned pins the given item IDs (pinned=1) and unpins all others in a single transaction.
+func (db *DB) SetInboxPinned(ids []int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`UPDATE inbox_items SET pinned=0 WHERE pinned=1`); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE inbox_items SET pinned=1 WHERE id=?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ClearPinnedAll unpins all inbox items.
+func (db *DB) ClearPinnedAll() error {
+	_, err := db.Exec(`UPDATE inbox_items SET pinned=0 WHERE pinned=1`)
+	return err
+}
+
+// ArchiveExpiredAmbient archives ambient items older than threshold, marking reason='seen_expired'.
+func (db *DB) ArchiveExpiredAmbient(threshold time.Duration) (int, error) {
+	cutoff := time.Now().Add(-threshold).UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := db.Exec(`UPDATE inbox_items SET archived_at=?, archive_reason='seen_expired', updated_at=?
+		WHERE item_class='ambient' AND archived_at IS NULL AND created_at < ?`,
+		now, now, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// ArchiveStaleActionable archives actionable items with status=pending older than threshold, marking reason='stale'.
+func (db *DB) ArchiveStaleActionable(threshold time.Duration) (int, error) {
+	cutoff := time.Now().Add(-threshold).UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := db.Exec(`UPDATE inbox_items SET archived_at=?, archive_reason='stale', updated_at=?
+		WHERE item_class='actionable' AND archived_at IS NULL AND status='pending' AND updated_at < ?`,
+		now, now, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// ListInboxFeed returns non-pinned, non-archived, live items newest first.
+func (db *DB) ListInboxFeed(limit, offset int) ([]InboxItem, error) {
+	rows, err := db.Query(`SELECT `+inboxItemColumns+` FROM inbox_items
+		WHERE pinned=0 AND archived_at IS NULL AND status NOT IN ('resolved','dismissed','snoozed')
+		ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanInboxItems(rows)
+}
+
+// ListInboxPinned returns pinned pending items ordered by priority then newest first.
+func (db *DB) ListInboxPinned() ([]InboxItem, error) {
+	rows, err := db.Query(`SELECT `+inboxItemColumns+` FROM inbox_items
+		WHERE pinned=1 AND status='pending' AND archived_at IS NULL
+		ORDER BY
+			CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END,
+			created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanInboxItems(rows)
 }
 
 // GetChannelContextBefore returns recent messages in a channel before a given timestamp.
