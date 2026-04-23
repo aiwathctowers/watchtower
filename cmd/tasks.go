@@ -35,82 +35,85 @@ var (
 
 var tasksCmd = &cobra.Command{
 	Use:   "tasks",
-	Short: "Show personal action items",
-	Long:  "Displays tasks — personal action items with priorities, due dates, and ownership.",
-	RunE:  runTasks,
+	Short: "Renamed to 'targets'. This command is deprecated.",
+	Long:  "Tasks have been renamed to targets. Use 'watchtower targets' instead.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Note: 'tasks' has been renamed to 'targets'. Please use 'watchtower targets'.")
+		return runTargetsCmd(cmd, args)
+	},
 }
 
 var tasksShowCmd = &cobra.Command{
 	Use:   "show <id>",
-	Short: "Show task details",
+	Short: "Show target details",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksShow,
 }
 
 var tasksCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Create a new task",
+	Short: "Create a new target",
 	RunE:  runTasksCreate,
 }
 
 var tasksDoneCmd = &cobra.Command{
 	Use:   "done <id>",
-	Short: "Mark a task as done",
+	Short: "Mark a target as done",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksDone,
 }
 
 var tasksDismissCmd = &cobra.Command{
 	Use:   "dismiss <id>",
-	Short: "Dismiss a task",
+	Short: "Dismiss a target",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksDismiss,
 }
 
 var tasksSnoozeCmd = &cobra.Command{
 	Use:   "snooze <id> <YYYY-MM-DDTHH:MM>",
-	Short: "Snooze a task until a date+time",
+	Short: "Snooze a target until a date+time",
 	Args:  cobra.ExactArgs(2),
 	RunE:  runTasksSnooze,
 }
 
 var tasksUpdateCmd = &cobra.Command{
 	Use:   "update <id>",
-	Short: "Update a task",
+	Short: "Update a target",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksUpdate,
 }
 
 var tasksGenerateCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate task details with AI (checklist, priority, due date)",
-	Long:  "Uses AI to enrich a task description: breaks it into sub-items, suggests priority and due date. Outputs JSON to stdout.",
+	Short: "Generate target details with AI (checklist, priority, due date)",
+	Long:  "Uses AI to enrich a target description: breaks it into sub-items, suggests priority and due date. Outputs JSON to stdout.",
 	RunE:  runTasksGenerate,
 }
 
 var tasksNoteCmd = &cobra.Command{
 	Use:   "note",
-	Short: "Manage task notes",
+	Short: "Manage target notes",
 }
 
 var tasksNoteAddCmd = &cobra.Command{
 	Use:   "add <id> <text>",
-	Short: "Add a note to a task",
+	Short: "Add a note to a target",
 	Args:  cobra.ExactArgs(2),
 	RunE:  runTasksNoteAdd,
 }
 
 var tasksNoteListCmd = &cobra.Command{
 	Use:   "list <id>",
-	Short: "List notes for a task",
+	Short: "List notes for a target",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksNoteList,
 }
 
 var tasksAIUpdateCmd = &cobra.Command{
 	Use:   "ai-update <id>",
-	Short: "Update a task using AI based on your instruction",
-	Long:  "Reads current task state, sends it with your instruction to AI, and outputs the updated task as JSON to stdout. The caller is responsible for applying the changes.",
+	Short: "Update a target using AI based on your instruction",
+	Long:  "Reads current target state, sends it with your instruction to AI, and outputs the updated target as JSON to stdout. The caller is responsible for applying the changes.",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runTasksAIUpdate,
 }
@@ -125,12 +128,12 @@ func init() {
 	tasksCmd.Flags().StringVar(&tasksFlagStatus, "status", "", "filter by status (todo, in_progress, blocked, done, dismissed, snoozed)")
 	tasksCmd.Flags().StringVar(&tasksFlagPriority, "priority", "", "filter by priority (high, medium, low)")
 	tasksCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "", "filter by ownership (mine, delegated, watching)")
-	tasksCmd.Flags().BoolVar(&tasksFlagAll, "all", false, "include done and dismissed tasks")
+	tasksCmd.Flags().BoolVar(&tasksFlagAll, "all", false, "include done and dismissed targets")
 	tasksCmd.Flags().BoolVar(&tasksFlagJSON, "json", false, "output as JSON")
 	tasksCmd.Flags().StringVar(&tasksFlagSource, "source", "", "filter by source (all, jira, slack, manual, track, digest, inbox)")
 
-	tasksCreateCmd.Flags().StringVar(&tasksFlagText, "text", "", "task text (required)")
-	tasksCreateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "task intent/context")
+	tasksCreateCmd.Flags().StringVar(&tasksFlagText, "text", "", "target text (required)")
+	tasksCreateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "target intent/context")
 	tasksCreateCmd.Flags().StringVar(&tasksFlagPriority, "priority", "medium", "priority (high, medium, low)")
 	tasksCreateCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "mine", "ownership (mine, delegated, watching)")
 	tasksCreateCmd.Flags().StringVar(&tasksFlagDue, "due", "", "due date+time (YYYY-MM-DDTHH:MM)")
@@ -138,17 +141,17 @@ func init() {
 	tasksCreateCmd.Flags().StringVar(&tasksFlagSourceID, "source-id", "", "source entity ID")
 	tasksCreateCmd.Flags().StringVar(&tasksFlagTags, "tags", "", "comma-separated tags")
 
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagText, "text", "", "new task text")
+	tasksUpdateCmd.Flags().StringVar(&tasksFlagText, "text", "", "new target text")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagIntent, "intent", "", "new intent")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagPriority, "priority", "", "new priority")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagStatus, "status", "", "new status")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagOwnership, "ownership", "", "new ownership")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagBallOn, "ball-on", "", "who has the ball")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagDue, "due", "", "new due date+time (YYYY-MM-DDTHH:MM)")
-	tasksUpdateCmd.Flags().StringVar(&tasksFlagBlocking, "blocking", "", "what this task blocks")
+	tasksUpdateCmd.Flags().StringVar(&tasksFlagBlocking, "blocking", "", "what this target blocks")
 	tasksUpdateCmd.Flags().StringVar(&tasksFlagTags, "tags", "", "comma-separated tags")
 
-	tasksGenerateCmd.Flags().StringVar(&tasksFlagText, "text", "", "task description (required)")
+	tasksGenerateCmd.Flags().StringVar(&tasksFlagText, "text", "", "target description (required)")
 	tasksGenerateCmd.Flags().StringVar(&tasksFlagSourceType, "source-type", "", "source type for context (track, digest)")
 	tasksGenerateCmd.Flags().StringVar(&tasksFlagSourceID, "source-id", "", "source entity ID for context")
 
@@ -156,7 +159,8 @@ func init() {
 	_ = tasksAIUpdateCmd.MarkFlagRequired("instruction")
 }
 
-func runTasks(cmd *cobra.Command, _ []string) error {
+// runTargetsCmd is the shared implementation for the tasks→targets redirect.
+func runTargetsCmd(cmd *cobra.Command, _ []string) error {
 	database, err := openDBFromConfig()
 	if err != nil {
 		return err
@@ -170,7 +174,7 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 		sourceFilter = ""
 	}
 
-	f := db.TaskFilter{
+	f := db.TargetFilter{
 		Status:      tasksFlagStatus,
 		Priority:    tasksFlagPriority,
 		Ownership:   tasksFlagOwnership,
@@ -178,9 +182,9 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 		IncludeDone: tasksFlagAll,
 	}
 
-	items, err := database.GetTasks(f)
+	items, err := database.GetTargets(f)
 	if err != nil {
-		return fmt.Errorf("querying tasks: %w", err)
+		return fmt.Errorf("querying targets: %w", err)
 	}
 
 	if tasksFlagJSON {
@@ -192,17 +196,17 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	active, overdue, err := database.GetTaskCounts()
+	active, overdue, err := database.GetTargetCounts()
 	if err != nil {
-		return fmt.Errorf("getting task counts: %w", err)
+		return fmt.Errorf("getting target counts: %w", err)
 	}
 
 	if len(items) == 0 {
-		fmt.Fprintln(out, "No tasks found.")
+		fmt.Fprintln(out, "No targets found.")
 		return nil
 	}
 
-	header := fmt.Sprintf("Tasks (%d active", active)
+	header := fmt.Sprintf("Targets (%d active", active)
 	if overdue > 0 {
 		header += fmt.Sprintf(", %d overdue", overdue)
 	}
@@ -222,7 +226,7 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 
 		line := fmt.Sprintf(" %s  [#%d] %s", pLabel, item.ID, item.Text)
 
-		// Jira badge for tasks sourced from Jira.
+		// Jira badge for targets sourced from Jira.
 		if item.SourceType == "jira" && item.SourceID != "" {
 			issue, err := database.GetJiraIssueByKey(item.SourceID)
 			if err == nil && issue != nil {
@@ -249,7 +253,7 @@ func runTasks(cmd *cobra.Command, _ []string) error {
 func runTasksShow(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	database, err := openDBFromConfig()
@@ -258,46 +262,49 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	task, err := database.GetTaskByID(id)
+	target, err := database.GetTargetByID(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found: %w", id, err)
+		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Task #%d: %s\n", task.ID, task.Text)
-	fmt.Fprintf(out, "Status: %s | Priority: %s\n", task.Status, task.Priority)
+	fmt.Fprintf(out, "Target #%d: %s\n", target.ID, target.Text)
+	fmt.Fprintf(out, "Status: %s | Priority: %s | Level: %s\n", target.Status, target.Priority, target.Level)
 
-	if task.Intent != "" {
-		fmt.Fprintf(out, "Intent: %s\n", task.Intent)
+	if target.Intent != "" {
+		fmt.Fprintf(out, "Intent: %s\n", target.Intent)
 	}
-	if task.BallOn != "" {
-		fmt.Fprintf(out, "Ball on: %s\n", task.BallOn)
+	if target.BallOn != "" {
+		fmt.Fprintf(out, "Ball on: %s\n", target.BallOn)
 	}
-	if task.DueDate != "" {
-		fmt.Fprintf(out, "Due: %s\n", task.DueDate)
+	if target.DueDate != "" {
+		fmt.Fprintf(out, "Due: %s\n", target.DueDate)
 	}
-	if task.SnoozeUntil != "" {
-		fmt.Fprintf(out, "Snoozed until: %s\n", task.SnoozeUntil)
+	if target.SnoozeUntil != "" {
+		fmt.Fprintf(out, "Snoozed until: %s\n", target.SnoozeUntil)
 	}
-	if task.Blocking != "" {
-		fmt.Fprintf(out, "Blocking: %s\n", task.Blocking)
+	if target.Blocking != "" {
+		fmt.Fprintf(out, "Blocking: %s\n", target.Blocking)
+	}
+	if target.PeriodStart != "" {
+		fmt.Fprintf(out, "Period: %s – %s\n", target.PeriodStart, target.PeriodEnd)
 	}
 
 	// Tags
 	var tags []string
-	if json.Unmarshal([]byte(task.Tags), &tags) == nil && len(tags) > 0 {
+	if json.Unmarshal([]byte(target.Tags), &tags) == nil && len(tags) > 0 {
 		fmt.Fprintf(out, "Tags: %s\n", strings.Join(tags, ", "))
 	}
 
 	// Sub-items
-	if task.SubItems != "" && task.SubItems != "[]" {
+	if target.SubItems != "" && target.SubItems != "[]" {
 		type subItem struct {
 			Text    string `json:"text"`
 			Done    bool   `json:"done"`
 			DueDate string `json:"due_date,omitempty"`
 		}
 		var subs []subItem
-		if json.Unmarshal([]byte(task.SubItems), &subs) == nil && len(subs) > 0 {
+		if json.Unmarshal([]byte(target.SubItems), &subs) == nil && len(subs) > 0 {
 			fmt.Fprintf(out, "\nSub-items:\n")
 			for _, s := range subs {
 				check := "[ ]"
@@ -314,9 +321,9 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 	}
 
 	// Notes
-	if task.Notes != "" && task.Notes != "[]" {
-		var notes []db.TaskNote
-		if json.Unmarshal([]byte(task.Notes), &notes) == nil && len(notes) > 0 {
+	if target.Notes != "" && target.Notes != "[]" {
+		var notes []db.TargetNote
+		if json.Unmarshal([]byte(target.Notes), &notes) == nil && len(notes) > 0 {
 			fmt.Fprintf(out, "\nNotes:\n")
 			for _, n := range notes {
 				ts := n.CreatedAt
@@ -328,12 +335,12 @@ func runTasksShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Fprintf(out, "\nSource: %s", task.SourceType)
-	if task.SourceID != "" {
-		fmt.Fprintf(out, " #%s", task.SourceID)
+	fmt.Fprintf(out, "\nSource: %s", target.SourceType)
+	if target.SourceID != "" {
+		fmt.Fprintf(out, " #%s", target.SourceID)
 	}
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "Created: %s | Updated: %s\n", task.CreatedAt, task.UpdatedAt)
+	fmt.Fprintf(out, "Created: %s | Updated: %s\n", target.CreatedAt, target.UpdatedAt)
 
 	return nil
 }
@@ -349,7 +356,7 @@ func runTasksCreate(cmd *cobra.Command, _ []string) error {
 	}
 	defer database.Close()
 
-	task := db.Task{
+	target := db.Target{
 		Text:       tasksFlagText,
 		Intent:     tasksFlagIntent,
 		Status:     "todo",
@@ -366,22 +373,22 @@ func runTasksCreate(cmd *cobra.Command, _ []string) error {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
 		tagsJSON, _ := json.Marshal(parts)
-		task.Tags = string(tagsJSON)
+		target.Tags = string(tagsJSON)
 	}
 
-	id, err := database.CreateTask(task)
+	id, err := database.CreateTarget(target)
 	if err != nil {
-		return fmt.Errorf("creating task: %w", err)
+		return fmt.Errorf("creating target: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Created task #%d\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Created target #%d\n", id)
 	return nil
 }
 
 func runTasksDone(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	database, err := openDBFromConfig()
@@ -390,18 +397,18 @@ func runTasksDone(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	if err := database.UpdateTaskStatus(id, "done"); err != nil {
-		return fmt.Errorf("marking task done: %w", err)
+	if err := database.UpdateTargetStatus(id, "done"); err != nil {
+		return fmt.Errorf("marking target done: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Task #%d marked as done\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d marked as done\n", id)
 	return nil
 }
 
 func runTasksDismiss(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	database, err := openDBFromConfig()
@@ -410,18 +417,18 @@ func runTasksDismiss(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	if err := database.UpdateTaskStatus(id, "dismissed"); err != nil {
-		return fmt.Errorf("dismissing task: %w", err)
+	if err := database.UpdateTargetStatus(id, "dismissed"); err != nil {
+		return fmt.Errorf("dismissing target: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Task #%d dismissed\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d dismissed\n", id)
 	return nil
 }
 
 func runTasksSnooze(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 	snoozeDate := args[1]
 
@@ -431,25 +438,25 @@ func runTasksSnooze(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	task, err := database.GetTaskByID(id)
+	target, err := database.GetTargetByID(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found: %w", id, err)
+		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	task.Status = "snoozed"
-	task.SnoozeUntil = snoozeDate
-	if err := database.UpdateTask(*task); err != nil {
-		return fmt.Errorf("snoozing task: %w", err)
+	target.Status = "snoozed"
+	target.SnoozeUntil = snoozeDate
+	if err := database.UpdateTarget(*target); err != nil {
+		return fmt.Errorf("snoozing target: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Task #%d snoozed until %s\n", id, snoozeDate)
+	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d snoozed until %s\n", id, snoozeDate)
 	return nil
 }
 
 func runTasksUpdate(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	database, err := openDBFromConfig()
@@ -458,34 +465,34 @@ func runTasksUpdate(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	task, err := database.GetTaskByID(id)
+	target, err := database.GetTargetByID(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found: %w", id, err)
+		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
 	if cmd.Flags().Changed("text") {
-		task.Text = tasksFlagText
+		target.Text = tasksFlagText
 	}
 	if cmd.Flags().Changed("intent") {
-		task.Intent = tasksFlagIntent
+		target.Intent = tasksFlagIntent
 	}
 	if cmd.Flags().Changed("priority") {
-		task.Priority = tasksFlagPriority
+		target.Priority = tasksFlagPriority
 	}
 	if cmd.Flags().Changed("status") {
-		task.Status = tasksFlagStatus
+		target.Status = tasksFlagStatus
 	}
 	if cmd.Flags().Changed("ownership") {
-		task.Ownership = tasksFlagOwnership
+		target.Ownership = tasksFlagOwnership
 	}
 	if cmd.Flags().Changed("ball-on") {
-		task.BallOn = tasksFlagBallOn
+		target.BallOn = tasksFlagBallOn
 	}
 	if cmd.Flags().Changed("due") {
-		task.DueDate = tasksFlagDue
+		target.DueDate = tasksFlagDue
 	}
 	if cmd.Flags().Changed("blocking") {
-		task.Blocking = tasksFlagBlocking
+		target.Blocking = tasksFlagBlocking
 	}
 	if cmd.Flags().Changed("tags") {
 		parts := strings.Split(tasksFlagTags, ",")
@@ -493,14 +500,14 @@ func runTasksUpdate(cmd *cobra.Command, args []string) error {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
 		tagsJSON, _ := json.Marshal(parts)
-		task.Tags = string(tagsJSON)
+		target.Tags = string(tagsJSON)
 	}
 
-	if err := database.UpdateTask(*task); err != nil {
-		return fmt.Errorf("updating task: %w", err)
+	if err := database.UpdateTarget(*target); err != nil {
+		return fmt.Errorf("updating target: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Task #%d updated\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d updated\n", id)
 	return nil
 }
 
@@ -563,7 +570,7 @@ func runTasksGenerate(cmd *cobra.Command, _ []string) error {
 	database, err := db.Open(cfg.DBPath())
 	if err == nil {
 		model := cfg.AI.Provider + "/sonnet"
-		runID, runErr := database.CreatePipelineRun("tasks", "cli", model)
+		runID, runErr := database.CreatePipelineRun("targets", "cli", model)
 		if runErr == nil {
 			inputTokens, outputTokens, totalAPI := 0, 0, 0
 			if usage != nil {
@@ -645,7 +652,7 @@ func extractJSON(s string) string {
 func runTasksNoteAdd(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	text := args[1]
@@ -659,18 +666,35 @@ func runTasksNoteAdd(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	if err := database.AddTaskNote(id, text); err != nil {
+	target, err := database.GetTargetByID(id)
+	if err != nil {
+		return fmt.Errorf("target #%d not found: %w", id, err)
+	}
+
+	// Append note to existing notes JSON array.
+	var notes []db.TargetNote
+	if target.Notes != "" && target.Notes != "[]" {
+		_ = json.Unmarshal([]byte(target.Notes), &notes)
+	}
+	notes = append(notes, db.TargetNote{
+		Text:      text,
+		CreatedAt: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+	})
+	notesJSON, _ := json.Marshal(notes)
+	target.Notes = string(notesJSON)
+
+	if err := database.UpdateTarget(*target); err != nil {
 		return fmt.Errorf("adding note: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Note added to task #%d\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Note added to target #%d\n", id)
 	return nil
 }
 
 func runTasksNoteList(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	database, err := openDBFromConfig()
@@ -679,22 +703,22 @@ func runTasksNoteList(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	task, err := database.GetTaskByID(id)
+	target, err := database.GetTargetByID(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found: %w", id, err)
+		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	var notes []db.TaskNote
-	if task.Notes == "" || task.Notes == "[]" {
-		fmt.Fprintf(cmd.OutOrStdout(), "No notes for task #%d\n", id)
+	var notes []db.TargetNote
+	if target.Notes == "" || target.Notes == "[]" {
+		fmt.Fprintf(cmd.OutOrStdout(), "No notes for target #%d\n", id)
 		return nil
 	}
-	if err := json.Unmarshal([]byte(task.Notes), &notes); err != nil {
+	if err := json.Unmarshal([]byte(target.Notes), &notes); err != nil {
 		return fmt.Errorf("parsing notes: %w", err)
 	}
 
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Notes for task #%d (%d):\n\n", id, len(notes))
+	fmt.Fprintf(out, "Notes for target #%d (%d):\n\n", id, len(notes))
 	for _, n := range notes {
 		ts := n.CreatedAt
 		if len(ts) > 16 {
@@ -708,7 +732,7 @@ func runTasksNoteList(cmd *cobra.Command, args []string) error {
 func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 	id, err := strconv.Atoi(args[0])
 	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid task ID %q: must be a positive integer", args[0])
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
 	}
 
 	if tasksFlagInstruction == "" {
@@ -732,14 +756,14 @@ func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 	}
 	defer database.Close()
 
-	task, err := database.GetTaskByID(id)
+	target, err := database.GetTargetByID(id)
 	if err != nil {
-		return fmt.Errorf("task #%d not found: %w", id, err)
+		return fmt.Errorf("target #%d not found: %w", id, err)
 	}
 
-	// Build current task context for the prompt.
-	taskContext := fmt.Sprintf("Title: %s\nIntent: %s\nPriority: %s\nDue: %s\nStatus: %s\nSub-items: %s\nNotes: %s",
-		task.Text, task.Intent, task.Priority, task.DueDate, task.Status, task.SubItems, task.Notes)
+	// Build current target context for the prompt.
+	targetContext := fmt.Sprintf("Title: %s\nIntent: %s\nPriority: %s\nDue: %s\nStatus: %s\nSub-items: %s\nNotes: %s",
+		target.Text, target.Intent, target.Priority, target.DueDate, target.Status, target.SubItems, target.Notes)
 
 	now := time.Now().Format("2006-01-02T15:04 (Monday)")
 	store := prompts.New(database, nil)
@@ -747,7 +771,7 @@ func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 	if promptTmpl == "" {
 		promptTmpl = prompts.Defaults[prompts.TasksUpdate]
 	}
-	systemPrompt := fmt.Sprintf(promptTmpl, now, taskContext)
+	systemPrompt := fmt.Sprintf(promptTmpl, now, targetContext)
 
 	// Call AI.
 	applyProviderOverride(cfg)
@@ -762,7 +786,7 @@ func runTasksAIUpdate(cmd *cobra.Command, args []string) error {
 
 	// Record usage.
 	model := cfg.AI.Provider + "/sonnet"
-	runID, runErr := database.CreatePipelineRun("tasks", "cli", model)
+	runID, runErr := database.CreatePipelineRun("targets", "cli", model)
 	if runErr == nil {
 		inputTokens, outputTokens, totalAPI := 0, 0, 0
 		if usage != nil {
