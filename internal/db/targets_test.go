@@ -633,4 +633,11 @@ func TestMigrationV67_FromV65(t *testing.T) {
 	err = db2.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='target_links'").Scan(&tblName)
 	require.NoError(t, err)
 	assert.Equal(t, "target_links", tblName)
+
+	// inbox_items must have at least the 5 canonical indexes after migration.
+	var idxCount int
+	err = db2.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+		WHERE tbl_name='inbox_items' AND type='index' AND sql IS NOT NULL`).Scan(&idxCount)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, idxCount, 5, "inbox_items should have >= 5 indexes after v67 migration")
 }

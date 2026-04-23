@@ -3246,12 +3246,29 @@ afterV48:
 				FROM inbox_items`); err != nil {
 				return fmt.Errorf("migration v67 copy inbox_items: %w", err)
 			}
+			// Capture any pre-existing indexes on inbox_items before the DROP so
+			// they survive the rebuild (the canonical 5 are always recreated below).
+			var savedIndexes []string
+			{
+				idxRows, idxErr := tx.Query(`SELECT sql FROM sqlite_master
+					WHERE tbl_name='inbox_items' AND type='index' AND sql IS NOT NULL`)
+				if idxErr == nil {
+					for idxRows.Next() {
+						var s string
+						if scanErr := idxRows.Scan(&s); scanErr == nil {
+							savedIndexes = append(savedIndexes, s)
+						}
+					}
+					idxRows.Close()
+				}
+			}
 			if _, err := tx.Exec(`DROP TABLE inbox_items`); err != nil {
 				return fmt.Errorf("migration v67 drop inbox_items: %w", err)
 			}
 			if _, err := tx.Exec(`ALTER TABLE inbox_items_new RENAME TO inbox_items`); err != nil {
 				return fmt.Errorf("migration v67 rename inbox_items: %w", err)
 			}
+			// Recreate the full canonical index set (using IF NOT EXISTS).
 			for _, idx := range []string{
 				`CREATE INDEX IF NOT EXISTS idx_inbox_items_status   ON inbox_items(status)`,
 				`CREATE INDEX IF NOT EXISTS idx_inbox_items_priority  ON inbox_items(priority)`,
@@ -3261,6 +3278,16 @@ afterV48:
 			} {
 				if _, err := tx.Exec(idx); err != nil {
 					return fmt.Errorf("migration v67 inbox_items index: %w", err)
+				}
+			}
+			// Replay any additional pre-existing indexes that aren't in the canonical set.
+			for _, idxSQL := range savedIndexes {
+				// Replace the old table reference with the renamed table (idempotent for
+				// most cases since after RENAME the stored name updates in-place, but the
+				// captured SQL still says "inbox_items" which is now the final table name).
+				if _, err := tx.Exec(idxSQL); err != nil {
+					// Non-fatal: the index may already exist via the canonical set above.
+					log.Printf("migration v67: could not replay index (skipping): %v", err)
 				}
 			}
 		}
