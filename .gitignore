@@ -18,6 +18,9 @@ WatchtowerDesktop/*.app
 TASK-*.md
 .ralphex/
 
+# Git worktrees
+.worktrees/
+
 # Environment and secrets
 .env*
 *.pem
