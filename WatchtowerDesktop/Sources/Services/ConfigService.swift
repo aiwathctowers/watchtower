@@ -24,6 +24,13 @@ final class ConfigService {
     var calendarEnabled: Bool = false
     var calendarSyncDaysAhead: Int = 2
     var jiraFeatures: [String: Bool] = [:]
+    var dayPlanEnabled: Bool = true
+    var dayPlanHour: Int = 8
+    var workingHoursStart: String = "09:00"
+    var workingHoursEnd: String = "19:00"
+    var maxTimeblocks: Int = 3
+    var minBacklog: Int = 3
+    var maxBacklog: Int = 8
     var parseError: String?
 
     private let configPath: String
@@ -91,6 +98,16 @@ final class ConfigService {
                 jiraFeatures = [:]
             }
 
+            if let dayPlan = yaml["day_plan"] as? [String: Any] {
+                dayPlanEnabled = (dayPlan["enabled"] as? Bool) ?? true
+                dayPlanHour = (dayPlan["hour"] as? Int) ?? 8
+                workingHoursStart = (dayPlan["working_hours_start"] as? String) ?? "09:00"
+                workingHoursEnd = (dayPlan["working_hours_end"] as? String) ?? "19:00"
+                maxTimeblocks = (dayPlan["max_timeblocks"] as? Int) ?? 3
+                minBacklog = (dayPlan["min_backlog"] as? Int) ?? 3
+                maxBacklog = (dayPlan["max_backlog"] as? Int) ?? 8
+            }
+
             parseError = nil
         } catch {
             parseError = error.localizedDescription
@@ -135,6 +152,17 @@ final class ConfigService {
         calendarDict["enabled"] = calendarEnabled
         calendarDict["sync_days_ahead"] = calendarSyncDaysAhead
         yaml["calendar"] = calendarDict
+
+        // Day Plan section
+        var dayPlan = (yaml["day_plan"] as? [String: Any]) ?? [:]
+        dayPlan["enabled"] = dayPlanEnabled
+        dayPlan["hour"] = dayPlanHour
+        dayPlan["working_hours_start"] = workingHoursStart
+        dayPlan["working_hours_end"] = workingHoursEnd
+        dayPlan["max_timeblocks"] = maxTimeblocks
+        dayPlan["min_backlog"] = minBacklog
+        dayPlan["max_backlog"] = maxBacklog
+        yaml["day_plan"] = dayPlan
 
         // Claude path override
         if let val = claudePath, !val.isEmpty { yaml["claude_path"] = val } else { yaml.removeValue(forKey: "claude_path") }

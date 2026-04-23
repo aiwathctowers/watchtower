@@ -52,6 +52,7 @@ struct GeneralSettings: View {
             syncSection
             digestSection
             briefingSection
+            dayPlanSection
             aiSection
             calendarSettingsSection
             jiraSettingsSection
@@ -200,6 +201,58 @@ struct GeneralSettings: View {
                 }
             }
             .help("Hour of day when daily briefing should be generated (0-23)")
+        }
+    }
+
+    private var dayPlanSection: some View {
+        Section("Day Plan") {
+            Toggle("Enable day plan", isOn: $config.dayPlanEnabled)
+
+            Picker("Generate at hour", selection: $config.dayPlanHour) {
+                ForEach(5..<13, id: \.self) { h in
+                    Text(String(format: "%02d:00", h)).tag(h)
+                }
+            }
+            .help("Hour of day when the day plan should be generated (5-12)")
+
+            HStack {
+                Text("Working hours:")
+                TextField(
+                    "Start",
+                    text: $config.workingHoursStart,
+                    prompt: Text("09:00")
+                )
+                .frame(width: 70)
+                Text("–")
+                TextField(
+                    "End",
+                    text: $config.workingHoursEnd,
+                    prompt: Text("19:00")
+                )
+                .frame(width: 70)
+            }
+            .help("Working window used when scheduling time blocks (HH:MM)")
+
+            Stepper(
+                "Max timeblocks: \(config.maxTimeblocks)",
+                value: $config.maxTimeblocks,
+                in: 1...5
+            )
+            .help("Maximum number of focused time blocks per day")
+
+            HStack {
+                Stepper(
+                    "Backlog min: \(config.minBacklog)",
+                    value: $config.minBacklog,
+                    in: 1...10
+                )
+                Stepper(
+                    "Backlog max: \(config.maxBacklog)",
+                    value: $config.maxBacklog,
+                    in: 1...15
+                )
+            }
+            .help("Minimum and maximum backlog items shown in the day plan")
         }
     }
 
