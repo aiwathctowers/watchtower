@@ -2,14 +2,20 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"encoding/json"
+	"log"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"watchtower/internal/config"
 	"watchtower/internal/db"
+	"watchtower/internal/dayplan"
+	"watchtower/internal/digest"
 )
 
 // TestCLI_DayPlanShow verifies that show prints the plan header and items.
@@ -262,4 +268,61 @@ func TestFormatDayPlanShow_Conflicts(t *testing.T) {
 	out := formatDayPlanShow(plan, nil)
 	assert.Contains(t, out, "Conflicts:")
 	assert.Contains(t, out, "Focus overlaps Meeting")
+}
+
+// dayPlanMockGen is a mock digest.Generator for CLI day-plan generate tests.
+type dayPlanMockGen struct{ response string }
+
+func (m *dayPlanMockGen) Generate(_ context.Context, _, _, _ string) (string, *digest.Usage, string, error) {
+	return m.response, &digest.Usage{InputTokens: 10, OutputTokens: 5}, "s1", nil
+}
+
+// TestCLI_DayPlanGenerate_JSON verifies that generate --json produces valid JSON
+// with a plan and at least one item.
+func TestCLI_DayPlanGenerate_JSON(t *testing.T) {
+	cleanup := setupWatchTestEnv(t)
+	defer cleanup()
+
+	database, err := openDBFromConfig()
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{ID: "T001", Name: "test-ws", Domain: "test-ws"}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	// Seed a task so the backlog item source_id is valid.
+	_, err = database.CreateTask(db.Task{
+		Text:       "Write tests",
+		Priority:   "medium",
+		Status:     "todo",
+		Ownership:  "mine",
+		SourceType: "manual",
+	})
+	require.NoError(t, err)
+	database.Close()
+
+	mockResp := `{"timeblocks":[],"backlog":[{"source_type":"task","source_id":"1","title":"Write tests","description":"get it done","rationale":"important","priority":"medium"}],"summary":"ok"}`
+
+	oldFactory := newDayPlanPipelineFactory
+	t.Cleanup(func() { newDayPlanPipelineFactory = oldFactory })
+	newDayPlanPipelineFactory = func(d *db.DB, c *config.Config, l *log.Logger) (*dayplan.Pipeline, error) {
+		return dayplan.New(d, c, &dayPlanMockGen{response: mockResp}, l), nil
+	}
+
+	var buf bytes.Buffer
+	dayPlanGenerateCmd.SetOut(&buf)
+	require.NoError(t, dayPlanGenerateCmd.Flags().Set("date", "2026-04-23"))
+	require.NoError(t, dayPlanGenerateCmd.Flags().Set("json", "true"))
+
+	err = dayPlanGenerateCmd.RunE(dayPlanGenerateCmd, nil)
+	require.NoError(t, err)
+
+	var payload struct {
+		Plan  *db.DayPlan      `json:"plan"`
+		Items []db.DayPlanItem `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	assert.Equal(t, "2026-04-23", payload.Plan.PlanDate)
+	assert.NotEmpty(t, payload.Items)
+
+	// Reset flags for other tests.
+	require.NoError(t, dayPlanGenerateCmd.Flags().Set("date", ""))
+	require.NoError(t, dayPlanGenerateCmd.Flags().Set("json", "false"))
 }

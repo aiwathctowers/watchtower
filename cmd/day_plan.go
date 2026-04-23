@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -46,12 +50,27 @@ var dayPlanCheckConflictsCmd = &cobra.Command{
 	RunE:  runDayPlanCheckConflicts,
 }
 
-// T15 (generate) will add dayPlanGenerateCmd here.
+var dayPlanGenerateCmd = &cobra.Command{
+	Use:   "generate",
+	Short: "Generate (or regenerate) the day plan for a date",
+	RunE:  runDayPlanGenerate,
+}
+
+// newDayPlanPipelineFactory is the seam tests override to inject a mock generator.
+var newDayPlanPipelineFactory = func(database *db.DB, cfg *config.Config, logger *log.Logger) (*dayplan.Pipeline, error) {
+	gen := cliGenerator(cfg)
+	return dayplan.New(database, cfg, gen, logger), nil
+}
 
 func init() {
 	rootCmd.AddCommand(dayPlanCmd)
-	dayPlanCmd.AddCommand(dayPlanShowCmd, dayPlanListCmd, dayPlanResetCmd, dayPlanCheckConflictsCmd)
+	dayPlanCmd.AddCommand(dayPlanShowCmd, dayPlanListCmd, dayPlanResetCmd, dayPlanCheckConflictsCmd, dayPlanGenerateCmd)
 	dayPlanListCmd.Flags().Int("limit", 7, "max plans to show")
+
+	dayPlanGenerateCmd.Flags().String("date", "", "date to generate plan for (YYYY-MM-DD, default: today)")
+	dayPlanGenerateCmd.Flags().Bool("force", false, "regenerate even if a plan already exists")
+	dayPlanGenerateCmd.Flags().String("feedback", "", "feedback text (implies --force)")
+	dayPlanGenerateCmd.Flags().Bool("json", false, "output as JSON instead of human-readable text")
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -249,6 +268,95 @@ func runDayPlanCheckConflicts(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Fprintln(out, "No conflicts.")
 	}
+	return nil
+}
+
+func runDayPlanGenerate(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	applyProviderOverride(cfg)
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	// Force day_plan enabled so CLI generate always works.
+	cfg.DayPlan.Enabled = true
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	out := cmd.OutOrStdout()
+
+	userID, err := database.GetCurrentUserID()
+	if err != nil || userID == "" {
+		fmt.Fprintln(out, "No current user set. Run 'watchtower sync' first.")
+		return nil
+	}
+
+	// Parse flags.
+	dateFlag, _ := cmd.Flags().GetString("date")
+	forceFlag, _ := cmd.Flags().GetBool("force")
+	feedbackFlag, _ := cmd.Flags().GetString("feedback")
+	jsonFlag, _ := cmd.Flags().GetBool("json")
+
+	date := dateFlag
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	logger := log.New(io.Discard, "", 0)
+	if flagVerbose {
+		logger = log.New(os.Stderr, "", log.LstdFlags)
+	}
+
+	pipe, err := newDayPlanPipelineFactory(database, cfg, logger)
+	if err != nil {
+		return fmt.Errorf("creating day-plan pipeline: %w", err)
+	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	plan, err := pipe.Run(ctx, dayplan.RunOptions{
+		UserID:   userID,
+		Date:     date,
+		Force:    forceFlag || feedbackFlag != "",
+		Feedback: feedbackFlag,
+	})
+	if err != nil {
+		return fmt.Errorf("generating day plan: %w", err)
+	}
+	if plan == nil {
+		fmt.Fprintln(out, "Day plan generation is disabled in config.")
+		return nil
+	}
+
+	items, err := database.GetDayPlanItems(plan.ID)
+	if err != nil {
+		return fmt.Errorf("loading day plan items: %w", err)
+	}
+
+	if jsonFlag {
+		payload := struct {
+			Plan  *db.DayPlan      `json:"plan"`
+			Items []db.DayPlanItem `json:"items"`
+		}{Plan: plan, Items: items}
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(payload)
+	}
+
+	fmt.Fprint(out, formatDayPlanShow(plan, items))
 	return nil
 }
 
