@@ -645,7 +645,7 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	// Create a snoozed task with expired snooze_until.
-	_, err = database.CreateTask(db.Task{
+	_, err = database.CreateTarget(db.Target{
 		Text:        "Expired snooze",
 		Status:      "snoozed",
 		Priority:    "medium",
@@ -656,7 +656,7 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a snoozed task with future snooze_until.
-	_, err = database.CreateTask(db.Task{
+	_, err = database.CreateTarget(db.Target{
 		Text:        "Future snooze",
 		Status:      "snoozed",
 		Priority:    "medium",
@@ -688,13 +688,13 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify: expired task should be unsnoozed.
-	task1, err := database.GetTaskByID(1)
+	task1, err := database.GetTargetByID(1)
 	require.NoError(t, err)
 	assert.Equal(t, "todo", task1.Status)
 	assert.Equal(t, "", task1.SnoozeUntil)
 
 	// Verify: future task should still be snoozed.
-	task2, err := database.GetTaskByID(2)
+	task2, err := database.GetTargetByID(2)
 	require.NoError(t, err)
 	assert.Equal(t, "snoozed", task2.Status)
 	assert.Equal(t, "2099-12-31", task2.SnoozeUntil)
