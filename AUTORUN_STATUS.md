@@ -9,8 +9,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | Task | Status | Commit | Reviews | Notes |
 |------|--------|--------|---------|-------|
 | T1: Migration v65 — day_plans + day_plan_items | ✅ DONE | `3f2c678` | spec ✅ / quality APPROVED | Minor diagnostic note on test helper — no fix needed |
-| T2: Go models DayPlan + DayPlanItem | ⏳ running | — | — | — |
-| T3: DB CRUD + tests | pending | — | — | — |
+| T2: Go models DayPlan + DayPlanItem | ✅ DONE | `ca9bbdb` | implementer only (trivial data decls) | go build + vet clean |
+| T3: DB CRUD + tests | ⏳ running | — | — | — |
 | T4: Prompt template day_plan.generate | pending | — | — | — |
 | T5: Config DayPlanConfig | pending | — | — | — |
 | T6: dayplan package skeleton | pending | — | — | — |
