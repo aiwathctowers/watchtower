@@ -13,8 +13,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T3: DB CRUD + tests | ✅ DONE | `d0cee84`+`e340aec` | review APPROVED_WITH_CONCERNS + HIGH fixed | MEDIUM/LOW (dup scan helper, missing tests for IncrementRegenerateCount/MarkDayPlanRead/UpdateItemOrder, CreateDayPlanItems not transactional) **deferred** |
 | T4: Prompt template day_plan.generate | ✅ DONE | `5ae8557` | implementer only | 14 placeholders confirmed |
 | T5: Config DayPlanConfig | ✅ DONE | `9bdfee4` | implementer only | uses viper SetDefault pattern |
-| T6: dayplan package skeleton | ⏳ running | — | — | — |
-| T7: Gather module | pending | — | — | — |
+| T6: dayplan package skeleton | ✅ DONE | `0754b09` | implementer only | types + Pipeline stub; interfaces confirmed |
+| T7: Gather module | ⏳ running | — | — | — |
 | T8: Pipeline.Run orchestration | pending | — | — | — |
 | T9: buildItems validation + merge | pending | — | — | — |
 | T10: SyncCalendarItems | pending | — | — | — |
