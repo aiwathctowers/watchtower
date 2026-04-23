@@ -27,8 +27,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T19: Swift DayPlanViewModel | ✅ DONE | `80cbece` | implementer only | 17 tests; introduced CLIRunnerProtocol (no existing abstraction) |
 | T20+T21+T22: all Swift views | ✅ DONE | `6e4e07a` | implementer only (batched) | 6 view files, 649 LOC; all 37 prior tests still pass |
 | T23: Settings panel | ✅ DONE | `43116fc` | implementer only | stored-property pattern matching briefing |
-| T24: Sidebar tab + route | ⏳ running | — | — | — |
-| T25: E2E verification + PR | pending | — | — | — |
+| T24: Sidebar tab + route | ✅ DONE | `3d631f7` | implementer + manual fix | T20/T24 init conflict — DayPlanView now takes vm as Bindable param, AppState owns VM |
+| T25: E2E verification + PR | ⏳ running | — | — | — |
 
 ## Legend
 
