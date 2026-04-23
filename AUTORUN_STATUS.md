@@ -16,8 +16,8 @@ Review each row's commit SHA with `git show <sha>`. For `DONE_WITH_CONCERNS`, re
 | T6: dayplan package skeleton | ✅ DONE | `0754b09` | implementer only | types + Pipeline stub; interfaces confirmed |
 | T7: Gather module | ✅ DONE | `d7b16b9` | implementer only | 4 tests PASS; graceful degradation for jira/people |
 | T8: Pipeline.Run orchestration | ✅ DONE | `34fc976` | implementer only | 9 tests PASS; stubs: syncCalendarItems (T10), DetectConflicts (T11), buildItems full validation (T9) |
-| T9: buildItems validation + merge | ⏳ running | — | — | — |
-| T10: SyncCalendarItems | pending | — | — | — |
+| T9: buildItems validation + merge | ✅ DONE | `98ba470` | implementer only | 13 tests; discovered CalendarEvent.Start/End are ISO strings (not time.Time) — added parseEventTime |
+| T10: SyncCalendarItems | ⏳ running | — | — | — |
 | T11: DetectConflicts | pending | — | — | — |
 | T12: Daemon wiring — Phase 7 + 8 | pending | — | — | — |
 | T13: CLI day-plan show | pending | — | — | — |
