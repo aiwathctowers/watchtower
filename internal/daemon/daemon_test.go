@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"watchtower/internal/config"
-	"watchtower/internal/db"
 	"watchtower/internal/dayplan"
+	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
 	watchtowerslack "watchtower/internal/slack"
@@ -704,10 +704,10 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 // plan row into database so the dedup check in shouldRunDayPlan fires on the
 // second call.
 type fakeDayPlanRunner struct {
-	database     *db.DB
-	runCalls     int
-	detectCalls  int
-	syncCalls    int
+	database    *db.DB
+	runCalls    int
+	detectCalls int
+	syncCalls   int
 }
 
 func (f *fakeDayPlanRunner) Run(_ context.Context, opts dayplan.RunOptions) (*db.DayPlan, error) {

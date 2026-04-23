@@ -13,11 +13,11 @@ import (
 // promptInputs holds all context sections that are injected into the day-plan
 // prompt template via fmt.Sprintf.
 type promptInputs struct {
-	Date, Weekday, NowLocal, UserRole    string
-	WorkingHoursStart, WorkingHoursEnd   string
-	CalendarEvents, Tasks, Briefing      string
-	Jira, People, Manual, Previous       string
-	Feedback                             string
+	Date, Weekday, NowLocal, UserRole  string
+	WorkingHoursStart, WorkingHoursEnd string
+	CalendarEvents, Tasks, Briefing    string
+	Jira, People, Manual, Previous     string
+	Feedback                           string
 }
 
 // buildPrompt formats the system prompt from the store (or built-in default)

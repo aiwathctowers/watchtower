@@ -60,15 +60,15 @@ func TestGatherBriefing_FallbackYesterday(t *testing.T) {
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 
 	_, err := d.UpsertBriefing(db.Briefing{
-		WorkspaceID: "W1",
-		UserID:      "U1",
-		Date:        yesterday,
-		Role:        "engineer",
-		Attention:   "[]",
-		YourDay:     "[]",
+		WorkspaceID:  "W1",
+		UserID:       "U1",
+		Date:         yesterday,
+		Role:         "engineer",
+		Attention:    "[]",
+		YourDay:      "[]",
 		WhatHappened: "[]",
-		TeamPulse:   "[]",
-		Coaching:    "[]",
+		TeamPulse:    "[]",
+		Coaching:     "[]",
 	})
 	require.NoError(t, err)
 

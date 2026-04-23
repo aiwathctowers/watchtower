@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"watchtower/internal/config"
-	"watchtower/internal/db"
 	"watchtower/internal/dayplan"
+	"watchtower/internal/db"
 	"watchtower/internal/digest"
 )
 

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"watchtower/internal/config"
-	"watchtower/internal/db"
 	"watchtower/internal/dayplan"
+	"watchtower/internal/db"
 
 	"github.com/spf13/cobra"
 )

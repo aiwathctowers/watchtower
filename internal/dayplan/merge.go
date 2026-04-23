@@ -12,7 +12,6 @@ import (
 // Invalid items are dropped; reasons are returned in the `dropped` slice.
 func buildItems(r *GenerateResult, date string, events []db.CalendarEvent,
 	taskIDs, jiraKeys map[string]bool) ([]db.DayPlanItem, []string) {
-
 	var out []db.DayPlanItem
 	var dropped []string
 

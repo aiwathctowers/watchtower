@@ -82,20 +82,20 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 	}
 
 	inputs := &promptInputs{
-		Date:               opts.Date,
-		Weekday:            dayOfWeek(opts.Date),
-		NowLocal:           now.Format("15:04"),
-		UserRole:           p.userRole(opts.UserID),
-		WorkingHoursStart:  p.cfg.DayPlan.WorkingHoursStart,
-		WorkingHoursEnd:    p.cfg.DayPlan.WorkingHoursEnd,
-		CalendarEvents:     formatCalendarSection(events),
-		Tasks:              formatTasksSection(tasks),
-		Briefing:           formatBriefingContext(briefingData),
-		Jira:               formatJiraSection(jiraIssues),
-		People:             formatPeopleSection(people),
-		Manual:             formatManualSection(manual),
-		Previous:           formatPreviousPlanSection(prev, prevItems),
-		Feedback:           feedbackOrInitial(opts.Feedback),
+		Date:              opts.Date,
+		Weekday:           dayOfWeek(opts.Date),
+		NowLocal:          now.Format("15:04"),
+		UserRole:          p.userRole(opts.UserID),
+		WorkingHoursStart: p.cfg.DayPlan.WorkingHoursStart,
+		WorkingHoursEnd:   p.cfg.DayPlan.WorkingHoursEnd,
+		CalendarEvents:    formatCalendarSection(events),
+		Tasks:             formatTasksSection(tasks),
+		Briefing:          formatBriefingContext(briefingData),
+		Jira:              formatJiraSection(jiraIssues),
+		People:            formatPeopleSection(people),
+		Manual:            formatManualSection(manual),
+		Previous:          formatPreviousPlanSection(prev, prevItems),
+		Feedback:          feedbackOrInitial(opts.Feedback),
 	}
 
 	systemPrompt, promptVer := p.buildPrompt(inputs)
