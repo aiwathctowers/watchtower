@@ -173,20 +173,30 @@ struct DayPlanView: View {
 
     private func footerBar(_ vm: DayPlanViewModel) -> some View {
         HStack(spacing: 12) {
-            Button("Regenerate with feedback…") {
-                showRegen = true
+            if vm.plan == nil {
+                Button("Generate today's plan") {
+                    Task { await vm.regenerate(feedback: nil) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(vm.isGenerating)
+            } else {
+                Button("Regenerate with feedback…") {
+                    showRegen = true
+                }
+                .buttonStyle(.bordered)
+                .disabled(vm.isGenerating)
             }
-            .buttonStyle(.bordered)
-            .disabled(vm.isGenerating)
 
             Spacer()
 
-            Button("Reset plan") {
-                Task { await vm.reset() }
+            if vm.plan != nil {
+                Button("Reset plan") {
+                    Task { await vm.reset() }
+                }
+                .buttonStyle(.bordered)
+                .foregroundStyle(.red)
+                .disabled(vm.isGenerating)
             }
-            .buttonStyle(.bordered)
-            .foregroundStyle(.red)
-            .disabled(vm.isGenerating)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
