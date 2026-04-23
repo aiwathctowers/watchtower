@@ -512,9 +512,9 @@ enum TestDatabase {
 
     CREATE TABLE IF NOT EXISTS inbox_feedback (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        inbox_item_id INTEGER NOT NULL REFERENCES inbox_items(id) ON DELETE CASCADE,
+        inbox_item_id INTEGER NOT NULL,
         rating        INTEGER NOT NULL CHECK(rating IN (-1,1)),
-        reason        TEXT DEFAULT '' CHECK(reason IN ('','source_noise','wrong_priority','wrong_class','never_show')),
+        reason        TEXT DEFAULT '',
         created_at    TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_inbox_feedback_item ON inbox_feedback(inbox_item_id);
@@ -943,6 +943,44 @@ enum TestDatabase {
             """, arguments: [channelID, messageTS, threadTS, senderUserID,
                              triggerType, snippet, permalink, status, priority, aiReason,
                              resolvedReason, snoozeUntil, taskID, readAt])
+    }
+
+    // MARK: - Inbox Learned Rules Fixtures
+
+    static func insertLearnedRule(
+        _ db: Database,
+        scopeKey: String = "sender:U1",
+        weight: Double = -0.5,
+        source: String = "implicit",
+        evidenceCount: Int = 3,
+        lastUpdated: String = "2026-04-23T10:00:00Z",
+        ruleType: String = "source_mute"
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO inbox_learned_rules (rule_type, scope_key, weight, source, evidence_count, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+            arguments: [ruleType, scopeKey, weight, source, evidenceCount, lastUpdated]
+        )
+    }
+
+    // MARK: - Inbox Feedback Fixtures
+
+    static func insertFeedbackRecord(
+        _ db: Database,
+        inboxItemId: Int = 1,
+        rating: Int = 1,
+        reason: String = "useful",
+        createdAt: String = "2026-04-23T10:00:00Z"
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO inbox_feedback (inbox_item_id, rating, reason, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+            arguments: [inboxItemId, rating, reason, createdAt]
+        )
     }
 
     // MARK: - Calendar Fixtures
