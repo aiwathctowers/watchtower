@@ -76,6 +76,10 @@ var DefaultVersions = map[string]int{
 	DayPlanGenerate:    1, // v1: initial day plan template
 }
 
+// DefaultFor returns the hard-coded default template for a given key.
+// Returns "" if the key is unknown.
+func DefaultFor(key string) string { return Defaults[key] }
+
 // Descriptions maps prompt IDs to human-readable descriptions.
 var Descriptions = map[string]string{
 	DigestChannel:      "Channel digest — per-channel message analysis",
