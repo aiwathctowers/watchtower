@@ -59,11 +59,14 @@ func (db *DB) CreateInboxItem(it InboxItem) (int64, error) {
 	if it.Priority == "" {
 		it.Priority = "medium"
 	}
+	if it.ItemClass == "" {
+		it.ItemClass = "actionable"
+	}
 	res, err := db.Exec(`INSERT INTO inbox_items (channel_id, message_ts, thread_ts, sender_user_id,
-		trigger_type, snippet, context, raw_text, permalink, status, priority, ai_reason, waiting_user_ids)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		trigger_type, snippet, context, raw_text, permalink, status, priority, ai_reason, waiting_user_ids, item_class)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.ChannelID, it.MessageTS, it.ThreadTS, it.SenderUserID,
-		it.TriggerType, it.Snippet, it.Context, it.RawText, it.Permalink, it.Status, it.Priority, it.AIReason, it.WaitingUserIDs,
+		it.TriggerType, it.Snippet, it.Context, it.RawText, it.Permalink, it.Status, it.Priority, it.AIReason, it.WaitingUserIDs, it.ItemClass,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting inbox item: %w", err)

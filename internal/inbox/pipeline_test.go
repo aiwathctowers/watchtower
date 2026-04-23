@@ -371,6 +371,61 @@ func TestPipeline_ClosingSignalNoUserReply(t *testing.T) {
 	assert.Equal(t, 1, created, "closing signal without prior user reply should create item")
 }
 
+func TestPipeline_Run_OrderedPhases(t *testing.T) {
+	d := newTestDB(t)
+	seedWorkspaceAndUser(t, d, "alice")
+
+	// Seed: a jira issue assigned to alice, a calendar invite for alice, a high-importance digest decision.
+	seedJiraIssue(t, d, "WT-1", "alice", time.Now().Add(-5*time.Minute))
+	seedCalendarEvent(t, d, "evt-1", "Sync", `[{"email":"alice@x.com","rsvp_status":"needsAction"}]`, "confirmed",
+		time.Now().Add(-10*time.Minute), time.Now().Add(-10*time.Minute))
+	seedDigestWithHighImportance(t, d, "C1", `[{"type":"decision","topic":"Launch","importance":"high"}]`,
+		time.Now().Add(-5*time.Minute))
+
+	cfg := testConfig()
+	gen := &mockGenerator{response: `{"pinned_ids":[]}`}
+	p := New(d, cfg, gen, log.Default())
+	p.SetCurrentUser("alice", "alice@x.com")
+
+	_, _, err := p.Run(context.Background())
+	require.NoError(t, err)
+
+	mustCount := func(trig string, want int) {
+		t.Helper()
+		var n int
+		d.QueryRow(`SELECT COUNT(*) FROM inbox_items WHERE trigger_type=?`, trig).Scan(&n) //nolint:errcheck
+		assert.Equal(t, want, n, "trigger_type=%s", trig)
+	}
+	mustCount("jira_assigned", 1)
+	mustCount("calendar_invite", 1)
+	mustCount("decision_made", 1)
+
+	// decision_made should be classified as ambient
+	var cls string
+	d.QueryRow(`SELECT item_class FROM inbox_items WHERE trigger_type='decision_made'`).Scan(&cls) //nolint:errcheck
+	assert.Equal(t, "ambient", cls, "decision_made item_class")
+}
+
+func TestPipeline_Run_AutoArchiveRuns(t *testing.T) {
+	d := newTestDB(t)
+	seedWorkspaceAndUser(t, d, "U1")
+
+	// Insert an 8-days-old ambient decision_made item.
+	oldT := time.Now().Add(-8 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	_, err := d.Exec(`INSERT INTO inbox_items (channel_id, message_ts, sender_user_id, trigger_type, status, priority, item_class, created_at, updated_at)
+		VALUES ('C1','1.0','U1','decision_made','pending','low','ambient',?,?)`, oldT, oldT)
+	require.NoError(t, err)
+
+	p := New(d, testConfig(), &mockGenerator{response: `{}`}, log.Default())
+	p.SetCurrentUser("U1", "u1@test.com")
+	_, _, err = p.Run(context.Background())
+	require.NoError(t, err)
+
+	var reason string
+	d.QueryRow(`SELECT archive_reason FROM inbox_items WHERE trigger_type='decision_made'`).Scan(&reason) //nolint:errcheck
+	assert.Equal(t, "seen_expired", reason)
+}
+
 func TestPipeline_AIResolvedField(t *testing.T) {
 	database := testDB(t)
 	cfg := testConfig()

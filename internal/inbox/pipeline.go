@@ -136,6 +136,13 @@ type Pipeline struct {
 	promptStore *prompts.Store
 	OnProgress  ProgressFunc
 
+	// Current user identity (set via SetCurrentUser or resolved from DB in Run).
+	currentUserID    string
+	currentUserEmail string
+
+	// pinnedSelector runs an AI call to select the top-pinned items.
+	pinnedSelector *PinnedSelector
+
 	// Step metrics (set before each OnProgress call).
 	LastStepDurationSeconds float64
 	LastStepInputTokens     int
@@ -149,11 +156,19 @@ type Pipeline struct {
 // New creates a new inbox pipeline.
 func New(database *db.DB, cfg *config.Config, gen digest.Generator, logger *log.Logger) *Pipeline {
 	return &Pipeline{
-		db:        database,
-		cfg:       cfg,
-		generator: gen,
-		logger:    logger,
+		db:             database,
+		cfg:            cfg,
+		generator:      gen,
+		logger:         logger,
+		pinnedSelector: NewPinnedSelector(database, gen),
 	}
+}
+
+// SetCurrentUser sets the current user identity used by the pipeline for
+// per-source detectors (Jira, Calendar) and auto-resolve logic.
+func (p *Pipeline) SetCurrentUser(id, email string) {
+	p.currentUserID = id
+	p.currentUserEmail = email
 }
 
 // SetPromptStore sets an optional prompt store for loading customized prompts.
@@ -166,7 +181,8 @@ func (p *Pipeline) AccumulatedUsage() (int, int, float64, int) {
 	return p.totalInputTokens, p.totalOutputTokens, 0, p.totalAPITokens
 }
 
-// Run executes the inbox pipeline: detect new items, check for auto-resolve, then AI prioritize.
+// Run executes the inbox pipeline: detect new items, classify, learn, AI prioritize,
+// select pinned, auto-resolve, auto-archive, then unsnooze.
 // Returns (created count, resolved count, error).
 func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	// Reset accumulated usage from previous run (pipeline is reused across daemon cycles).
@@ -178,9 +194,14 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		return 0, 0, nil
 	}
 
-	currentUserID, err := p.db.GetCurrentUserID()
-	if err != nil {
-		return 0, 0, fmt.Errorf("getting current user: %w", err)
+	// Resolve current user: prefer explicitly set identity, fall back to DB.
+	currentUserID := p.currentUserID
+	if currentUserID == "" {
+		var err error
+		currentUserID, err = p.db.GetCurrentUserID()
+		if err != nil {
+			return 0, 0, fmt.Errorf("getting current user: %w", err)
+		}
 	}
 	if currentUserID == "" {
 		p.logger.Println("inbox: no current user set, skipping")
@@ -200,6 +221,7 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	if lastTS == 0 {
 		lastTS = float64(time.Now().AddDate(0, 0, -lookbackDays).Unix())
 	}
+	sinceTime := time.Unix(int64(lastTS), 0)
 
 	// Phase 0: Deduplicate existing thread inbox items (cleanup from before thread-grouping).
 	if deduped, err := p.db.DeduplicateThreadInboxItems(); err != nil {
@@ -208,18 +230,144 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		p.logger.Printf("inbox: merged %d duplicate thread items", deduped)
 	}
 
-	p.progress(0, 4, "Detecting messages...")
+	p.progress(0, 6, "Detecting messages...")
 
-	// Phase 1: Detect — find @mentions, DMs, thread replies, reactions.
+	// Phase 1: Detection — Slack + external sources (all non-fatal).
 	stepStart := time.Now()
+	created, err := p.detectSlackTriggers(ctx, currentUserID, lastTS)
+	if err != nil {
+		p.logger.Printf("inbox: slack detect error: %v", err)
+	}
+
+	if n, err := DetectJira(ctx, p.db, currentUserID, sinceTime); err != nil {
+		p.logger.Printf("inbox: jira detect error: %v", err)
+	} else {
+		created += n
+	}
+
+	currentUserEmail := p.currentUserEmail
+	if n, err := DetectCalendar(ctx, p.db, currentUserEmail, sinceTime); err != nil {
+		p.logger.Printf("inbox: calendar detect error: %v", err)
+	} else {
+		created += n
+	}
+
+	if n, err := DetectWatchtowerInternal(ctx, p.db, sinceTime); err != nil {
+		p.logger.Printf("inbox: watchtower detect error: %v", err)
+	} else {
+		created += n
+	}
+
+	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+	p.progress(1, 6, fmt.Sprintf("Detected %d new items", created))
+
+	// Phase 2: Classify new items — assign item_class based on trigger_type for any unclassified items.
+	if err := p.classifyNewItems(ctx); err != nil {
+		p.logger.Printf("inbox: classify error: %v", err)
+	}
+
+	// Phase 3: Implicit learning — update mute rules from dismiss patterns.
+	if err := RunImplicitLearner(ctx, p.db, 30*24*time.Hour); err != nil {
+		p.logger.Printf("inbox: learner error: %v", err)
+	}
+
+	// Phase 4: Auto-resolve — find pending items where user has replied.
+	stepStart = time.Now()
+	pendingItems, err := p.db.GetInboxItems(db.InboxFilter{Status: "pending"})
+	if err != nil {
+		return created, 0, fmt.Errorf("loading pending items: %w", err)
+	}
+
+	resolved := 0
+	for _, item := range pendingItems {
+		replied, err := p.db.CheckUserReplied(currentUserID, item.ChannelID, item.MessageTS, item.ThreadTS)
+		if err != nil {
+			p.logger.Printf("inbox: error checking reply for item %d: %v", item.ID, err)
+			continue
+		}
+		if replied {
+			if err := p.db.ResolveInboxItem(item.ID, "User replied"); err != nil {
+				p.logger.Printf("inbox: error resolving item %d: %v", item.ID, err)
+				continue
+			}
+			resolved++
+		}
+	}
+
+	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+	p.progress(2, 6, fmt.Sprintf("Checked %d pending, %d resolved", len(pendingItems), resolved))
+
+	// Phase 4a: AI prioritize — only new unprioritized items.
+	var newItems []db.InboxItem
+	for _, item := range pendingItems {
+		if item.AIReason == "" {
+			newItems = append(newItems, item)
+		}
+	}
+
+	if len(newItems) > 0 && p.generator != nil {
+		numBatches := (len(newItems) + MaxItemsPerAIBatch - 1) / MaxItemsPerAIBatch
+		if numBatches < 1 {
+			numBatches = 1
+		}
+		total := 3 + numBatches + 1
+		aiResolved, err := p.aiPrioritizeNewItems(ctx, currentUserID, newItems, 3, total)
+		if err != nil {
+			p.logger.Printf("inbox: AI prioritize error: %v", err)
+		}
+		resolved += aiResolved
+	}
+
+	p.progress(4, 6, "Selecting pinned items...")
+
+	// Phase 4b: AI select pinned (separate AI call, non-fatal; skipped when no generator).
+	if p.pinnedSelector != nil && p.generator != nil {
+		if _, err := p.pinnedSelector.Run(ctx); err != nil {
+			p.logger.Printf("inbox: pinned selector error: %v", err)
+		}
+	}
+
+	// Phase 5: Auto-archive expired/stale items (non-fatal).
+	if _, err := p.db.ArchiveExpiredAmbient(7 * 24 * time.Hour); err != nil {
+		p.logger.Printf("inbox: archive ambient error: %v", err)
+	}
+	if _, err := p.db.ArchiveStaleActionable(14 * 24 * time.Hour); err != nil {
+		p.logger.Printf("inbox: archive stale error: %v", err)
+	}
+
+	// Phase 6: Unsnooze expired snoozed items.
+	if _, err := p.db.UnsnoozeExpiredInboxItems(); err != nil {
+		p.logger.Printf("inbox: unsnooze error: %v", err)
+	}
+
+	// Advance watermark.
+	// Use a 30-minute buffer instead of wall-clock time to account for
+	// Slack search API indexing delays — messages may arrive in the DB
+	// with ts_unix values behind wall-clock time.
+	bufferTS := float64(time.Now().Add(-30 * time.Minute).Unix())
+	if bufferTS < lastTS {
+		bufferTS = lastTS // never go backwards
+	}
+	if err := p.db.SetInboxLastProcessedTS(bufferTS); err != nil {
+		p.logger.Printf("inbox: error updating last processed ts: %v", err)
+	}
+
+	p.progress(6, 6, fmt.Sprintf("Done — %d created, %d resolved", created, resolved))
+
+	return created, resolved, nil
+}
+
+// detectSlackTriggers detects @mentions, DMs, thread replies and reactions from Slack messages.
+// Returns the count of newly created inbox items.
+func (p *Pipeline) detectSlackTriggers(ctx context.Context, currentUserID string, lastTS float64) (int, error) {
 	mentions, err := p.db.FindPendingMentions(currentUserID, lastTS)
 	if err != nil {
-		return 0, 0, fmt.Errorf("finding mentions: %w", err)
+		return 0, fmt.Errorf("finding mentions: %w", err)
 	}
 
 	dms, err := p.db.FindPendingDMs(currentUserID, lastTS)
 	if err != nil {
-		return 0, 0, fmt.Errorf("finding DMs: %w", err)
+		return 0, fmt.Errorf("finding DMs: %w", err)
 	}
 
 	threadReplies, err := p.db.FindThreadRepliesToUser(currentUserID, lastTS)
@@ -232,8 +380,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		p.logger.Printf("inbox: error finding reaction requests: %v", err)
 	}
 
-	// Insert new candidates, deduplicating by thread.
-	// Multiple messages in the same thread → one inbox item (updated to latest message).
 	candidates := append(mentions, dms...)
 	candidates = append(candidates, threadReplies...)
 	candidates = append(candidates, reactions...)
@@ -247,7 +393,7 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	}
 	threadGroups := make(map[threadKey]*threadGroup)
 	for _, c := range candidates {
-		key := threadKey{c.ChannelID, c.ThreadTS} // "" for non-threaded
+		key := threadKey{c.ChannelID, c.ThreadTS}
 		grp, ok := threadGroups[key]
 		if !ok {
 			grp = &threadGroup{latest: c, senders: map[string]bool{c.SenderUserID: true}}
@@ -261,7 +407,6 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 	}
 
 	created := 0
-	// Process all groups (threaded and non-threaded).
 	for _, grp := range threadGroups {
 		c := grp.latest
 		snippet := enrichSnippet(c.Text, p.db)
@@ -280,7 +425,7 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		if len(snippet) > 500 {
 			snippet = snippet[:500] + "..."
 		}
-		ctx := p.loadContext(c.ChannelID, c.MessageTS, c.ThreadTS)
+		itemCtx := p.loadContext(c.ChannelID, c.MessageTS, c.ThreadTS)
 
 		var senderList []string
 		for uid := range grp.senders {
@@ -288,13 +433,11 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		}
 		waitingJSON := toWaitingJSON(senderList)
 
-		// Check if there's already a pending inbox item for this thread.
 		existingID, _ := p.db.FindPendingInboxByThread(c.ChannelID, c.ThreadTS)
 		if existingID > 0 {
-			if err := p.db.UpdateInboxItemSnippet(existingID, c.MessageTS, c.SenderUserID, snippet, ctx, c.Text, c.Permalink); err != nil {
+			if err := p.db.UpdateInboxItemSnippet(existingID, c.MessageTS, c.SenderUserID, snippet, itemCtx, c.Text, c.Permalink); err != nil {
 				p.logger.Printf("inbox: error updating thread item %d: %v", existingID, err)
 			}
-			// Merge waiting_user_ids with existing.
 			if err := p.db.MergeWaitingUserIDs(existingID, senderList); err != nil {
 				p.logger.Printf("inbox: error merging waiting users for item %d: %v", existingID, err)
 			}
@@ -308,13 +451,12 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 			SenderUserID:   c.SenderUserID,
 			TriggerType:    c.TriggerType,
 			Snippet:        snippet,
-			Context:        ctx,
+			Context:        itemCtx,
 			RawText:        c.Text,
 			Permalink:      c.Permalink,
 			WaitingUserIDs: waitingJSON,
 		})
 		if err != nil {
-			// UNIQUE constraint violation = already exists, skip.
 			if strings.Contains(err.Error(), "UNIQUE") {
 				continue
 			}
@@ -324,80 +466,44 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		created++
 	}
 
-	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
-	p.progress(1, 4, fmt.Sprintf("Detected %d mentions, %d DMs, %d thread replies, %d reactions",
-		len(mentions), len(dms), len(threadReplies), len(reactions)))
+	p.logger.Printf("inbox: slack detected %d mentions, %d DMs, %d thread replies, %d reactions → %d created",
+		len(mentions), len(dms), len(threadReplies), len(reactions), created)
+	return created, nil
+}
 
-	// Phase 2: Check for auto-resolve — find pending items where user has replied.
-	stepStart = time.Now()
-	pendingItems, err := p.db.GetInboxItems(db.InboxFilter{Status: "pending"})
+// classifyNewItems assigns item_class to inbox items that have an empty class,
+// using DefaultItemClass based on trigger_type. Items set by detectors already
+// have a class; this function acts as a backfill for any that don't.
+func (p *Pipeline) classifyNewItems(_ context.Context) error {
+	rows, err := p.db.Query(`SELECT id, trigger_type FROM inbox_items WHERE item_class='' OR item_class IS NULL`)
 	if err != nil {
-		return created, 0, fmt.Errorf("loading pending items: %w", err)
+		return err
 	}
-
-	// Resolve replied items algorithmically — no AI needed.
-	resolved := 0
-	for _, item := range pendingItems {
-		replied, err := p.db.CheckUserReplied(currentUserID, item.ChannelID, item.MessageTS, item.ThreadTS)
-		if err != nil {
-			p.logger.Printf("inbox: error checking reply for item %d: %v", item.ID, err)
-			continue
+	// Drain cursor before issuing updates (avoids SQLite single-connection deadlock).
+	type update struct {
+		id    int64
+		class string
+	}
+	var updates []update
+	for rows.Next() {
+		var id int64
+		var trig string
+		if err := rows.Scan(&id, &trig); err != nil {
+			rows.Close()
+			return err
 		}
-		if replied {
-			if err := p.db.ResolveInboxItem(item.ID, "User replied"); err != nil {
-				p.logger.Printf("inbox: error resolving item %d: %v", item.ID, err)
-				continue
-			}
-			resolved++
-		}
+		updates = append(updates, update{id: id, class: DefaultItemClass(trig)})
 	}
-
-	// Update last processed TS.
-	// Use a 30-minute buffer instead of wall-clock time to account for
-	// Slack search API indexing delays — messages may arrive in the DB
-	// with ts_unix values behind wall-clock time.
-	bufferTS := float64(time.Now().Add(-30 * time.Minute).Unix())
-	if bufferTS < lastTS {
-		bufferTS = lastTS // never go backwards
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
 	}
-	if err := p.db.SetInboxLastProcessedTS(bufferTS); err != nil {
-		p.logger.Printf("inbox: error updating last processed ts: %v", err)
-	}
-
-	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
-	p.progress(2, 4, fmt.Sprintf("Checked %d pending, %d resolved", len(pendingItems), resolved))
-
-	// Phase 3: AI prioritize — ONLY new items that haven't been prioritized yet.
-	// pendingItems was loaded after Phase 1, so freshly created items are included.
-	var newItems []db.InboxItem
-	for _, item := range pendingItems {
-		if item.AIReason == "" {
-			newItems = append(newItems, item)
+	for _, u := range updates {
+		if err := p.db.SetInboxItemClass(u.id, u.class); err != nil {
+			p.logger.Printf("inbox: classify item %d: %v", u.id, err)
 		}
 	}
-
-	if len(newItems) == 0 {
-		p.progress(4, 4, fmt.Sprintf("Done — %d created, %d resolved, no AI needed", created, resolved))
-		return created, resolved, nil
-	}
-
-	// AI prioritizes only the new unprioritized items.
-	numBatches := (len(newItems) + MaxItemsPerAIBatch - 1) / MaxItemsPerAIBatch
-	if numBatches < 1 {
-		numBatches = 1
-	}
-	total := 2 + numBatches + 1
-	if p.generator != nil {
-		aiResolved, err := p.aiPrioritizeNewItems(ctx, currentUserID, newItems, 2, total)
-		if err != nil {
-			p.logger.Printf("inbox: AI prioritize error: %v", err)
-		}
-		resolved += aiResolved
-	}
-
-	p.progress(total, total, fmt.Sprintf("Done — %d created, %d resolved", created, resolved))
-
-	return created, resolved, nil
+	return nil
 }
 
 // loadContext loads thread or channel context for an inbox item.
@@ -519,7 +625,13 @@ func (p *Pipeline) aiPrioritizeNewItems(ctx context.Context, currentUserID strin
 			sb.WriteString(p.formatItemLine(item))
 		}
 
-		systemPrompt := fmt.Sprintf(promptTmpl, role, sb.String())
+		// Prepend user preferences (learned mute/boost rules) to the items block.
+		userPrefs, _ := buildUserPreferencesBlock(p.db, batch)
+		itemsBlock := sb.String()
+		if userPrefs != "" {
+			itemsBlock = userPrefs + "\n" + itemsBlock
+		}
+		systemPrompt := fmt.Sprintf(promptTmpl, role, itemsBlock)
 		response, usage, _, err := p.generator.Generate(digest.WithSource(ctx, "inbox.prioritize"), systemPrompt, "Prioritize these items.", "")
 		if err != nil {
 			p.logger.Printf("inbox: AI batch %d error: %v", i+1, err)
