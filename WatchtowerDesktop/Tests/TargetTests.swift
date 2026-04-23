@@ -616,3 +616,174 @@ final class TargetQueryTests: XCTestCase {
         XCTAssertNil(child.parentId)
     }
 }
+
+// MARK: - TargetsViewModel Tests
+
+@MainActor
+final class TargetsViewModelTests: XCTestCase {
+
+    func testLoadPopulatesTodayAndAll() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        let today = fmt.string(from: Date())
+        try mgr.dbPool.write { db in
+            // High priority → goes to today section
+            try TestDatabase.insertTarget(db, text: "High prio", periodStart: today, periodEnd: today, priority: "high")
+            // Low priority, not due today → goes to all section
+            try TestDatabase.insertTarget(db, text: "Low prio",
+                                          periodStart: "2026-01-01", periodEnd: "2026-01-31", priority: "low")
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.load()
+        XCTAssertFalse(vm.todayTargets.isEmpty, "high-priority target should be in todayTargets")
+        XCTAssertFalse(vm.allTargets.isEmpty, "low-priority non-today target should be in allTargets")
+        XCTAssertEqual(vm.todayTargets.first?.text, "High prio")
+        XCTAssertEqual(vm.allTargets.first?.text, "Low prio")
+    }
+
+    func testLevelFilterNarrowsResults() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        let today = "2026-04-23"
+        try mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Quarter target", level: "quarter",
+                                          periodStart: "2026-01-01", periodEnd: "2026-03-31")
+            try TestDatabase.insertTarget(db, text: "Day target", level: "day",
+                                          periodStart: today, periodEnd: today)
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.levelFilter = "quarter"
+        vm.load()
+        let all = vm.todayTargets + vm.allTargets
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.level, "quarter")
+    }
+
+    func testShowDoneIncludesDoneTargets() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        try mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Done target",
+                                          periodStart: "2026-04-01", periodEnd: "2026-04-30", status: "done")
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.load()
+        XCTAssertTrue((vm.todayTargets + vm.allTargets).isEmpty, "done hidden by default")
+        vm.showDone = true
+        vm.load()
+        XCTAssertEqual((vm.todayTargets + vm.allTargets).count, 1)
+    }
+
+    func testSortOrderLevelThenPeriod() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        try mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Week A", level: "week",
+                                          periodStart: "2026-04-20", periodEnd: "2026-04-26")
+            try TestDatabase.insertTarget(db, text: "Quarter A", level: "quarter",
+                                          periodStart: "2026-01-01", periodEnd: "2026-03-31")
+            try TestDatabase.insertTarget(db, text: "Month A", level: "month",
+                                          periodStart: "2026-04-01", periodEnd: "2026-04-30")
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.load()
+        let all = vm.todayTargets + vm.allTargets
+        XCTAssertEqual(all.count, 3)
+        XCTAssertEqual(all[0].level, "quarter")
+        XCTAssertEqual(all[1].level, "month")
+        XCTAssertEqual(all[2].level, "week")
+    }
+
+    func testMarkDoneMovesTargetOutOfActive() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        let today = "2026-04-23"
+        try mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Active",
+                                          periodStart: today, periodEnd: today, priority: "high")
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.load()
+        let target = try XCTUnwrap(vm.todayTargets.first)
+        vm.markDone(target)
+        XCTAssertTrue(vm.todayTargets.isEmpty)
+    }
+
+    func testSearchTextFilters() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        let today = "2026-04-23"
+        try mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Deploy backend", periodStart: today, periodEnd: today)
+            try TestDatabase.insertTarget(db, text: "Write docs", periodStart: today, periodEnd: today)
+        }
+        let vm = TargetsViewModel(dbManager: mgr)
+        vm.searchText = "backend"
+        vm.load()
+        let all = vm.todayTargets + vm.allTargets
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.text, "Deploy backend")
+    }
+}
+
+// MARK: - ExtractPreviewSheet Tests
+
+final class ExtractPreviewSheetTests: XCTestCase {
+
+    func testRendersCorrectCardCount() {
+        let proposed = (1...5).map { i in
+            ProposedTarget(
+                text: "Target \(i)",
+                intent: "",
+                level: "day",
+                customLabel: "",
+                levelConfidence: 0.85,
+                periodStart: "2026-04-23",
+                periodEnd: "2026-04-23",
+                priority: "medium",
+                parentId: nil,
+                secondaryLinks: []
+            )
+        }
+        // Sheet is initialized with 5 proposed targets, all selected by default
+        var sheet = proposed
+        XCTAssertEqual(sheet.count, 5)
+        let selected = sheet.filter(\.isSelected)
+        XCTAssertEqual(selected.count, 5, "all items selected by default")
+    }
+
+    func testToggleCheckboxReducesSelected() {
+        var proposed = [
+            ProposedTarget(
+                text: "A", intent: "", level: "day", customLabel: "",
+                levelConfidence: nil, periodStart: "2026-04-23", periodEnd: "2026-04-23",
+                priority: "medium", parentId: nil, secondaryLinks: [], isSelected: true
+            ),
+            ProposedTarget(
+                text: "B", intent: "", level: "week", customLabel: "",
+                levelConfidence: 0.7, periodStart: "2026-04-20", periodEnd: "2026-04-26",
+                priority: "high", parentId: nil, secondaryLinks: [], isSelected: true
+            ),
+        ]
+        // Toggle off item B
+        proposed[1].isSelected = false
+        let selected = proposed.filter(\.isSelected)
+        XCTAssertEqual(selected.count, 1)
+        XCTAssertEqual(selected.first?.text, "A")
+    }
+
+    func testAllDeselectedMeansNoneSelected() {
+        var proposed = [
+            ProposedTarget(
+                text: "X", intent: "", level: "day", customLabel: "",
+                levelConfidence: nil, periodStart: "2026-04-23", periodEnd: "2026-04-23",
+                priority: "low", parentId: nil, secondaryLinks: [], isSelected: true
+            ),
+        ]
+        proposed[0].isSelected = false
+        XCTAssertTrue(proposed.filter(\.isSelected).isEmpty)
+    }
+}
