@@ -124,6 +124,16 @@ struct SplashView: View {
 struct MainNavigationView: View {
     @Environment(AppState.self) private var appState
     @State private var showMenu = true
+    @State private var googleAuth = GoogleAuthService()
+    @State private var dismissedAuthTimestamp: String = UserDefaults.standard.string(forKey: "dismissedCalendarAuthAt") ?? ""
+
+    /// Show the reconnect popup when the daemon has flagged the calendar auth as broken
+    /// AND the user hasn't already dismissed this specific revocation.
+    private var shouldShowReconnectAlert: Bool {
+        guard let auth = appState.calendarViewModel?.authState else { return false }
+        guard auth.status == "revoked" else { return false }
+        return auth.updatedAt != dismissedAuthTimestamp
+    }
 
     private var sidebarToggleRow: some View {
         HStack(spacing: 8) {
@@ -180,6 +190,44 @@ struct MainNavigationView: View {
             StatusBarView()
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .alert(
+            "Google Calendar disconnected",
+            isPresented: Binding(
+                get: { shouldShowReconnectAlert },
+                set: { newValue in
+                    if !newValue, let auth = appState.calendarViewModel?.authState {
+                        dismissedAuthTimestamp = auth.updatedAt
+                        UserDefaults.standard.set(auth.updatedAt, forKey: "dismissedCalendarAuthAt")
+                    }
+                }
+            )
+        ) {
+            Button("Reconnect") {
+                appState.selectedDestination = .calendar
+                reconnectAndRestartDaemon()
+            }
+            Button("Later", role: .cancel) {}
+        } message: {
+            Text("Your Google authorization expired or was revoked. Reconnect to resume calendar sync.")
+        }
+    }
+
+    /// Runs the OAuth flow and, on success, restarts the daemon so the in-memory
+    /// refresh token is replaced with the freshly saved one.
+    private func reconnectAndRestartDaemon() {
+        googleAuth.connect()
+        Task {
+            while googleAuth.isAuthenticating {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard googleAuth.isConnected else { return }
+            let daemon = DaemonManager()
+            daemon.resolvePathIfNeeded()
+            guard DaemonManager.checkDaemonRunning() else { return }
+            await daemon.stopDaemon()
+            try? await Task.sleep(for: .milliseconds(500))
+            await daemon.startDaemon()
+        }
     }
 
     @ViewBuilder
@@ -265,10 +313,9 @@ struct OnboardingView: View {
     // Claude health check
     @State private var claudeHealthPassed = false
     @State private var claudeHealthError: String?
-    @State private var hasClaudeCLI = Constants.findClaudePath() != nil
+    @State private var hasClaudeCLI = Constants.findCLIPath() != nil
 
     private var cliPath: String? { Constants.findCLIPath() }
-    private var claudePath: String? { Constants.findClaudePath() }
     private var hasCLI: Bool { cliPath != nil }
 
     var body: some View {
@@ -367,7 +414,7 @@ struct OnboardingView: View {
         }
         .onAppear {
             // Re-check hasClaudeCLI in case user installed it while on another step
-            hasClaudeCLI = Constants.findClaudePath() != nil
+            hasClaudeCLI = Constants.findCLIPath() != nil
             if hasClaudeCLI && claudeHealthPassed && !isRunning {
                 // Already verified — auto-advance to chat
                 appState.onboarding.goTo(.chat)
@@ -644,14 +691,13 @@ struct OnboardingView: View {
             }
         }
 
-        // Re-check auto-detection
-        if let found = Constants.findClaudePath() {
-            claudeCheckResult = "Found: \(found)"
+        // Re-check auto-detection via watchtower CLI
+        if Constants.findCLIPath() != nil {
+            claudeCheckResult = "Watchtower CLI found"
             hasClaudeCLI = true
-            // Don't reset isRunning — health check continues the running state
             runClaudeHealthCheck()
         } else {
-            claudeCheckResult = "Claude CLI not found. Install it and try again."
+            claudeCheckResult = "Watchtower CLI not found."
             isRunning = false
         }
     }
@@ -1011,107 +1057,32 @@ struct OnboardingView: View {
     }
 
     private func runClaudeHealthCheck() {
-        guard let claudePath = Constants.findClaudePath() else {
-            claudeHealthError = "Claude CLI not found.\nInstall Claude Code and press Retry."
-            return
-        }
-
         isRunning = true
         claudeHealthError = nil
         claudeHealthPassed = false
 
-        let model = settingsModelPreset.aiModel
-
-        Task.detached {
-            let result = await Self.runClaudeCLICheck(claudePath: claudePath, model: model)
-            await MainActor.run {
-                self.isRunning = false
-                let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if result.exitCode == 0 && !stdout.isEmpty {
-                    self.claudeHealthPassed = true
+        Task {
+            do {
+                let result = try await WatchtowerAIService.testConnection()
+                isRunning = false
+                if result.ok {
+                    claudeHealthPassed = true
+                    hasClaudeCLI = true
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(1.5))
-                        if self.appState.onboarding.currentStep == .claude {
-                            self.appState.onboarding.goTo(.chat)
-                            self.runSync()
+                        if appState.onboarding.currentStep == .claude {
+                            appState.onboarding.goTo(.chat)
+                            runSync()
                         }
                     }
                 } else {
-                    self.claudeHealthError = Self.diagnoseClaudeError(
-                        stderr: stderr, exitCode: result.exitCode
-                    )
+                    claudeHealthError = "AI provider check failed."
                 }
+            } catch {
+                isRunning = false
+                claudeHealthError = error.localizedDescription
             }
         }
-    }
-
-    private static func runClaudeCLICheck(claudePath: String, model: String) async -> CLIResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: claudePath)
-        process.currentDirectoryURL = Constants.processWorkingDirectory()
-        process.arguments = [
-            "-p", "respond with: OK",
-            "--output-format", "text",
-            "--model", model
-        ]
-
-        // Use shared resolved environment (caches login shell PATH)
-        process.environment = Constants.resolvedEnvironment()
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return CLIResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
-        }
-
-        process.waitUntilExit()
-
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        return CLIResult(
-            exitCode: process.terminationStatus,
-            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-            stderr: String(data: stderrData, encoding: .utf8) ?? ""
-        )
-    }
-
-    private static func diagnoseClaudeError(stderr: String, exitCode: Int32) -> String {
-        let lower = stderr.lowercased()
-
-        let authKeywords = ["not authenticated", "unauthorized", "api key", "log in", "login"]
-        if authKeywords.contains(where: { lower.contains($0) }) {
-            return "Claude is not authenticated.\n\nOpen Terminal and run: claude\nComplete the login, then press Retry."
-        }
-
-        let modelAccessKeywords = ["access", "available", "permission", "not found"]
-        if lower.contains("model") && modelAccessKeywords.contains(where: { lower.contains($0) }) {
-            return "The selected model is not available for your account.\n\n"
-                + "Go back to Settings and try a different AI model (e.g. \"Fast\" for Haiku)."
-        }
-
-        if lower.contains("rate limit") || lower.contains("overloaded") || lower.contains("529") {
-            return "Claude API is temporarily overloaded.\nWait a moment and press Retry."
-        }
-
-        let networkKeywords = ["network", "connection", "timed out", "resolve"]
-        if networkKeywords.contains(where: { lower.contains($0) }) {
-            return "Network error.\nCheck your internet connection and press Retry."
-        }
-
-        if !stderr.isEmpty {
-            let truncated = stderr.count > 500 ? String(stderr.prefix(500)) + "..." : stderr
-            return "Claude error (exit code \(exitCode)):\n\(truncated)"
-        }
-
-        return "Claude failed (exit code \(exitCode)).\nMake sure Claude Code is installed and authenticated."
     }
 
     // MARK: - Chat Step (questionnaire + AI conversation, sync runs in background)
@@ -1129,7 +1100,7 @@ struct OnboardingView: View {
             let configSvc = ConfigService()
             let language = configSvc.digestLanguage ?? settingsLanguage
             let db = appState.databaseManager
-            onboardingVM = OnboardingChatViewModel(claudeService: ClaudeService(), language: language, dbManager: db)
+            onboardingVM = OnboardingChatViewModel(language: language, dbManager: db)
             if !isRunning && !appState.onboarding.syncCompleted {
                 runSync()
             }
@@ -1280,7 +1251,7 @@ struct OnboardingView: View {
             let configSvc = ConfigService()
             let language = configSvc.digestLanguage ?? settingsLanguage
             if let db = appState.databaseManager {
-                onboardingVM = OnboardingChatViewModel(claudeService: ClaudeService(), language: language, dbManager: db)
+                onboardingVM = OnboardingChatViewModel(language: language, dbManager: db)
             } else {
                 // DB not available — need sync first, go back to chat
                 appState.onboarding.goTo(.chat)

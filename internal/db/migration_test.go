@@ -90,7 +90,7 @@ func TestMigrationFromV20_CreatesChains(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// Verify chains/chain_refs tables are DROPPED by v43
 	var n string
@@ -133,7 +133,7 @@ func TestMigrationFromV21_ChainsAndInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// After v43: chains/chain_refs dropped, user_interactions should exist
 	var n string
@@ -166,7 +166,7 @@ func TestMigrationFromV22_UserInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// Insert and query to verify table structure
 	err = db2.UpsertUserInteractions([]UserInteraction{
@@ -205,7 +205,7 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// v45 creates new tracks table — should be usable
 	_, err = db2.UpsertTrack(Track{Text: "new track", Priority: "high"})
@@ -236,7 +236,7 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// After v43: chains table should not exist
 	var n string
@@ -269,7 +269,7 @@ func TestMigrationIdempotent_V23HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// Data should survive
 	interactions, err := db2.GetUserInteractions("U1", 1000, 2000)
@@ -284,17 +284,17 @@ func TestUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 }
 
-// TestMigrationV65_DayPlans verifies that migration v65 creates day_plans and
+// TestMigrationV66_DayPlans verifies that migration v66 creates day_plans and
 // day_plan_items tables with the expected columns, constraints, and indexes.
-func TestMigrationV65_DayPlans(t *testing.T) {
+func TestMigrationV66_DayPlans(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "watchtower.db")
 
-	// Open a fresh DB (runs bootstrap to v65), then downgrade to v64, drop the
-	// new tables, and reopen so that the incremental v65 migration runs.
+	// Open a fresh DB (runs bootstrap to v66), then downgrade to v65, drop the
+	// new tables, and reopen so that the incremental v66 migration runs.
 	db1, err := Open(dbPath)
 	require.NoError(t, err)
 
@@ -311,18 +311,18 @@ func TestMigrationV65_DayPlans(t *testing.T) {
 	_, err = db1.Exec("DROP INDEX IF EXISTS idx_day_plan_items_source")
 	require.NoError(t, err)
 
-	setUserVersion(t, db1, 64)
+	setUserVersion(t, db1, 65)
 	db1.Close()
 
-	// Reopen — migration v65 should run.
+	// Reopen — migration v66 should run.
 	db2, err := Open(dbPath)
 	require.NoError(t, err)
 	defer db2.Close()
 
-	// 1. user_version must be >= 65.
+	// 1. user_version must be >= 66.
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, v, 65, "expected user_version >= 65 after migration")
+	assert.GreaterOrEqual(t, v, 66, "expected user_version >= 66 after migration")
 
 	// 2. day_plans must have all expected columns.
 	wantPlanCols := []string{
@@ -620,7 +620,7 @@ PRAGMA user_version = 1;
 	// Verify schema version is now 23
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 65, v)
+	assert.Equal(t, 66, v)
 
 	// Verify data survived all migrations
 	var wsName string

@@ -319,16 +319,7 @@ struct TrainingView: View {
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = ["tune", "--apply"]
 
-            var env = Constants.resolvedEnvironment()
-            // Ensure claude's directory is in PATH (nvm may not be in login-only shell)
-            if let claudePath = Constants.findClaudePath() {
-                let claudeDir = (claudePath as NSString).deletingLastPathComponent
-                let currentPath = env["PATH"] ?? ""
-                if !currentPath.contains(claudeDir) {
-                    env["PATH"] = claudeDir + ":" + currentPath
-                }
-            }
-            process.environment = env
+            process.environment = Constants.resolvedEnvironment()
 
             let stdout = Pipe()
             let stderr = Pipe()
@@ -710,15 +701,7 @@ struct ManualTuneSheet: View {
             process.executableURL = URL(fileURLWithPath: cliPath)
             process.arguments = ["tune", promptID, "--instructions", userInstructions, "--apply"]
 
-            var env = Constants.resolvedEnvironment()
-            if let claudePath = Constants.findClaudePath() {
-                let claudeDir = (claudePath as NSString).deletingLastPathComponent
-                let currentPath = env["PATH"] ?? ""
-                if !currentPath.contains(claudeDir) {
-                    env["PATH"] = claudeDir + ":" + currentPath
-                }
-            }
-            process.environment = env
+            process.environment = Constants.resolvedEnvironment()
 
             let stdout = Pipe()
             let stderr = Pipe()

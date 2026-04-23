@@ -3,6 +3,7 @@ package calendar
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -50,6 +51,10 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	// Sync calendar list first.
 	calInfos, err := s.client.FetchCalendars(ctx)
 	if err != nil {
+		s.recordAuthResult(err)
+		if errors.Is(err, ErrAuthRevoked) {
+			return 0, err
+		}
 		s.logger.Printf("calendar: failed to fetch calendar list: %v", err)
 		// Continue with selected calendars from config if available.
 	} else {
@@ -85,8 +90,12 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 
 	events, err := s.client.FetchEvents(ctx, calendarIDs, timeMin, timeMax)
 	if err != nil {
+		s.recordAuthResult(err)
 		return 0, fmt.Errorf("fetching calendar events: %w", err)
 	}
+
+	// Successful fetch — clear any previously recorded auth failure.
+	s.recordAuthResult(nil)
 
 	// Resolve attendee emails to Slack user IDs.
 	events = s.ResolveAttendees(events)
@@ -139,6 +148,27 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	}
 
 	return count, nil
+}
+
+// recordAuthResult persists the calendar auth state. Pass err=nil to mark auth as healthy.
+// Errors writing to the DB are logged but not returned — auth state is best-effort telemetry.
+func (s *Syncer) recordAuthResult(err error) {
+	if s.db == nil {
+		return
+	}
+	if err == nil {
+		if dbErr := s.db.SetCalendarAuthState("ok", ""); dbErr != nil {
+			s.logger.Printf("calendar: failed to clear auth state: %v", dbErr)
+		}
+		return
+	}
+	status := "error"
+	if errors.Is(err, ErrAuthRevoked) {
+		status = "revoked"
+	}
+	if dbErr := s.db.SetCalendarAuthState(status, err.Error()); dbErr != nil {
+		s.logger.Printf("calendar: failed to record auth state: %v", dbErr)
+	}
 }
 
 // ResolveAttendees matches attendee emails to Slack user_ids via the users table

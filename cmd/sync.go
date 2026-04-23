@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -329,6 +330,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 				calClient, err := calendar.NewClient(ctx, calToken.RefreshToken, googleCfg)
 				if err != nil {
 					logger.Printf("calendar: failed to create client: %v", err)
+					status := "error"
+					if errors.Is(err, calendar.ErrAuthRevoked) {
+						status = "revoked"
+					}
+					if dbErr := database.SetCalendarAuthState(status, err.Error()); dbErr != nil {
+						logger.Printf("calendar: failed to record auth state: %v", dbErr)
+					}
 				} else {
 					d.SetCalendarSyncer(calendar.NewSyncer(calClient, database, cfg, logger))
 				}

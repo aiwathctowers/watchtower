@@ -98,4 +98,26 @@ enum CalendarQueries {
             sql: "SELECT COUNT(*) FROM calendar_calendars"
         ) ?? 0
     }
+
+    // MARK: - Auth State
+
+    struct AuthState: Equatable {
+        let status: String   // "ok" | "revoked" | "error"
+        let error: String
+        let updatedAt: String
+    }
+
+    /// Returns the current calendar auth state, or nil if the table is missing (older schema).
+    static func fetchAuthState(_ db: Database) throws -> AuthState? {
+        let row = try Row.fetchOne(
+            db,
+            sql: "SELECT status, error, updated_at FROM calendar_auth_state WHERE id = 1"
+        )
+        guard let row else { return nil }
+        return AuthState(
+            status: row["status"] ?? "ok",
+            error: row["error"] ?? "",
+            updatedAt: row["updated_at"] ?? ""
+        )
+    }
 }
