@@ -407,15 +407,24 @@ final class TargetQueryTests: XCTestCase {
 
     func testFetchCountsReturnsCorrectStructure() throws {
         let db = try TestDatabase.create()
-        let yesterday = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: Date()))
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        let todayStr = fmt.string(from: Date())
-        let yesterdayStr = fmt.string(from: yesterday)
+        let now = Date()
+        let yesterday = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: now))
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+        let yesterdayStr = dateFmt.string(from: yesterday)
 
-        // Use mid-evening datetime for DueToday — after now but still today and before upper bound
-        let dueTodayStr = todayStr + "T22:00"
+        // DueToday must be strictly after `now` and strictly before midnight.
+        // Pick 30 minutes from now, but if that crosses midnight, fall back to 23:59 today.
+        let futureToday = now.addingTimeInterval(30 * 60)
+        let sameDay = Calendar.current.isDate(futureToday, inSameDayAs: now)
+        let dueTodayDate: Date = sameDay
+            ? futureToday
+            : try XCTUnwrap(Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: now))
+        let dtFmt = DateFormatter()
+        dtFmt.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        dtFmt.locale = Locale(identifier: "en_US_POSIX")
+        let dueTodayStr = dtFmt.string(from: dueTodayDate)
         try db.write { db in
             try TestDatabase.insertTarget(db, text: "Active1", status: "todo", priority: "medium")
             try TestDatabase.insertTarget(db, text: "Active2", status: "in_progress", priority: "high")

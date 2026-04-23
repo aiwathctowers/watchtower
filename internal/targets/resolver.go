@@ -3,6 +3,8 @@ package targets
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -186,13 +188,16 @@ func (s *SlackResolver) Resolve(ctx context.Context, m URLMatch) (*Enrichment, e
 		m.ChannelID, m.TS,
 	).Scan(&row.Text, &row.UserID, &row.ChannelID, &row.ThreadTS)
 
-	if err != nil {
-		// Not found — annotate gracefully; nil error is intentional (non-fatal enrichment miss).
-		return &Enrichment{ //nolint:nilerr
+	if errors.Is(err, sql.ErrNoRows) {
+		// Not found — annotate gracefully.
+		return &Enrichment{
 			Ref:    ref,
 			Body:   "[slack url not in local DB]",
 			Source: "local",
 		}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying messages: %w", err)
 	}
 
 	// Resolve display name.
