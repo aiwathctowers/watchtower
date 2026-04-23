@@ -148,4 +148,60 @@ enum InboxQueries {
         try linkTask(db, inboxID: item.id, taskID: Int(taskID))
         return taskID
     }
+
+    // MARK: - Pinned / Feed / Seen
+
+    /// Returns pinned pending items that are not archived, ordered by priority then created_at DESC.
+    static func fetchPinned(_ db: Database) throws -> [InboxItem] {
+        try InboxItem.fetchAll(db, sql: """
+            SELECT * FROM inbox_items
+            WHERE pinned = 1
+              AND status = 'pending'
+              AND archived_at IS NULL
+            ORDER BY
+              CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 1 END,
+              created_at DESC
+            """)
+    }
+
+    /// Returns non-pinned, non-archived, active items ordered by created_at DESC with pagination.
+    static func fetchFeed(_ db: Database, limit: Int, offset: Int) throws -> [InboxItem] {
+        try InboxItem.fetchAll(db, sql: """
+            SELECT * FROM inbox_items
+            WHERE pinned = 0
+              AND archived_at IS NULL
+              AND status NOT IN ('resolved', 'dismissed', 'snoozed')
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """, arguments: [limit, offset])
+    }
+
+    /// Returns true if any pinned item has high priority and is pending.
+    static func hasHighPriorityPinned(_ db: Database) throws -> Bool {
+        let count = try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM inbox_items
+            WHERE pinned = 1
+              AND priority = 'high'
+              AND status = 'pending'
+            """) ?? 0
+        return count > 0
+    }
+
+    /// Reactive observation of the pinned list (same filter as fetchPinned).
+    static func observePinned() -> ValueObservation<ValueReducers.Fetch<[InboxItem]>> {
+        ValueObservation.tracking { db in
+            try InboxQueries.fetchPinned(db)
+        }
+    }
+
+    /// Sets read_at to now for the given item only if it has not been seen before.
+    static func markSeen(_ db: Database, itemID: Int64) throws {
+        try db.execute(
+            sql: """
+                UPDATE inbox_items SET read_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                WHERE id = ? AND (read_at IS NULL OR read_at = '')
+                """,
+            arguments: [itemID]
+        )
+    }
 }
