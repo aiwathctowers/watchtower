@@ -32,6 +32,7 @@ const (
 	TasksGenerate      = "tasks.generate"
 	TasksUpdate        = "tasks.update"
 	MeetingPrep        = "meeting.prep"
+	DayPlanGenerate    = "day_plan.generate"
 )
 
 // Store loads, caches, and persists prompt templates.

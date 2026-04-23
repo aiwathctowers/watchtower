@@ -24,6 +24,7 @@ var Defaults = map[string]string{
 	TasksGenerate:      defaultTasksGenerate,
 	TasksUpdate:        defaultTasksUpdate,
 	MeetingPrep:        defaultMeetingPrep,
+	DayPlanGenerate:    defaultDayPlanGenerate,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -46,6 +47,7 @@ var AllIDs = []string{
 	TasksGenerate,
 	TasksUpdate,
 	MeetingPrep,
+	DayPlanGenerate,
 }
 
 // DefaultVersions tracks the current version of each built-in prompt template.
@@ -71,6 +73,7 @@ var DefaultVersions = map[string]int{
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
 	TasksUpdate:        1, // v1: AI task update from user instruction
 	MeetingPrep:        3, // v3: Jira context for attendees (workload, shared issues)
+	DayPlanGenerate:    1, // v1: initial day plan template
 }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
@@ -93,6 +96,7 @@ var Descriptions = map[string]string{
 	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
 	TasksUpdate:        "Task update — AI-powered task modification from user instruction",
 	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
+	DayPlanGenerate:    "Day plan generation — AI-powered daily schedule with timeblocks, backlog, and calendar conflict avoidance",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
