@@ -52,12 +52,14 @@ final class InboxLearnedRulesViewModelTests: XCTestCase {
         await vm.addRule(ruleType: "source_mute", scopeKey: "sender:U9", weight: -0.5)
 
         // Verify DB row has source='user_rule'
-        let rows: [Row] = try await pool.read { db in
-            return try Row.fetchAll(db, sql: "SELECT * FROM inbox_learned_rules WHERE scope_key = 'sender:U9'")
+        let rows = try await pool.read { db -> [Row] in
+            try Row.fetchAll(db, sql: "SELECT * FROM inbox_learned_rules WHERE scope_key = 'sender:U9'")
         }
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0]["source"] as String, "user_rule")
-        XCTAssertEqual(rows[0]["weight"] as Double, -0.5)
+        let sourceValue: String = rows[0]["source"]
+        XCTAssertEqual(sourceValue, "user_rule")
+        let weightValue: Double = rows[0]["weight"]
+        XCTAssertEqual(weightValue, -0.5)
 
         // ViewModel should reflect the new mute
         XCTAssertEqual(vm.mutes.count, 1)
@@ -80,7 +82,7 @@ final class InboxLearnedRulesViewModelTests: XCTestCase {
         await vm.remove(rule)
 
         // Row should be deleted
-        let count = try await pool.read { db in
+        let count = try await pool.read { db -> Int in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inbox_learned_rules") ?? 0
         }
         XCTAssertEqual(count, 0)
