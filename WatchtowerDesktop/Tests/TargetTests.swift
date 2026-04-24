@@ -736,6 +736,21 @@ final class TargetsViewModelTests: XCTestCase {
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.text, "Deploy backend")
     }
+
+    func testDeleteTargetRemovesRow() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        try mgr.dbPool.write { try TestDatabase.insertTarget($0) }
+
+        let vm = TargetsViewModel(dbManager: mgr)
+        let target = try XCTUnwrap(mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) })
+
+        vm.deleteTarget(target)
+
+        let gone = try mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) }
+        XCTAssertNil(gone)
+        XCTAssertNil(vm.errorMessage)
+    }
 }
 
 // MARK: - ExtractPreviewSheet Tests
