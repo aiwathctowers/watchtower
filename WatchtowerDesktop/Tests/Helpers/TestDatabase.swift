@@ -473,14 +473,21 @@ enum TestDatabase {
         sender_user_id  TEXT NOT NULL,
         trigger_type    TEXT NOT NULL CHECK(trigger_type IN ('mention','dm')),
         snippet         TEXT NOT NULL DEFAULT '',
+        context         TEXT NOT NULL DEFAULT '',
+        raw_text        TEXT NOT NULL DEFAULT '',
         permalink       TEXT NOT NULL DEFAULT '',
         status          TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resolved','dismissed','snoozed')),
         priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
         ai_reason       TEXT NOT NULL DEFAULT '',
         resolved_reason TEXT NOT NULL DEFAULT '',
         snooze_until    TEXT NOT NULL DEFAULT '',
+        waiting_user_ids TEXT NOT NULL DEFAULT '',
         target_id       INTEGER,
         read_at         TEXT,
+        item_class      TEXT NOT NULL DEFAULT 'ambient',
+        pinned          INTEGER NOT NULL DEFAULT 0,
+        archived_at     TEXT,
+        archive_reason  TEXT NOT NULL DEFAULT '',
         created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         UNIQUE(channel_id, message_ts)
@@ -490,6 +497,27 @@ enum TestDatabase {
     CREATE INDEX IF NOT EXISTS idx_inbox_updated ON inbox_items(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_inbox_sender ON inbox_items(sender_user_id);
     CREATE INDEX IF NOT EXISTS idx_inbox_snooze ON inbox_items(snooze_until);
+
+    CREATE TABLE IF NOT EXISTS inbox_learned_rules (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_type      TEXT NOT NULL CHECK(rule_type IN ('source_mute','source_boost','trigger_downgrade','trigger_boost')),
+        scope_key      TEXT NOT NULL,
+        weight         REAL NOT NULL,
+        source         TEXT NOT NULL CHECK(source IN ('implicit','explicit_feedback','user_rule')),
+        evidence_count INTEGER NOT NULL DEFAULT 0,
+        last_updated   TEXT NOT NULL,
+        UNIQUE(rule_type, scope_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_learned_rules_scope ON inbox_learned_rules(rule_type, scope_key);
+
+    CREATE TABLE IF NOT EXISTS inbox_feedback (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        inbox_item_id INTEGER NOT NULL,
+        rating        INTEGER NOT NULL CHECK(rating IN (-1,1)),
+        reason        TEXT DEFAULT '',
+        created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_feedback_item ON inbox_feedback(inbox_item_id);
 
     CREATE TABLE IF NOT EXISTS calendar_calendars (
         id          TEXT PRIMARY KEY,
@@ -1022,6 +1050,44 @@ enum TestDatabase {
             """, arguments: [channelID, messageTS, threadTS, senderUserID,
                              triggerType, snippet, permalink, status, priority, aiReason,
                              resolvedReason, snoozeUntil, taskID, readAt])
+    }
+
+    // MARK: - Inbox Learned Rules Fixtures
+
+    static func insertLearnedRule(
+        _ db: Database,
+        scopeKey: String = "sender:U1",
+        weight: Double = -0.5,
+        source: String = "implicit",
+        evidenceCount: Int = 3,
+        lastUpdated: String = "2026-04-23T10:00:00Z",
+        ruleType: String = "source_mute"
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO inbox_learned_rules (rule_type, scope_key, weight, source, evidence_count, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+            arguments: [ruleType, scopeKey, weight, source, evidenceCount, lastUpdated]
+        )
+    }
+
+    // MARK: - Inbox Feedback Fixtures
+
+    static func insertFeedbackRecord(
+        _ db: Database,
+        inboxItemId: Int = 1,
+        rating: Int = 1,
+        reason: String = "useful",
+        createdAt: String = "2026-04-23T10:00:00Z"
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO inbox_feedback (inbox_item_id, rating, reason, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+            arguments: [inboxItemId, rating, reason, createdAt]
+        )
     }
 
     // MARK: - Calendar Fixtures

@@ -1,6 +1,15 @@
 import Foundation
 import GRDB
 
+// MARK: - ItemClass
+
+enum ItemClass: String, Codable, Equatable {
+    case actionable
+    case ambient
+}
+
+// MARK: - InboxItem
+
 struct InboxItem: FetchableRecord, Identifiable, Equatable {
     let id: Int
     let channelID: String
@@ -20,8 +29,18 @@ struct InboxItem: FetchableRecord, Identifiable, Equatable {
     let waitingUserIDs: String  // JSON array e.g. ["U123","U456"]
     let targetID: Int?          // nullable (renamed from task_id in migration v66)
     let readAt: String          // "" = unread
+    // New fields (v67)
+    let itemClassRaw: String    // column: item_class
+    let pinned: Bool            // column: pinned (INTEGER 0/1)
+    let archivedAt: Date?       // column: archived_at (nullable TEXT ISO8601)
+    let archiveReason: String   // column: archive_reason
     let createdAt: String
     let updatedAt: String
+
+    /// Typed item class derived from `item_class` column.
+    var itemClass: ItemClass {
+        ItemClass(rawValue: itemClassRaw) ?? .ambient
+    }
 
     init(row: Row) {
         id = row["id"]
@@ -42,6 +61,15 @@ struct InboxItem: FetchableRecord, Identifiable, Equatable {
         waitingUserIDs = row["waiting_user_ids"] ?? ""
         targetID = row["target_id"] as Int?
         readAt = row["read_at"] ?? ""
+        itemClassRaw = row["item_class"] ?? "ambient"
+        pinned = (row["pinned"] as Int? ?? 0) != 0
+        if let archivedAtStr = row["archived_at"] as String?, !archivedAtStr.isEmpty {
+            archivedAt = Self.iso8601WithFractional.date(from: archivedAtStr)
+                ?? Self.iso8601Standard.date(from: archivedAtStr)
+        } else {
+            archivedAt = nil
+        }
+        archiveReason = row["archive_reason"] ?? ""
         createdAt = row["created_at"] ?? ""
         updatedAt = row["updated_at"] ?? ""
     }

@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 67, v)
+	assert.Equal(t, 68, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -533,7 +533,7 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 67, v)
+	assert.Equal(t, 68, v)
 
 	// v45 drops old tracks and recreates with hybrid v2 schema.
 	// Verify new tracks table exists with v2 columns.
@@ -581,4 +581,217 @@ func TestNullableFields(t *testing.T) {
 	err = db.QueryRow("SELECT dm_user_id FROM channels WHERE id = 'C2'").Scan(&dmUserID)
 	require.NoError(t, err)
 	assert.False(t, dmUserID.Valid)
+}
+
+// tableColumns returns a set of column names for a table.
+func tableColumns(t *testing.T, database *DB, table string) map[string]bool {
+	t.Helper()
+	rows, err := database.Query("PRAGMA table_info(" + table + ")")
+	require.NoError(t, err)
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		require.NoError(t, rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk))
+		cols[name] = true
+	}
+	require.NoError(t, rows.Err())
+	return cols
+}
+
+// requireCol asserts that a column exists in the column set returned by tableColumns.
+func requireCol(t *testing.T, cols map[string]bool, col string) {
+	t.Helper()
+	if !cols[col] {
+		t.Errorf("expected column %q to exist", col)
+	}
+}
+
+// tableExists checks whether a table exists in the database.
+func tableExists(t *testing.T, database *DB, table string) bool {
+	t.Helper()
+	var cnt int
+	err := database.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&cnt)
+	require.NoError(t, err)
+	return cnt > 0
+}
+
+func TestMigration_v67_InboxPulse(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	cols := tableColumns(t, database, "inbox_items")
+	requireCol(t, cols, "item_class")
+	requireCol(t, cols, "pinned")
+	requireCol(t, cols, "archived_at")
+	requireCol(t, cols, "archive_reason")
+
+	if !tableExists(t, database, "inbox_learned_rules") {
+		t.Error("inbox_learned_rules missing")
+	}
+	if !tableExists(t, database, "inbox_feedback") {
+		t.Error("inbox_feedback missing")
+	}
+
+	var ver int
+	if err := database.QueryRow("PRAGMA user_version").Scan(&ver); err != nil {
+		t.Fatal(err)
+	}
+	if ver < 67 {
+		t.Errorf("want user_version >=67, got %d", ver)
+	}
+}
+
+func TestMigration_v67_ExistingData(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Open a DB (runs all migrations to latest).
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert rows using the new v67 columns to confirm they exist and constraints work.
+	_, err = database.Exec(`INSERT INTO inbox_items
+		(channel_id, message_ts, sender_user_id, trigger_type, item_class, created_at, updated_at)
+		VALUES ('C1','1000.000001','U1','reaction','ambient',
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	require.NoError(t, err, "reaction+ambient should insert cleanly")
+
+	_, err = database.Exec(`INSERT INTO inbox_items
+		(channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C1','1000.000002','U1','mention',
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	require.NoError(t, err, "mention should insert with default item_class")
+	database.Close()
+
+	// Reopen — verify version, data survival, and item_class values.
+	db2, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	var ver int
+	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&ver))
+	assert.GreaterOrEqual(t, ver, 67, "user_version should be >=67")
+
+	// Both rows should survive.
+	var rowCount int
+	require.NoError(t, db2.QueryRow("SELECT count(*) FROM inbox_items").Scan(&rowCount))
+	assert.Equal(t, 2, rowCount, "both rows should survive")
+
+	// item_class check: explicitly set 'ambient' is preserved; default is 'actionable'.
+	var classReaction, classMention string
+	require.NoError(t, db2.QueryRow(
+		"SELECT item_class FROM inbox_items WHERE trigger_type='reaction'").Scan(&classReaction))
+	assert.Equal(t, "ambient", classReaction, "explicitly set item_class should be preserved")
+
+	require.NoError(t, db2.QueryRow(
+		"SELECT item_class FROM inbox_items WHERE trigger_type='mention'").Scan(&classMention))
+	assert.Equal(t, "actionable", classMention, "default item_class should be actionable")
+
+	// New trigger_types should be insertable after migration.
+	_, err = db2.Exec(`INSERT INTO inbox_items
+		(channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C2','2000.000001','U2','jira_assigned',
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	assert.NoError(t, err, "jira_assigned trigger_type should be insertable post-v67")
+
+	_, err = db2.Exec(`INSERT INTO inbox_items
+		(channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C2','2000.000002','U2','calendar_invite',
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	assert.NoError(t, err, "calendar_invite trigger_type should be insertable post-v67")
+
+	_, err = db2.Exec(`INSERT INTO inbox_items
+		(channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C2','2000.000003','U2','decision_made',
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+		        strftime('%Y-%m-%dT%H:%M:%SZ','now'))`)
+	assert.NoError(t, err, "decision_made trigger_type should be insertable post-v67")
+}
+
+// TestMigration_v67_Backfill verifies the migration backfill logic by directly
+// creating a pre-v67 inbox_items table (without item_class) and running the v67 migration SQL.
+func TestMigration_v67_Backfill(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "backfill.db")
+
+	// Create a minimal pre-v67 DB by bypassing Open() — raw SQLite with just inbox_items.
+	rawDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	rawDB.SetMaxOpenConns(1)
+	defer rawDB.Close()
+
+	_, err = rawDB.Exec(`CREATE TABLE inbox_items (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		channel_id TEXT NOT NULL,
+		message_ts TEXT NOT NULL,
+		thread_ts TEXT NOT NULL DEFAULT '',
+		sender_user_id TEXT NOT NULL,
+		trigger_type TEXT NOT NULL CHECK(trigger_type IN ('mention','dm','thread_reply','reaction')),
+		snippet TEXT NOT NULL DEFAULT '',
+		context TEXT NOT NULL DEFAULT '',
+		raw_text TEXT NOT NULL DEFAULT '',
+		permalink TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		priority TEXT NOT NULL DEFAULT 'medium',
+		ai_reason TEXT NOT NULL DEFAULT '',
+		resolved_reason TEXT NOT NULL DEFAULT '',
+		snooze_until TEXT NOT NULL DEFAULT '',
+		waiting_user_ids TEXT NOT NULL DEFAULT '',
+		task_id INTEGER,
+		read_at TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE(channel_id, message_ts)
+	)`)
+	require.NoError(t, err)
+
+	// Seed pre-migration rows.
+	_, err = rawDB.Exec(`INSERT INTO inbox_items (channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C1','1.1','U1','reaction','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	_, err = rawDB.Exec(`INSERT INTO inbox_items (channel_id, message_ts, sender_user_id, trigger_type, created_at, updated_at)
+		VALUES ('C1','1.2','U1','mention','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	rawDB.Close()
+
+	// Now open via our DB.Open() — should run v67 migration (starting from version 0 minus the schema bootstrap path, which won't apply since tables exist).
+	// We set user_version=66 manually so the v67 migration block triggers.
+	rawDB2, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	rawDB2.SetMaxOpenConns(1)
+	_, err = rawDB2.Exec("PRAGMA user_version = 66")
+	require.NoError(t, err)
+	rawDB2.Close()
+
+	db2, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	var ver int
+	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&ver))
+	assert.Equal(t, 68, ver)
+
+	// Backfill: reaction → ambient, mention → actionable.
+	var classReaction, classMention string
+	require.NoError(t, db2.QueryRow(
+		"SELECT item_class FROM inbox_items WHERE trigger_type='reaction'").Scan(&classReaction))
+	assert.Equal(t, "ambient", classReaction, "migration should backfill reaction to ambient")
+
+	require.NoError(t, db2.QueryRow(
+		"SELECT item_class FROM inbox_items WHERE trigger_type='mention'").Scan(&classMention))
+	assert.Equal(t, "actionable", classMention, "migration should backfill mention to actionable")
 }

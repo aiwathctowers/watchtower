@@ -246,7 +246,7 @@ struct MainNavigationView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         case .inbox:
-            InboxListView()
+            InboxFeedView()
         case .calendar:
             CalendarEventsView()
         case .targets:

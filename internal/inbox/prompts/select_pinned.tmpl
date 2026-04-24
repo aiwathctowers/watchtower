@@ -1,0 +1,21 @@
+You are selecting the most critical items to pin at the top of the user's Inbox for the next ~2 hours.
+
+Current time: {{.Now}}
+User's current calendar window (next 2h): {{.CalendarContext}}
+
+{{.UserPreferences}}
+
+Candidate actionable items (select at most {{.MaxPinned}} IDs):
+{{range .Items}}
+- id={{.ID}} trigger={{.TriggerType}} priority={{.Priority}} sender={{.SenderUserID}} channel={{.ChannelID}}
+  snippet: {{.Snippet}}
+{{end}}
+
+Respond with JSON only:
+{"pinned_ids": [1, 5, 12], "reason": "short explanation"}
+
+Rules:
+- Select AT MOST {{.MaxPinned}} ids.
+- Honor USER PREFERENCES: never pin items from muted sources (weight ≤ -0.8).
+- Prefer items with upcoming deadlines / live meetings / boss-level senders / blocker labels.
+- If nothing is urgent, return {"pinned_ids": [], "reason": "nothing critical"}.

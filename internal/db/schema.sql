@@ -378,14 +378,19 @@ CREATE INDEX IF NOT EXISTS idx_target_links_source   ON target_links(source_targ
 CREATE INDEX IF NOT EXISTS idx_target_links_target   ON target_links(target_target_id);
 CREATE INDEX IF NOT EXISTS idx_target_links_external ON target_links(external_ref);
 
--- Inbox items — messages awaiting user response (@mentions, DMs)
+-- Inbox items — messages awaiting user response (@mentions, DMs, Jira, Calendar, etc.)
 CREATE TABLE IF NOT EXISTS inbox_items (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id      TEXT NOT NULL,
     message_ts      TEXT NOT NULL,
     thread_ts       TEXT NOT NULL DEFAULT '',
     sender_user_id  TEXT NOT NULL,
-    trigger_type    TEXT NOT NULL CHECK(trigger_type IN ('mention','dm','thread_reply','reaction')),
+    trigger_type    TEXT NOT NULL CHECK(trigger_type IN (
+        'mention','dm','thread_reply','reaction',
+        'jira_assigned','jira_comment_mention','jira_comment_watching','jira_status_change','jira_priority_change',
+        'calendar_invite','calendar_time_change','calendar_cancelled',
+        'decision_made','briefing_ready'
+    )),
     snippet         TEXT NOT NULL DEFAULT '',
     context         TEXT NOT NULL DEFAULT '',
     raw_text        TEXT NOT NULL DEFAULT '',
@@ -395,11 +400,15 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     ai_reason       TEXT NOT NULL DEFAULT '',
     resolved_reason TEXT NOT NULL DEFAULT '',
     snooze_until    TEXT NOT NULL DEFAULT '',
-    waiting_user_ids TEXT NOT NULL DEFAULT '',
+    waiting_user_ids TEXT NOT NULL DEFAULT '[]',
     target_id       INTEGER,
     read_at         TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    item_class      TEXT NOT NULL DEFAULT 'actionable' CHECK(item_class IN ('actionable','ambient')),
+    pinned          INTEGER NOT NULL DEFAULT 0,
+    archived_at     TEXT,
+    archive_reason  TEXT DEFAULT '' CHECK(archive_reason IN ('','resolved','seen_expired','stale','dismissed')),
     UNIQUE(channel_id, message_ts)
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status);
@@ -407,6 +416,32 @@ CREATE INDEX IF NOT EXISTS idx_inbox_items_priority ON inbox_items(priority);
 CREATE INDEX IF NOT EXISTS idx_inbox_items_updated ON inbox_items(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbox_items_sender ON inbox_items(sender_user_id);
 CREATE INDEX IF NOT EXISTS idx_inbox_items_snooze ON inbox_items(snooze_until);
+CREATE INDEX IF NOT EXISTS idx_inbox_items_class_status ON inbox_items(item_class, status);
+CREATE INDEX IF NOT EXISTS idx_inbox_items_pinned ON inbox_items(pinned) WHERE pinned = 1;
+CREATE INDEX IF NOT EXISTS idx_inbox_items_archived ON inbox_items(archived_at);
+
+-- Inbox learned rules — adaptive signal weights from implicit/explicit feedback
+CREATE TABLE IF NOT EXISTS inbox_learned_rules (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_type      TEXT NOT NULL CHECK(rule_type IN ('source_mute','source_boost','trigger_downgrade','trigger_boost')),
+    scope_key      TEXT NOT NULL,
+    weight         REAL NOT NULL,
+    source         TEXT NOT NULL CHECK(source IN ('implicit','explicit_feedback','user_rule')),
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    last_updated   TEXT NOT NULL,
+    UNIQUE(rule_type, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_learned_rules_scope ON inbox_learned_rules(rule_type, scope_key);
+
+-- Inbox feedback — per-item thumbs up/down with reason
+CREATE TABLE IF NOT EXISTS inbox_feedback (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    inbox_item_id INTEGER NOT NULL REFERENCES inbox_items(id) ON DELETE CASCADE,
+    rating        INTEGER NOT NULL CHECK(rating IN (-1,1)),
+    reason        TEXT DEFAULT '' CHECK(reason IN ('','source_noise','wrong_priority','wrong_class','never_show')),
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_feedback_item ON inbox_feedback(inbox_item_id);
 
 -- Feedback on AI-generated content (thumbs up/down)
 CREATE TABLE IF NOT EXISTS feedback (

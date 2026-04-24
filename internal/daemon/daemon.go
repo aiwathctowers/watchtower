@@ -261,34 +261,6 @@ func (d *Daemon) runSync(ctx context.Context) {
 		d.logger.Printf("sync had errors, but running pipelines on existing data")
 	}
 
-	// Inbox runs fully independently — it does not block any other pipeline.
-	go func() {
-		if d.inboxPipe == nil {
-			return
-		}
-		var inboxRunID int64
-		if d.db != nil {
-			inboxRunID, _ = d.db.CreatePipelineRun("inbox", "daemon", "auto")
-		}
-		created, resolved, err := d.inboxPipe.Run(ctx)
-		if err != nil {
-			d.logger.Printf("inbox error: %v", err)
-		} else if created > 0 || resolved > 0 {
-			d.logger.Printf("inbox: %d new, %d resolved", created, resolved)
-		}
-		if inboxRunID > 0 {
-			var errMsg string
-			if err != nil {
-				errMsg = err.Error()
-			}
-			inTok, outTok, cost, totalAPI := d.inboxPipe.AccumulatedUsage()
-			if inTok > 0 || outTok > 0 {
-				d.logger.Printf("inbox: %d+%d tokens", inTok, outTok)
-			}
-			_ = d.db.CompletePipelineRun(inboxRunID, created+resolved, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
-		}
-	}()
-
 	// Phase 1: Channel digests (generates people_signals in MAP phase).
 	if d.digestPipe != nil {
 		var runID int64
@@ -431,6 +403,42 @@ func (d *Daemon) runSync(ctx context.Context) {
 	// Runs once after all analysis phases so channel digests, rollups, and tracks
 	// are all available for marking.
 	d.autoMarkRead()
+
+	// Phase 5: Inbox detection (runs after digest/tracks/people so that
+	// decision_made detector sees fresh digests; runs before briefing).
+	if d.inboxPipe != nil {
+		// Resolve current user identity so the pipeline can filter mentions/DMs.
+		if d.db != nil {
+			if uid, err := d.db.GetCurrentUserID(); err == nil && uid != "" {
+				email := ""
+				if u, uerr := d.db.GetUserByID(uid); uerr == nil && u != nil {
+					email = u.Email
+				}
+				d.inboxPipe.SetCurrentUser(uid, email)
+			}
+		}
+		var inboxRunID int64
+		if d.db != nil {
+			inboxRunID, _ = d.db.CreatePipelineRun("inbox", "daemon", "auto")
+		}
+		created, resolved, err := d.inboxPipe.Run(ctx)
+		if err != nil {
+			d.logger.Printf("inbox error: %v", err)
+		} else if created > 0 || resolved > 0 {
+			d.logger.Printf("inbox: %d new, %d resolved", created, resolved)
+		}
+		if inboxRunID > 0 {
+			var errMsg string
+			if err != nil {
+				errMsg = err.Error()
+			}
+			inTok, outTok, cost, totalAPI := d.inboxPipe.AccumulatedUsage()
+			if inTok > 0 || outTok > 0 {
+				d.logger.Printf("inbox: %d+%d tokens", inTok, outTok)
+			}
+			_ = d.db.CompletePipelineRun(inboxRunID, created+resolved, inTok, outTok, cost, totalAPI, nil, nil, errMsg)
+		}
+	}
 
 	// Phase 6: Daily briefing (depends on digests + tracks + people cards).
 	// Throttled to run at most once per day, triggered by schedule time.

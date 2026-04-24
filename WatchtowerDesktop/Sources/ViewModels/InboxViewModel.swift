@@ -12,6 +12,13 @@ final class InboxViewModel {
     var isLoading = false
     var errorMessage: String?
 
+    // Pinned / Feed split (Task 20)
+    var pinnedItems: [InboxItem] = []
+    var feedItems: [InboxItem] = []
+    var hasHighPriorityPinned: Bool = false
+    var feedPageSize: Int = 50
+    private var feedOffset: Int = 0
+
     // Filters
     var priorityFilter: String?
     var triggerTypeFilter: String?
@@ -24,6 +31,7 @@ final class InboxViewModel {
     private(set) var workspaceTeamID: String?
 
     private let dbManager: DatabaseManager
+    private let feedbackQueries: InboxFeedbackQueries
     private var observationTask: Task<Void, Never>?
 
     struct SenderGroup: Identifiable {
@@ -53,6 +61,7 @@ final class InboxViewModel {
 
     init(dbManager: DatabaseManager) {
         self.dbManager = dbManager
+        self.feedbackQueries = InboxFeedbackQueries(dbPool: dbManager.dbPool)
     }
 
     func startObserving() {
@@ -84,7 +93,10 @@ final class InboxViewModel {
                     triggerType: self.triggerTypeFilter,
                     includeResolved: self.showResolved
                 )
-                return (ws?.domain, ws?.id, all, counts)
+                let pinned = try InboxQueries.fetchPinned(db)
+                let feed = try InboxQueries.fetchFeed(db, limit: self.feedPageSize, offset: 0)
+                let highPriorityPinned = try InboxQueries.hasHighPriorityPinned(db)
+                return (ws?.domain, ws?.id, all, counts, pinned, feed, highPriorityPinned)
             }
 
             workspaceDomain = result.0
@@ -95,6 +107,10 @@ final class InboxViewModel {
             pendingCount = counts.pending
             unreadCount = counts.unread
             highPriorityCount = counts.highPriority
+            pinnedItems = result.4
+            feedItems = result.5
+            feedOffset = result.5.count
+            hasHighPriorityPinned = result.6
 
             // Resolve sender and channel names
             let senderIDs = Set(items.map(\.senderUserID).filter { !$0.isEmpty })
@@ -123,9 +139,47 @@ final class InboxViewModel {
         } catch {
             allItems = []
             senderGroups = []
+            pinnedItems = []
+            feedItems = []
+            hasHighPriorityPinned = false
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// Appends the next page of feed items (infinite scroll).
+    func loadMore() {
+        do {
+            let next = try dbManager.dbPool.read { db in
+                try InboxQueries.fetchFeed(db, limit: feedPageSize, offset: feedOffset)
+            }
+            feedItems.append(contentsOf: next)
+            feedOffset += next.count
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Marks an inbox item as seen (sets read_at) if it hasn't been seen before.
+    func markSeen(_ item: InboxItem) {
+        guard item.readAt.isEmpty else { return }
+        do {
+            try dbManager.dbPool.write { db in
+                try InboxQueries.markSeen(db, itemID: Int64(item.id))
+            }
+        } catch {
+            errorMessage = "Failed to mark seen: \(error.localizedDescription)"
+        }
+    }
+
+    /// Records thumbs-up/down feedback for an item and derives a learned rule, then reloads.
+    func submitFeedback(_ item: InboxItem, rating: Int, reason: String) {
+        do {
+            try feedbackQueries.record(item: item, rating: rating, reason: reason)
+            load()
+        } catch {
+            errorMessage = "Failed to submit feedback: \(error.localizedDescription)"
+        }
     }
 
     func resolve(_ item: InboxItem, reason: String = "Manually resolved") {
