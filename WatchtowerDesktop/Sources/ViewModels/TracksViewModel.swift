@@ -80,7 +80,21 @@ final class TracksViewModel {
                     ownership: self.ownershipFilter,
                     includeDismissed: self.showDismissed
                 )
-                let taskCounts = try TaskQueries.fetchActiveCountsBySourceTrack(db)
+                let taskRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                        SELECT CAST(source_id AS INTEGER) AS track_id, COUNT(*) AS cnt
+                        FROM targets
+                        WHERE source_type = 'track'
+                          AND status NOT IN ('done', 'dismissed')
+                          AND source_id != ''
+                        GROUP BY source_id
+                        """
+                )
+                let taskCounts = Dictionary(uniqueKeysWithValues: taskRows.compactMap { row -> (Int, Int)? in
+                    guard let tid = row["track_id"] as Int?, let cnt = row["cnt"] as Int? else { return nil }
+                    return (tid, cnt)
+                })
                 return (ws?.domain, ws?.id, all, counts, taskCounts)
             }
             workspaceDomain = result.0

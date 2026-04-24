@@ -10,7 +10,7 @@ import (
 // inboxSelectCols is the standard SELECT column list for inbox_items.
 const inboxSelectCols = `id, channel_id, message_ts, thread_ts, sender_user_id,
 	trigger_type, snippet, context, raw_text, permalink, status, priority,
-	ai_reason, resolved_reason, snooze_until, COALESCE(waiting_user_ids,''), task_id,
+	ai_reason, resolved_reason, snooze_until, COALESCE(waiting_user_ids,''), target_id,
 	COALESCE(read_at,''), created_at, updated_at,
 	COALESCE(item_class,'actionable'), COALESCE(pinned,0), COALESCE(archived_at,''), COALESCE(archive_reason,'')`
 
@@ -24,7 +24,7 @@ func scanInboxItem(row interface{ Scan(...any) error }) (*InboxItem, error) {
 	if err := row.Scan(
 		&it.ID, &it.ChannelID, &it.MessageTS, &it.ThreadTS, &it.SenderUserID,
 		&it.TriggerType, &it.Snippet, &it.Context, &it.RawText, &it.Permalink, &it.Status, &it.Priority,
-		&it.AIReason, &it.ResolvedReason, &it.SnoozeUntil, &it.WaitingUserIDs, &it.TaskID,
+		&it.AIReason, &it.ResolvedReason, &it.SnoozeUntil, &it.WaitingUserIDs, &it.TargetID,
 		&it.ReadAt, &it.CreatedAt, &it.UpdatedAt,
 		&it.ItemClass, &pinned, &it.ArchivedAt, &it.ArchiveReason,
 	); err != nil {
@@ -259,13 +259,13 @@ func (db *DB) MarkInboxRead(id int) error {
 	return nil
 }
 
-// LinkInboxTask sets the task_id for an inbox item.
-func (db *DB) LinkInboxTask(id int, taskID int) error {
-	_, err := db.Exec(`UPDATE inbox_items SET task_id = ?,
+// LinkInboxTarget sets the target_id for an inbox item.
+func (db *DB) LinkInboxTarget(id int, targetID int) error {
+	_, err := db.Exec(`UPDATE inbox_items SET target_id = ?,
 		updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-		WHERE id = ?`, taskID, id)
+		WHERE id = ?`, targetID, id)
 	if err != nil {
-		return fmt.Errorf("linking inbox item %d to task %d: %w", id, taskID, err)
+		return fmt.Errorf("linking inbox item %d to target %d: %w", id, targetID, err)
 	}
 	return nil
 }

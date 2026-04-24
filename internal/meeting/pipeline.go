@@ -252,9 +252,9 @@ func (p *Pipeline) gatherAttendeesContext(attendees []attendeeEntry) string {
 		return "(no attendees)"
 	}
 
-	// Fetch inbox items and tasks once, then filter per-attendee inside the loop.
+	// Fetch inbox items and targets once, then filter per-attendee inside the loop.
 	allInboxItems, _ := p.db.GetInboxItems(db.InboxFilter{Status: "pending", Limit: 5})
-	allTasks, _ := p.db.GetTasks(db.TaskFilter{Limit: 50})
+	allTargets, _ := p.db.GetTargets(db.TargetFilter{Limit: 50})
 
 	// Time window for recent activity (last 7 days).
 	now := time.Now()
@@ -355,10 +355,10 @@ func (p *Pipeline) gatherAttendeesContext(attendees []attendeeEntry) string {
 			}
 		}
 
-		// Tasks where this person is ball_on.
-		for _, t := range allTasks {
+		// Targets where this person is ball_on.
+		for _, t := range allTargets {
 			if t.BallOn == a.SlackUserID {
-				sb.WriteString(fmt.Sprintf("  [TASK %s id=%d] %s\n", t.Priority, t.ID, t.Text))
+				sb.WriteString(fmt.Sprintf("  [TARGET %s id=%d] %s\n", t.Priority, t.ID, t.Text))
 			}
 		}
 

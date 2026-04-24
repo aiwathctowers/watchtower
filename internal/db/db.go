@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 67"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 68"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -2274,6 +2274,20 @@ func (db *DB) migrate() error {
 		}
 		defer tx.Rollback()
 
+		// Guard: if inbox_items.task_id is already absent (forward-migrated schema,
+		// e.g. bootstrap ran latest Schema then user_version was downgraded for an
+		// idempotency test), skip the table recreate — structure is already newer.
+		if !hasColumn(tx, "inbox_items", "task_id") {
+			if _, err := tx.Exec("PRAGMA user_version = 48"); err != nil {
+				return fmt.Errorf("v48: set version: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("committing migration v48: %w", err)
+			}
+			version = 48
+			goto afterV48
+		}
+
 		// Recreate inbox_items with expanded trigger_type CHECK and new columns.
 		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS inbox_items_new (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2334,6 +2348,7 @@ func (db *DB) migrate() error {
 		}
 		version = 48
 	}
+afterV48:
 
 	if version < 49 {
 		tx, err := db.Begin()
@@ -3067,13 +3082,254 @@ func (db *DB) migrate() error {
 	}
 
 	if version < 67 {
+		// Disable FK checks so we can drop tasks (inbox_items.task_id references nothing,
+		// but targets has a self-referential FK that needs to exist before inbox_items rename).
+		if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("migration v67 disable FK: %w", err)
+		}
+		// Re-enable FK unconditionally on exit from this block, even on early-return errors.
+		defer func() { _, _ = db.Exec("PRAGMA foreign_keys = ON") }()
+
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("beginning migration v67: %w", err)
 		}
 		defer tx.Rollback()
 
+		// 1. Create targets table.
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS targets (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			text                TEXT NOT NULL,
+			intent              TEXT NOT NULL DEFAULT '',
+			level               TEXT NOT NULL DEFAULT 'day'
+			                    CHECK(level IN ('quarter','month','week','day','custom')),
+			custom_label        TEXT NOT NULL DEFAULT '',
+			period_start        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d','now')),
+			period_end          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d','now')),
+			parent_id           INTEGER REFERENCES targets(id) ON DELETE SET NULL,
+			status              TEXT NOT NULL DEFAULT 'todo'
+			                    CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
+			priority            TEXT NOT NULL DEFAULT 'medium'
+			                    CHECK(priority IN ('high','medium','low')),
+			ownership           TEXT NOT NULL DEFAULT 'mine'
+			                    CHECK(ownership IN ('mine','delegated','watching')),
+			ball_on             TEXT NOT NULL DEFAULT '',
+			due_date            TEXT NOT NULL DEFAULT '',
+			snooze_until        TEXT NOT NULL DEFAULT '',
+			blocking            TEXT NOT NULL DEFAULT '',
+			tags                TEXT NOT NULL DEFAULT '[]',
+			sub_items           TEXT NOT NULL DEFAULT '[]',
+			notes               TEXT NOT NULL DEFAULT '[]',
+			progress            REAL NOT NULL DEFAULT 0.0,
+			source_type         TEXT NOT NULL DEFAULT 'manual'
+			                    CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack')),
+			source_id           TEXT NOT NULL DEFAULT '',
+			ai_level_confidence REAL DEFAULT NULL,
+			created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		)`); err != nil {
+			return fmt.Errorf("migration v67 create targets: %w", err)
+		}
+		for _, idx := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_targets_level     ON targets(level)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_parent    ON targets(parent_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_period    ON targets(period_start, period_end)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_status    ON targets(status)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_priority  ON targets(priority)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_due       ON targets(due_date)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_source    ON targets(source_type, source_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_updated   ON targets(updated_at DESC)`,
+		} {
+			if _, err := tx.Exec(idx); err != nil {
+				return fmt.Errorf("migration v67 targets index: %w", err)
+			}
+		}
+
+		// 2. Create target_links table.
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS target_links (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+			target_target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
+			external_ref     TEXT NOT NULL DEFAULT '',
+			relation         TEXT NOT NULL
+			                 CHECK(relation IN ('contributes_to','blocks','related','duplicates')),
+			confidence       REAL DEFAULT NULL,
+			created_by       TEXT NOT NULL DEFAULT 'ai'
+			                 CHECK(created_by IN ('ai','user')),
+			created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			CHECK (target_target_id IS NOT NULL OR external_ref != ''),
+			UNIQUE(source_target_id, target_target_id, external_ref, relation)
+		)`); err != nil {
+			return fmt.Errorf("migration v67 create target_links: %w", err)
+		}
+		for _, idx := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_target_links_source   ON target_links(source_target_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_target_links_target   ON target_links(target_target_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_target_links_external ON target_links(external_ref)`,
+		} {
+			if _, err := tx.Exec(idx); err != nil {
+				return fmt.Errorf("migration v67 target_links index: %w", err)
+			}
+		}
+
+		// 3. Delete feedback rows with entity_type='task' before tightening CHECK.
+		// Guard: feedback table may not exist in minimal/test DBs.
+		if hasColumn(tx, "feedback", "id") {
+			if _, err := tx.Exec(`DELETE FROM feedback WHERE entity_type = 'task'`); err != nil {
+				return fmt.Errorf("migration v67 delete task feedback: %w", err)
+			}
+		}
+
+		// 4. Rebuild feedback with updated CHECK constraint (remove 'task', add 'target').
+		if hasColumn(tx, "feedback", "id") {
+			if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS feedback_new (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_type TEXT NOT NULL CHECK(entity_type IN ('digest','track','decision','user_analysis','briefing','target','inbox')),
+				entity_id   TEXT NOT NULL,
+				rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),
+				comment     TEXT NOT NULL DEFAULT '',
+				created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+			)`); err != nil {
+				return fmt.Errorf("migration v67 create feedback_new: %w", err)
+			}
+			if _, err := tx.Exec(`INSERT INTO feedback_new SELECT * FROM feedback`); err != nil {
+				return fmt.Errorf("migration v67 copy feedback: %w", err)
+			}
+			if _, err := tx.Exec(`DROP TABLE feedback`); err != nil {
+				return fmt.Errorf("migration v67 drop feedback: %w", err)
+			}
+			if _, err := tx.Exec(`ALTER TABLE feedback_new RENAME TO feedback`); err != nil {
+				return fmt.Errorf("migration v67 rename feedback: %w", err)
+			}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_feedback_entity ON feedback(entity_type, entity_id)`); err != nil {
+				return fmt.Errorf("migration v67 feedback entity index: %w", err)
+			}
+			if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_feedback_rating ON feedback(entity_type, rating)`); err != nil {
+				return fmt.Errorf("migration v67 feedback rating index: %w", err)
+			}
+		}
+
+		// 5. Rebuild inbox_items to rename task_id → target_id (SQLite cannot rename within ALTER).
+		if hasColumn(tx, "inbox_items", "task_id") {
+			if _, err := tx.Exec(`CREATE TABLE inbox_items_new (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				channel_id      TEXT NOT NULL,
+				message_ts      TEXT NOT NULL,
+				thread_ts       TEXT NOT NULL DEFAULT '',
+				sender_user_id  TEXT NOT NULL,
+				trigger_type    TEXT NOT NULL CHECK(trigger_type IN ('mention','dm','thread_reply','reaction')),
+				snippet         TEXT NOT NULL DEFAULT '',
+				context         TEXT NOT NULL DEFAULT '',
+				raw_text        TEXT NOT NULL DEFAULT '',
+				permalink       TEXT NOT NULL DEFAULT '',
+				status          TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','resolved','dismissed','snoozed')),
+				priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
+				ai_reason       TEXT NOT NULL DEFAULT '',
+				resolved_reason TEXT NOT NULL DEFAULT '',
+				snooze_until    TEXT NOT NULL DEFAULT '',
+				waiting_user_ids TEXT NOT NULL DEFAULT '',
+				target_id       INTEGER,
+				read_at         TEXT,
+				created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+				updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+				UNIQUE(channel_id, message_ts)
+			)`); err != nil {
+				return fmt.Errorf("migration v67 create inbox_items_new: %w", err)
+			}
+			// Copy all columns; set target_id = NULL (old task_id values are orphaned).
+			if _, err := tx.Exec(`INSERT INTO inbox_items_new
+				(id, channel_id, message_ts, thread_ts, sender_user_id, trigger_type,
+				 snippet, context, raw_text, permalink, status, priority,
+				 ai_reason, resolved_reason, snooze_until, waiting_user_ids,
+				 target_id, read_at, created_at, updated_at)
+				SELECT id, channel_id, message_ts, thread_ts, sender_user_id, trigger_type,
+				 snippet, COALESCE(context,''), COALESCE(raw_text,''), permalink, status, priority,
+				 ai_reason, resolved_reason, snooze_until, COALESCE(waiting_user_ids,''),
+				 NULL, read_at, created_at, updated_at
+				FROM inbox_items`); err != nil {
+				return fmt.Errorf("migration v67 copy inbox_items: %w", err)
+			}
+			// Capture any pre-existing indexes on inbox_items before the DROP so
+			// they survive the rebuild (the canonical 5 are always recreated below).
+			savedIndexes := func() []string {
+				idxRows, idxErr := tx.Query(`SELECT sql FROM sqlite_master
+					WHERE tbl_name='inbox_items' AND type='index' AND sql IS NOT NULL`)
+				if idxErr != nil {
+					return nil
+				}
+				defer idxRows.Close()
+				var out []string
+				for idxRows.Next() {
+					var s string
+					if scanErr := idxRows.Scan(&s); scanErr == nil {
+						out = append(out, s)
+					}
+				}
+				return out
+			}()
+			if _, err := tx.Exec(`DROP TABLE inbox_items`); err != nil {
+				return fmt.Errorf("migration v67 drop inbox_items: %w", err)
+			}
+			if _, err := tx.Exec(`ALTER TABLE inbox_items_new RENAME TO inbox_items`); err != nil {
+				return fmt.Errorf("migration v67 rename inbox_items: %w", err)
+			}
+			// Recreate the full canonical index set (using IF NOT EXISTS).
+			for _, idx := range []string{
+				`CREATE INDEX IF NOT EXISTS idx_inbox_items_status   ON inbox_items(status)`,
+				`CREATE INDEX IF NOT EXISTS idx_inbox_items_priority  ON inbox_items(priority)`,
+				`CREATE INDEX IF NOT EXISTS idx_inbox_items_updated   ON inbox_items(updated_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_inbox_items_sender    ON inbox_items(sender_user_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_inbox_items_snooze    ON inbox_items(snooze_until)`,
+			} {
+				if _, err := tx.Exec(idx); err != nil {
+					return fmt.Errorf("migration v67 inbox_items index: %w", err)
+				}
+			}
+			// Replay any additional pre-existing indexes that aren't in the canonical set.
+			for _, idxSQL := range savedIndexes {
+				// Replace the old table reference with the renamed table (idempotent for
+				// most cases since after RENAME the stored name updates in-place, but the
+				// captured SQL still says "inbox_items" which is now the final table name).
+				if _, err := tx.Exec(idxSQL); err != nil {
+					// Non-fatal: the index may already exist via the canonical set above.
+					log.Printf("migration v67: could not replay index (skipping): %v", err)
+				}
+			}
+		}
+
+		// 6. Drop tasks table (clean-slate migration — existing tasks are discarded).
+		var taskCount int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tasks'`).Scan(&taskCount)
+		if taskCount > 0 {
+			var rowCount int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&rowCount)
+			if rowCount > 0 {
+				log.Printf("migration v67: dropping %d rows from tasks table", rowCount)
+			}
+		}
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS tasks`); err != nil {
+			return fmt.Errorf("migration v67 drop tasks: %w", err)
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 67"); err != nil {
+			return fmt.Errorf("setting schema version v67: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v67: %w", err)
+		}
+		// FK re-enable is handled by the defer above.
+		version = 67
+	}
+
+	if version < 68 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v68: %w", err)
+		}
+		defer tx.Rollback()
+
 		// Rebuild inbox_items to add new columns AND relax trigger_type CHECK.
+		// After v67, inbox_items has target_id (not task_id). We preserve it here.
 		// SQLite cannot ALTER CHECK constraints, so we must recreate the table.
 		if _, err := tx.Exec(`CREATE TABLE inbox_items_new (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3097,7 +3353,7 @@ func (db *DB) migrate() error {
 			resolved_reason TEXT NOT NULL DEFAULT '',
 			snooze_until    TEXT NOT NULL DEFAULT '',
 			waiting_user_ids TEXT NOT NULL DEFAULT '[]',
-			task_id         INTEGER,
+			target_id       INTEGER,
 			read_at         TEXT,
 			created_at      TEXT NOT NULL,
 			updated_at      TEXT NOT NULL,
@@ -3107,31 +3363,31 @@ func (db *DB) migrate() error {
 			archive_reason  TEXT DEFAULT '' CHECK(archive_reason IN ('','resolved','seen_expired','stale','dismissed')),
 			UNIQUE(channel_id, message_ts)
 		)`); err != nil {
-			return fmt.Errorf("migrate v67: create inbox_items_new: %w", err)
+			return fmt.Errorf("migrate v68: create inbox_items_new: %w", err)
 		}
 
 		if _, err := tx.Exec(`INSERT INTO inbox_items_new (
 			id, channel_id, message_ts, thread_ts, sender_user_id, trigger_type,
 			snippet, context, raw_text, permalink, status, priority, ai_reason,
-			resolved_reason, snooze_until, waiting_user_ids, task_id, read_at,
+			resolved_reason, snooze_until, waiting_user_ids, target_id, read_at,
 			created_at, updated_at, item_class
 		)
 		SELECT
 			id, channel_id, message_ts, thread_ts, sender_user_id, trigger_type,
-			snippet, context, raw_text, permalink, status, priority, ai_reason,
-			resolved_reason, snooze_until, waiting_user_ids, task_id,
+			snippet, COALESCE(context,''), COALESCE(raw_text,''), permalink, status, priority, ai_reason,
+			resolved_reason, snooze_until, COALESCE(waiting_user_ids,'[]'), target_id,
 			read_at,
 			created_at, updated_at,
 			CASE WHEN trigger_type = 'reaction' THEN 'ambient' ELSE 'actionable' END
 		FROM inbox_items`); err != nil {
-			return fmt.Errorf("migrate v67: copy inbox_items: %w", err)
+			return fmt.Errorf("migrate v68: copy inbox_items: %w", err)
 		}
 
 		if _, err := tx.Exec(`DROP TABLE inbox_items`); err != nil {
-			return fmt.Errorf("migrate v67: drop inbox_items: %w", err)
+			return fmt.Errorf("migrate v68: drop inbox_items: %w", err)
 		}
 		if _, err := tx.Exec(`ALTER TABLE inbox_items_new RENAME TO inbox_items`); err != nil {
-			return fmt.Errorf("migrate v67: rename inbox_items: %w", err)
+			return fmt.Errorf("migrate v68: rename inbox_items: %w", err)
 		}
 
 		for _, idx := range []string{
@@ -3145,7 +3401,7 @@ func (db *DB) migrate() error {
 			`CREATE INDEX IF NOT EXISTS idx_inbox_items_archived ON inbox_items(archived_at)`,
 		} {
 			if _, err := tx.Exec(idx); err != nil {
-				return fmt.Errorf("migrate v67: index: %w", err)
+				return fmt.Errorf("migrate v68: index: %w", err)
 			}
 		}
 
@@ -3159,10 +3415,10 @@ func (db *DB) migrate() error {
 			last_updated   TEXT NOT NULL,
 			UNIQUE(rule_type, scope_key)
 		)`); err != nil {
-			return fmt.Errorf("migrate v67: create inbox_learned_rules: %w", err)
+			return fmt.Errorf("migrate v68: create inbox_learned_rules: %w", err)
 		}
 		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_inbox_learned_rules_scope ON inbox_learned_rules(rule_type, scope_key)`); err != nil {
-			return fmt.Errorf("migrate v67: index inbox_learned_rules: %w", err)
+			return fmt.Errorf("migrate v68: index inbox_learned_rules: %w", err)
 		}
 
 		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS inbox_feedback (
@@ -3172,19 +3428,19 @@ func (db *DB) migrate() error {
 			reason        TEXT DEFAULT '' CHECK(reason IN ('','source_noise','wrong_priority','wrong_class','never_show')),
 			created_at    TEXT NOT NULL
 		)`); err != nil {
-			return fmt.Errorf("migrate v67: create inbox_feedback: %w", err)
+			return fmt.Errorf("migrate v68: create inbox_feedback: %w", err)
 		}
 		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_inbox_feedback_item ON inbox_feedback(inbox_item_id)`); err != nil {
-			return fmt.Errorf("migrate v67: index inbox_feedback: %w", err)
+			return fmt.Errorf("migrate v68: index inbox_feedback: %w", err)
 		}
 
-		if _, err := tx.Exec("PRAGMA user_version = 67"); err != nil {
-			return fmt.Errorf("setting schema version v67: %w", err)
+		if _, err := tx.Exec("PRAGMA user_version = 68"); err != nil {
+			return fmt.Errorf("setting schema version v68: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("committing migration v67: %w", err)
+			return fmt.Errorf("committing migration v68: %w", err)
 		}
-		version = 67
+		version = 68
 	}
 
 	_ = version // silence unused variable if this is the last migration

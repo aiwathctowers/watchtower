@@ -238,12 +238,12 @@ func (d *Daemon) runSync(ctx context.Context) {
 				}
 			}
 
-			// Sync task statuses from Jira issues after successful sync.
+			// Sync target statuses from Jira issues after successful sync.
 			if err == nil && d.db != nil {
-				if synced, serr := d.db.SyncJiraTaskStatuses(); serr != nil {
-					d.logger.Printf("jira task status sync warning: %v", serr)
+				if synced, serr := d.db.SyncJiraTargetStatuses(); serr != nil {
+					d.logger.Printf("jira target status sync warning: %v", serr)
 				} else if synced > 0 {
-					d.logger.Printf("jira-tasks: synced %d task status(es)", synced)
+					d.logger.Printf("jira-targets: synced %d target status(es)", synced)
 				}
 			}
 		}
@@ -293,12 +293,12 @@ func (d *Daemon) runSync(ctx context.Context) {
 
 	// Note: auto-mark read runs once after all analysis phases complete (below).
 
-	// Unsnooze tasks whose snooze_until date has passed.
+	// Unsnooze targets whose snooze_until date has passed.
 	if d.db != nil {
-		if n, err := d.db.UnsnoozeExpiredTasks(); err != nil {
-			d.logger.Printf("unsnooze tasks error: %v", err)
+		if n, err := d.db.UnsnoozeExpiredTargets(); err != nil {
+			d.logger.Printf("unsnooze targets error: %v", err)
 		} else if n > 0 {
-			d.logger.Printf("unsnoozed %d task(s)", n)
+			d.logger.Printf("unsnoozed %d target(s)", n)
 		}
 		if n, err := d.db.UnsnoozeExpiredInboxItems(); err != nil {
 			d.logger.Printf("unsnooze inbox error: %v", err)

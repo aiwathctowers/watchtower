@@ -66,7 +66,7 @@ struct DigestDetailView: View {
             .padding()
         }
         .sheet(isPresented: $showCreateTask) {
-            CreateTaskSheet(
+            CreateTargetSheet(
                 prefillText: taskPrefillText,
                 prefillSourceType: taskPrefillSourceType,
                 prefillSourceID: String(digest.id)

@@ -318,31 +318,65 @@ CREATE INDEX IF NOT EXISTS idx_tracks_updated ON tracks(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tracks_ownership ON tracks(ownership);
 CREATE INDEX IF NOT EXISTS idx_tracks_assignee ON tracks(assignee_user_id);
 
--- Personal action items (tasks)
-CREATE TABLE IF NOT EXISTS tasks (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    text            TEXT NOT NULL,
-    intent          TEXT NOT NULL DEFAULT '',
-    status          TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
-    priority        TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('high','medium','low')),
-    ownership       TEXT NOT NULL DEFAULT 'mine' CHECK(ownership IN ('mine','delegated','watching')),
-    ball_on         TEXT NOT NULL DEFAULT '',
-    due_date        TEXT NOT NULL DEFAULT '',           -- YYYY-MM-DDTHH:MM or ""
-    snooze_until    TEXT NOT NULL DEFAULT '',           -- YYYY-MM-DDTHH:MM or ""
-    blocking        TEXT NOT NULL DEFAULT '',
-    tags            TEXT NOT NULL DEFAULT '[]',
-    sub_items       TEXT NOT NULL DEFAULT '[]',
-    notes           TEXT NOT NULL DEFAULT '[]',
-    source_type     TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('track','digest','briefing','manual','chat','inbox','jira')),
-    source_id       TEXT NOT NULL DEFAULT '',
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+-- Hierarchical goal targets (replaces tasks)
+CREATE TABLE IF NOT EXISTS targets (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    text                TEXT NOT NULL,
+    intent              TEXT NOT NULL DEFAULT '',
+    level               TEXT NOT NULL DEFAULT 'day'
+                        CHECK(level IN ('quarter','month','week','day','custom')),
+    custom_label        TEXT NOT NULL DEFAULT '',
+    period_start        TEXT NOT NULL,
+    period_end          TEXT NOT NULL,
+    parent_id           INTEGER REFERENCES targets(id) ON DELETE SET NULL,
+    status              TEXT NOT NULL DEFAULT 'todo'
+                        CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
+    priority            TEXT NOT NULL DEFAULT 'medium'
+                        CHECK(priority IN ('high','medium','low')),
+    ownership           TEXT NOT NULL DEFAULT 'mine'
+                        CHECK(ownership IN ('mine','delegated','watching')),
+    ball_on             TEXT NOT NULL DEFAULT '',
+    due_date            TEXT NOT NULL DEFAULT '',
+    snooze_until        TEXT NOT NULL DEFAULT '',
+    blocking            TEXT NOT NULL DEFAULT '',
+    tags                TEXT NOT NULL DEFAULT '[]',
+    sub_items           TEXT NOT NULL DEFAULT '[]',
+    notes               TEXT NOT NULL DEFAULT '[]',
+    progress            REAL NOT NULL DEFAULT 0.0,
+    source_type         TEXT NOT NULL DEFAULT 'manual'
+                        CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack')),
+    source_id           TEXT NOT NULL DEFAULT '',
+    ai_level_confidence REAL DEFAULT NULL,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
-CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
-CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_type, source_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_targets_level       ON targets(level);
+CREATE INDEX IF NOT EXISTS idx_targets_parent      ON targets(parent_id);
+CREATE INDEX IF NOT EXISTS idx_targets_period      ON targets(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_targets_status      ON targets(status);
+CREATE INDEX IF NOT EXISTS idx_targets_priority    ON targets(priority);
+CREATE INDEX IF NOT EXISTS idx_targets_due         ON targets(due_date);
+CREATE INDEX IF NOT EXISTS idx_targets_source      ON targets(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_targets_updated     ON targets(updated_at DESC);
+
+-- Links between targets or to external references
+CREATE TABLE IF NOT EXISTS target_links (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+    target_target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
+    external_ref     TEXT NOT NULL DEFAULT '',
+    relation         TEXT NOT NULL
+                     CHECK(relation IN ('contributes_to','blocks','related','duplicates')),
+    confidence       REAL DEFAULT NULL,
+    created_by       TEXT NOT NULL DEFAULT 'ai'
+                     CHECK(created_by IN ('ai','user')),
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    CHECK (target_target_id IS NOT NULL OR external_ref != ''),
+    UNIQUE(source_target_id, target_target_id, external_ref, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_target_links_source   ON target_links(source_target_id);
+CREATE INDEX IF NOT EXISTS idx_target_links_target   ON target_links(target_target_id);
+CREATE INDEX IF NOT EXISTS idx_target_links_external ON target_links(external_ref);
 
 -- Inbox items — messages awaiting user response (@mentions, DMs, Jira, Calendar, etc.)
 CREATE TABLE IF NOT EXISTS inbox_items (
@@ -367,7 +401,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
     resolved_reason TEXT NOT NULL DEFAULT '',
     snooze_until    TEXT NOT NULL DEFAULT '',
     waiting_user_ids TEXT NOT NULL DEFAULT '[]',
-    task_id         INTEGER,
+    target_id       INTEGER,
     read_at         TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -412,7 +446,7 @@ CREATE INDEX IF NOT EXISTS idx_inbox_feedback_item ON inbox_feedback(inbox_item_
 -- Feedback on AI-generated content (thumbs up/down)
 CREATE TABLE IF NOT EXISTS feedback (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis', 'briefing', 'task', 'inbox')),
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('digest', 'track', 'decision', 'user_analysis', 'briefing', 'target', 'inbox')),
     entity_id   TEXT NOT NULL,       -- digest.id, tracks.id, or "digest_id:decision_idx"
     rating      INTEGER NOT NULL CHECK(rating IN (-1, 1)),  -- -1 = bad, +1 = good
     comment     TEXT NOT NULL DEFAULT '',

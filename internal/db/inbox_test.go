@@ -152,19 +152,19 @@ func TestMarkInboxRead(t *testing.T) {
 	assert.NotEmpty(t, item.ReadAt)
 }
 
-func TestLinkInboxTask(t *testing.T) {
+func TestLinkInboxTarget(t *testing.T) {
 	db := openTestDB(t)
 
 	id, err := db.CreateInboxItem(InboxItem{ChannelID: "C1", MessageTS: "1.1", SenderUserID: "U1", TriggerType: "mention"})
 	require.NoError(t, err)
 
-	err = db.LinkInboxTask(int(id), 42)
+	err = db.LinkInboxTarget(int(id), 42)
 	require.NoError(t, err)
 
 	item, err := db.GetInboxItemByID(int(id))
 	require.NoError(t, err)
-	require.NotNil(t, item.TaskID)
-	assert.Equal(t, 42, *item.TaskID)
+	require.NotNil(t, item.TargetID)
+	assert.Equal(t, 42, *item.TargetID)
 }
 
 func TestGetInboxCounts(t *testing.T) {

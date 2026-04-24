@@ -458,42 +458,64 @@ type ChannelSettings struct {
 	UpdatedAt     string
 }
 
-// Task represents a personal action item for the user.
-type Task struct {
-	ID          int
-	Text        string
-	Intent      string
-	Status      string // "todo", "in_progress", "blocked", "done", "dismissed", "snoozed"
-	Priority    string // "high", "medium", "low"
-	Ownership   string // "mine", "delegated", "watching"
-	BallOn      string
-	DueDate     string // "YYYY-MM-DDTHH:MM" or ""
-	SnoozeUntil string // "YYYY-MM-DDTHH:MM" or ""
-	Blocking    string
-	Tags        string // JSON
-	SubItems    string // JSON
-	Notes       string // JSON — [{"text":"...","created_at":"..."}]
-	SourceType  string // "track", "digest", "briefing", "manual", "chat"
-	SourceID    string
-	CreatedAt   string
-	UpdatedAt   string
+// Target represents a hierarchical goal at any level (replaces Task).
+type Target struct {
+	ID                int
+	Text              string
+	Intent            string
+	Level             string        // "quarter", "month", "week", "day", "custom"
+	CustomLabel       string        // free text when level="custom"
+	PeriodStart       string        // YYYY-MM-DD
+	PeriodEnd         string        // YYYY-MM-DD
+	ParentID          sql.NullInt64 // references targets(id)
+	Status            string        // "todo", "in_progress", "blocked", "done", "dismissed", "snoozed"
+	Priority          string        // "high", "medium", "low"
+	Ownership         string        // "mine", "delegated", "watching"
+	BallOn            string
+	DueDate           string // "YYYY-MM-DDTHH:MM" or ""
+	SnoozeUntil       string // "YYYY-MM-DDTHH:MM" or ""
+	Blocking          string
+	Tags              string  // JSON
+	SubItems          string  // JSON
+	Notes             string  // JSON
+	Progress          float64 // 0.0..1.0
+	SourceType        string  // "extract", "briefing", "manual", "chat", "inbox", "jira", "slack"
+	SourceID          string
+	AILevelConfidence sql.NullFloat64
+	CreatedAt         string
+	UpdatedAt         string
 }
 
-// TaskNote represents a single note entry in a task's notes JSON array.
-type TaskNote struct {
+// TargetNote represents a single note entry in a target's notes JSON array.
+type TargetNote struct {
 	Text      string `json:"text"`
 	CreatedAt string `json:"created_at"`
 }
 
-// TaskFilter specifies criteria for querying tasks.
-type TaskFilter struct {
+// TargetFilter specifies criteria for querying targets.
+type TargetFilter struct {
 	Status      string
 	Priority    string
 	Ownership   string
+	Level       string
+	ParentID    *int64
 	SourceType  string
 	SourceID    string
+	Search      string
 	Limit       int
 	IncludeDone bool
+}
+
+// TargetLink represents a typed link between two targets or to an external reference.
+type TargetLink struct {
+	ID             int
+	SourceTargetID int
+	TargetTargetID sql.NullInt64
+	ExternalRef    string
+	Relation       string // "contributes_to", "blocks", "related", "duplicates"
+	Confidence     sql.NullFloat64
+	CreatedBy      string // "ai", "user"
+	CreatedAt      string
 }
 
 // InboxItem represents a Slack message awaiting user response.
@@ -514,7 +536,7 @@ type InboxItem struct {
 	ResolvedReason string
 	SnoozeUntil    string
 	WaitingUserIDs string // JSON array of user IDs waiting for response, e.g. ["U123","U456"]
-	TaskID         *int
+	TargetID       *int
 	ReadAt         string
 	CreatedAt      string
 	UpdatedAt      string

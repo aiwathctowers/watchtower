@@ -3,9 +3,9 @@ import SwiftUI
 struct BriefingDetailView: View {
     let briefing: Briefing
     @Environment(AppState.self) private var appState
-    @State private var showCreateTask = false
-    @State private var taskPrefillText = ""
-    @State private var taskPrefillIntent = ""
+    @State private var showCreateTarget = false
+    @State private var targetPrefillText = ""
+    @State private var targetPrefillIntent = ""
     @State private var calendarEvents: [CalendarEvent] = []
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
@@ -23,10 +23,10 @@ struct BriefingDetailView: View {
             }
             .padding()
         }
-        .sheet(isPresented: $showCreateTask) {
-            CreateTaskSheet(
-                prefillText: taskPrefillText,
-                prefillIntent: taskPrefillIntent,
+        .sheet(isPresented: $showCreateTarget) {
+            CreateTargetSheet(
+                prefillText: targetPrefillText,
+                prefillIntent: targetPrefillIntent,
                 prefillSourceType: "briefing",
                 prefillSourceID: String(briefing.id)
             )
@@ -160,11 +160,11 @@ struct BriefingDetailView: View {
             HStack {
                 Spacer()
                 Button {
-                    taskPrefillText = item.text
-                    taskPrefillIntent = item.reason ?? ""
-                    showCreateTask = true
+                    targetPrefillText = item.text
+                    targetPrefillIntent = item.reason ?? ""
+                    showCreateTarget = true
                 } label: {
-                    Label("Create task", systemImage: "plus.circle")
+                    Label("Create target", systemImage: "plus.circle")
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
@@ -206,7 +206,7 @@ struct BriefingDetailView: View {
     private func yourDayCard(_ item: YourDayItem) -> some View {
         Button {
             if let taskID = item.taskID {
-                appState.navigateToTask(taskID)
+                appState.navigateToTarget(taskID)
             } else if let trackID = item.trackID {
                 navigateToSource(type: "track", id: String(trackID))
             }
@@ -431,16 +431,16 @@ struct BriefingDetailView: View {
                         Spacer()
 
                         Button {
-                            taskPrefillText = item.text
-                            taskPrefillIntent = item.category ?? ""
-                            showCreateTask = true
+                            targetPrefillText = item.text
+                            targetPrefillIntent = item.category ?? ""
+                            showCreateTarget = true
                         } label: {
                             Image(systemName: "plus.circle")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
                         .buttonStyle(.plain)
-                        .help("Add Task")
+                        .help("Add Target")
                     }
                 }
             }

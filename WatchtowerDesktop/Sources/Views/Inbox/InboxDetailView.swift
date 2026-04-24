@@ -267,11 +267,11 @@ struct InboxDetailView: View {
                 }
                 .buttonStyle(.bordered)
 
-                if !item.hasLinkedTask {
+                if !item.hasLinkedTarget {
                     Button {
                         viewModel.createTask(from: item)
                     } label: {
-                        Label("Create Task", systemImage: "checkmark.circle")
+                        Label("Create Target", systemImage: "scope")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -289,8 +289,8 @@ struct InboxDetailView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            if let linkedTaskID = item.taskID {
-                Label("Task #\(linkedTaskID)", systemImage: "checkmark.circle")
+            if let linkedTargetID = item.targetID {
+                Label("Target #\(linkedTargetID)", systemImage: "scope")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

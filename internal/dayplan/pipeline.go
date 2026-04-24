@@ -69,7 +69,7 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 
 	// ── gather context ────────────────────────────────────────────────────────
 
-	tasks, _ := p.gatherTasks()
+	targets, _ := p.gatherTargets()
 	events, _ := p.gatherCalendarEvents(opts.Date)
 	briefingData := p.gatherBriefing(opts.UserID, opts.Date)
 	jiraIssues := p.gatherJira(opts.UserID)
@@ -101,7 +101,7 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 		WorkingHoursStart: p.cfg.DayPlan.WorkingHoursStart,
 		WorkingHoursEnd:   p.cfg.DayPlan.WorkingHoursEnd,
 		CalendarEvents:    formatCalendarSection(events),
-		Tasks:             formatTasksSection(tasks),
+		Targets:           formatTargetsSection(targets),
 		Briefing:          formatBriefingContext(briefingData),
 		Jira:              formatJiraSection(jiraIssues),
 		People:            formatPeopleSection(people),
@@ -137,7 +137,7 @@ func (p *Pipeline) Run(ctx context.Context, opts RunOptions) (*db.DayPlan, error
 		return nil, err
 	}
 
-	newItems, dropped := buildItems(parsed, opts.Date, events, tasksIDSet(tasks), jiraKeySet(jiraIssues))
+	newItems, dropped := buildItems(parsed, opts.Date, events, targetsIDSet(targets), jiraKeySet(jiraIssues))
 	if p.logger != nil {
 		for _, d := range dropped {
 			p.logger.Printf("dayplan: dropped item: %s", d)

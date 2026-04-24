@@ -27,7 +27,7 @@ struct InboxItem: FetchableRecord, Identifiable, Equatable {
     let resolvedReason: String
     let snoozeUntil: String
     let waitingUserIDs: String  // JSON array e.g. ["U123","U456"]
-    let taskID: Int?            // nullable
+    let targetID: Int?          // nullable (renamed from task_id in migration v66)
     let readAt: String          // "" = unread
     // New fields (v67)
     let itemClassRaw: String    // column: item_class
@@ -59,7 +59,7 @@ struct InboxItem: FetchableRecord, Identifiable, Equatable {
         resolvedReason = row["resolved_reason"] ?? ""
         snoozeUntil = row["snooze_until"] ?? ""
         waitingUserIDs = row["waiting_user_ids"] ?? ""
-        taskID = row["task_id"] as Int?
+        targetID = row["target_id"] as Int?
         readAt = row["read_at"] ?? ""
         itemClassRaw = row["item_class"] ?? "ambient"
         pinned = (row["pinned"] as Int? ?? 0) != 0
@@ -83,7 +83,7 @@ struct InboxItem: FetchableRecord, Identifiable, Equatable {
     var isSnoozed: Bool { status == "snoozed" }
     var isMention: Bool { triggerType == "mention" }
     var isDM: Bool { triggerType == "dm" }
-    var hasLinkedTask: Bool { taskID != nil }
+    var hasLinkedTarget: Bool { targetID != nil }
 
     // MARK: - Priority
 

@@ -10,12 +10,13 @@ import (
 	"watchtower/internal/db"
 )
 
-// gatherTasks returns active tasks (todo, in_progress, blocked), ordered by priority.
-func (p *Pipeline) gatherTasks() ([]db.Task, error) {
-	rows, err := p.db.Query(`SELECT id, text, intent, status, priority, ownership,
+// gatherTargets returns active targets (todo, in_progress, blocked), ordered by priority.
+func (p *Pipeline) gatherTargets() ([]db.Target, error) {
+	rows, err := p.db.Query(`SELECT id, text, intent, level, custom_label, period_start, period_end,
+		parent_id, status, priority, ownership,
 		ball_on, due_date, snooze_until, blocking, tags, sub_items, notes,
-		source_type, source_id, created_at, updated_at
-		FROM tasks
+		progress, source_type, source_id, ai_level_confidence, created_at, updated_at
+		FROM targets
 		WHERE status IN ('todo', 'in_progress', 'blocked')
 		ORDER BY
 			CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END,
@@ -23,23 +24,24 @@ func (p *Pipeline) gatherTasks() ([]db.Task, error) {
 			due_date ASC,
 			created_at DESC`)
 	if err != nil {
-		return nil, fmt.Errorf("querying active tasks: %w", err)
+		return nil, fmt.Errorf("querying active targets: %w", err)
 	}
 	defer rows.Close()
 
-	var tasks []db.Task
+	var targets []db.Target
 	for rows.Next() {
-		var t db.Task
+		var t db.Target
 		if err := rows.Scan(
-			&t.ID, &t.Text, &t.Intent, &t.Status, &t.Priority, &t.Ownership,
+			&t.ID, &t.Text, &t.Intent, &t.Level, &t.CustomLabel, &t.PeriodStart, &t.PeriodEnd,
+			&t.ParentID, &t.Status, &t.Priority, &t.Ownership,
 			&t.BallOn, &t.DueDate, &t.SnoozeUntil, &t.Blocking, &t.Tags, &t.SubItems, &t.Notes,
-			&t.SourceType, &t.SourceID, &t.CreatedAt, &t.UpdatedAt,
+			&t.Progress, &t.SourceType, &t.SourceID, &t.AILevelConfidence, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("scanning task: %w", err)
+			return nil, fmt.Errorf("scanning target: %w", err)
 		}
-		tasks = append(tasks, t)
+		targets = append(targets, t)
 	}
-	return tasks, rows.Err()
+	return targets, rows.Err()
 }
 
 // gatherCalendarEvents returns all calendar events occurring on the given date (YYYY-MM-DD).

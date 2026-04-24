@@ -1,12 +1,11 @@
 import SwiftUI
 
-struct TasksListView: View {
+struct TargetsListView: View {
     @Environment(AppState.self) private var appState
-    @State private var viewModel: TasksViewModel?
+    @State private var viewModel: TargetsViewModel?
     @State private var selectedItemID: Int?
     @State private var showCreateSheet = false
     @State private var searchText = ""
-    @State private var jiraConnected = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -15,14 +14,12 @@ struct TasksListView: View {
 
                 if let id = selectedItemID, let item = vm.itemByID(id) {
                     Divider()
-                    TaskDetailView(task: item, viewModel: vm) {
+                    TargetDetailView(target: item, viewModel: vm) {
                         selectedItemID = nil
                     }
                     .id(id)
                     .frame(minWidth: 400, idealWidth: 500)
-                    .transition(
-                        .move(edge: .trailing).combined(with: .opacity)
-                    )
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             } else {
                 ProgressView("Loading...")
@@ -32,21 +29,20 @@ struct TasksListView: View {
         .animation(.easeInOut(duration: 0.25), value: selectedItemID)
         .onAppear {
             initViewModel()
-            jiraConnected = JiraQueries.isConnected()
-            if let id = appState.pendingTaskID {
+            if let id = appState.pendingTargetID {
                 selectedItemID = id
-                appState.pendingTaskID = nil
+                appState.pendingTargetID = nil
             }
         }
         .onChange(of: appState.isDBAvailable) { initViewModel() }
-        .onChange(of: appState.pendingTaskID) { _, newID in
+        .onChange(of: appState.pendingTargetID) { _, newID in
             if let id = newID {
                 selectedItemID = id
-                appState.pendingTaskID = nil
+                appState.pendingTargetID = nil
             }
         }
         .sheet(isPresented: $showCreateSheet) {
-            CreateTaskSheet()
+            CreateTargetSheet()
         }
         .background {
             Button("") { showCreateSheet = true }
@@ -57,29 +53,34 @@ struct TasksListView: View {
 
     private func initViewModel() {
         guard viewModel == nil, let db = appState.databaseManager else { return }
-        let vm = TasksViewModel(dbManager: db)
+        let vm = TargetsViewModel(dbManager: db)
         viewModel = vm
         vm.startObserving()
     }
 
     // MARK: - List Panel
 
-    private func listPanel(_ vm: TasksViewModel) -> some View {
+    private func listPanel(_ vm: TargetsViewModel) -> some View {
         VStack(spacing: 0) {
             toolbar(vm)
             Divider()
 
-            // Search bar
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.tertiary)
                     .font(.caption)
-                TextField("Search tasks...", text: $searchText)
+                TextField("Search targets...", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.callout)
+                    .onChange(of: searchText) { _, newValue in
+                        vm.searchText = newValue
+                        vm.load()
+                    }
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
+                        vm.searchText = ""
+                        vm.load()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.tertiary)
@@ -93,10 +94,7 @@ struct TasksListView: View {
 
             Divider()
 
-            let filteredToday = filterTasks(vm.todayTasks)
-            let filteredAll = filterTasks(vm.allTasks)
-
-            if filteredToday.isEmpty && filteredAll.isEmpty {
+            if vm.todayTargets.isEmpty && vm.allTargets.isEmpty {
                 if searchText.isEmpty {
                     emptyState
                 } else {
@@ -113,8 +111,8 @@ struct TasksListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        todaySection(filteredToday, vm: vm)
-                        allSection(filteredAll, vm: vm)
+                        todaySection(vm.todayTargets, vm: vm)
+                        allSection(vm.allTargets, vm: vm)
                     }
                 }
             }
@@ -122,18 +120,11 @@ struct TasksListView: View {
         .frame(minWidth: 300, idealWidth: 350)
     }
 
-    private func filterTasks(_ tasks: [TaskItem]) -> [TaskItem] {
-        guard !searchText.isEmpty else { return tasks }
-        return tasks.filter {
-            $0.text.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
     // MARK: - Toolbar
 
-    private func toolbar(_ vm: TasksViewModel) -> some View {
+    private func toolbar(_ vm: TargetsViewModel) -> some View {
         HStack {
-            Text("Tasks")
+            Text("Targets")
                 .font(.headline)
 
             if vm.overdueCount > 0 {
@@ -152,13 +143,13 @@ struct TasksListView: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.borderless)
-            .help("New Task (⌘N)")
+            .help("New Target (⌘N)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
-    private func filterMenu(_ vm: TasksViewModel) -> some View {
+    private func filterMenu(_ vm: TargetsViewModel) -> some View {
         Menu {
             Toggle("Show completed", isOn: Binding(
                 get: { vm.showDone },
@@ -166,6 +157,15 @@ struct TasksListView: View {
             ))
 
             Divider()
+
+            Menu("Level") {
+                Button("All") { vm.levelFilter = nil; vm.load() }
+                ForEach(["quarter", "month", "week", "day", "custom"], id: \.self) { level in
+                    Button(level.capitalized) {
+                        vm.levelFilter = level; vm.load()
+                    }
+                }
+            }
 
             Menu("Priority") {
                 Button("All") { vm.priorityFilter = nil; vm.load() }
@@ -175,22 +175,6 @@ struct TasksListView: View {
                     }
                 }
             }
-
-            Menu("Source") {
-                ForEach(sourceFilterOptions, id: \.self) { filter in
-                    Button {
-                        vm.sourceFilter = filter; vm.load()
-                    } label: {
-                        HStack {
-                            Text(filter.rawValue)
-                            if vm.sourceFilter == filter {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            }
-
         } label: {
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .foregroundStyle(hasActiveFilter(vm) ? .blue : .secondary)
@@ -199,47 +183,33 @@ struct TasksListView: View {
         .fixedSize()
     }
 
-    private var sourceFilterOptions: [TasksViewModel.SourceFilter] {
-        var options: [TasksViewModel.SourceFilter] = [.all]
-        if jiraConnected {
-            options.append(.jira)
-        }
-        options.append(contentsOf: [.slack, .manual])
-        return options
-    }
-
-    private func hasActiveFilter(_ vm: TasksViewModel) -> Bool {
-        vm.priorityFilter != nil
-            || vm.showDone
-            || vm.sourceFilter != .all
+    private func hasActiveFilter(_ vm: TargetsViewModel) -> Bool {
+        vm.priorityFilter != nil || vm.levelFilter != nil || vm.showDone
     }
 
     // MARK: - Sections
 
     @ViewBuilder
-    private func todaySection(_ tasks: [TaskItem], vm: TasksViewModel) -> some View {
-        if !tasks.isEmpty {
-            sectionHeader("Today", count: tasks.count)
-            ForEach(tasks) { task in
-                taskRow(task, vm: vm)
+    private func todaySection(_ targets: [Target], vm: TargetsViewModel) -> some View {
+        if !targets.isEmpty {
+            sectionHeader("Today", count: targets.count)
+            ForEach(targets) { target in
+                targetRow(target, vm: vm, depth: 0)
             }
         }
     }
 
     @ViewBuilder
-    private func allSection(_ tasks: [TaskItem], vm: TasksViewModel) -> some View {
-        if !tasks.isEmpty {
-            sectionHeader("All Tasks", count: tasks.count)
-            ForEach(tasks) { task in
-                taskRow(task, vm: vm)
+    private func allSection(_ targets: [Target], vm: TargetsViewModel) -> some View {
+        if !targets.isEmpty {
+            sectionHeader("All Targets", count: targets.count)
+            ForEach(targets) { target in
+                targetRow(target, vm: vm, depth: 0)
             }
         }
     }
 
-    private func sectionHeader(
-        _ title: String,
-        count: Int
-    ) -> some View {
+    private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack {
             Text(title)
                 .font(.subheadline)
@@ -255,57 +225,53 @@ struct TasksListView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    // MARK: - Task Row
+    // MARK: - Target Row
 
-    private func taskRow(_ task: TaskItem, vm: TasksViewModel) -> some View {
-        let isSelected = selectedItemID == task.id
+    private func targetRow(_ target: Target, vm: TargetsViewModel, depth: Int) -> some View {
+        let isSelected = selectedItemID == target.id
+        let indent = CGFloat(min(depth, 4)) * 16
         return Button {
-            selectedItemID = isSelected ? nil : task.id
+            selectedItemID = isSelected ? nil : target.id
         } label: {
             HStack(spacing: 8) {
-                // Status toggle
+                if indent > 0 {
+                    Spacer().frame(width: indent)
+                }
+
                 Button {
-                    if task.isActive {
-                        vm.markDone(task)
+                    if target.isActive {
+                        vm.markDone(target)
                     }
                 } label: {
-                    Image(systemName: task.statusIcon)
+                    Image(systemName: target.statusIcon)
                         .font(.body)
-                        .foregroundStyle(statusColor(task))
+                        .foregroundStyle(statusColor(target))
                 }
                 .buttonStyle(.plain)
 
-                // Content
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(task.text)
-                        .font(.callout)
-                        .lineLimit(2)
-                        .strikethrough(task.status == "done")
-                        .foregroundStyle(
-                            task.status == "done" ? .secondary : .primary
-                        )
+                    HStack(spacing: 4) {
+                        levelBadge(target)
+                        Text(target.text)
+                            .font(.callout)
+                            .lineLimit(2)
+                            .strikethrough(target.status == "done")
+                            .foregroundStyle(target.status == "done" ? .secondary : .primary)
+                    }
 
                     HStack(spacing: 6) {
-                        priorityDot(task)
-                        if let due = task.dueDateFormatted {
+                        priorityDot(target)
+                        if let due = target.dueDateFormatted {
                             Text(due)
                                 .font(.caption2)
-                                .foregroundStyle(
-                                    task.isOverdue ? .red : .secondary
-                                )
+                                .foregroundStyle(target.isOverdue ? .red : .secondary)
                         }
-                        if let progress = task.subItemsProgress {
+                        if let progress = target.subItemsProgress {
                             Text(progress)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        if task.sourceType == "jira" {
-                            jiraBadge(task)
-                        } else if task.sourceType != "manual" {
-                            Image(systemName: sourceIcon(task))
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
+                        periodLabel(target)
                     }
                 }
 
@@ -320,30 +286,21 @@ struct TasksListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu { contextMenu(task, vm: vm) }
+        .contextMenu { contextMenu(target, vm: vm) }
     }
 
     // MARK: - Context Menu
 
     @ViewBuilder
-    private func contextMenu(
-        _ task: TaskItem,
-        vm: TasksViewModel
-    ) -> some View {
-        if task.isActive {
-            Button("Mark Done") { vm.markDone(task) }
-            Button("Dismiss") { vm.dismiss(task) }
+    private func contextMenu(_ target: Target, vm: TargetsViewModel) -> some View {
+        if target.isActive {
+            Button("Mark Done") { vm.markDone(target) }
+            Button("Dismiss") { vm.dismiss(target) }
 
             Menu("Snooze") {
-                Button("Tomorrow") {
-                    snoozeTask(task, vm: vm, days: 1)
-                }
-                Button("In 3 days") {
-                    snoozeTask(task, vm: vm, days: 3)
-                }
-                Button("In a week") {
-                    snoozeTask(task, vm: vm, days: 7)
-                }
+                Button("Tomorrow") { snoozeTarget(target, vm: vm, days: 1) }
+                Button("In 3 days") { snoozeTarget(target, vm: vm, days: 3) }
+                Button("In a week") { snoozeTarget(target, vm: vm, days: 7) }
             }
 
             Divider()
@@ -353,46 +310,42 @@ struct TasksListView: View {
                 ["todo", "in_progress", "blocked", "done", "dismissed"],
                 id: \.self
             ) { status in
-                Button(status.replacingOccurrences(of: "_", with: " ")
-                    .capitalized) {
-                    vm.updateStatus(task, to: status)
+                Button(status.replacingOccurrences(of: "_", with: " ").capitalized) {
+                    vm.updateStatus(target, to: status)
                 }
             }
         }
         Menu("Priority") {
             ForEach(["high", "medium", "low"], id: \.self) { priority in
                 Button(priority.capitalized) {
-                    vm.updatePriority(task, to: priority)
+                    vm.updatePriority(target, to: priority)
                 }
             }
         }
         Divider()
-        Button("Delete", role: .destructive) { vm.deleteTask(task) }
+        Button("Delete", role: .destructive) { vm.deleteTarget(target) }
     }
 
-    private func snoozeTask(_ task: TaskItem, vm: TasksViewModel, days: Int) {
+    private func snoozeTarget(_ target: Target, vm: TargetsViewModel, days: Int) {
         let date = Calendar.current.date(byAdding: .day, value: days, to: Date()) ?? Date()
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        vm.snooze(task, until: fmt.string(from: date))
+        vm.snooze(target, until: date)
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "checkmark.circle")
+            Image(systemName: "scope")
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
-            Text("No tasks yet")
+            Text("No targets yet")
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            Text("Create tasks from tracks, digests, or briefings")
+            Text("Create targets from tracks, digests, or briefings")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
-            Button("New Task") { showCreateSheet = true }
+            Button("New Target") { showCreateSheet = true }
                 .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -401,8 +354,8 @@ struct TasksListView: View {
 
     // MARK: - Helpers
 
-    private func statusColor(_ task: TaskItem) -> Color {
-        switch task.status {
+    private func statusColor(_ target: Target) -> Color {
+        switch target.status {
         case "todo": return .secondary
         case "in_progress": return .blue
         case "blocked": return .red
@@ -413,14 +366,14 @@ struct TasksListView: View {
         }
     }
 
-    private func priorityDot(_ task: TaskItem) -> some View {
+    private func priorityDot(_ target: Target) -> some View {
         Circle()
-            .fill(priorityColor(task))
+            .fill(priorityColor(target))
             .frame(width: 6, height: 6)
     }
 
-    private func priorityColor(_ task: TaskItem) -> Color {
-        switch task.priority {
+    private func priorityColor(_ target: Target) -> Color {
+        switch target.priority {
         case "high": return .red
         case "medium": return .orange
         case "low": return .blue
@@ -428,29 +381,40 @@ struct TasksListView: View {
         }
     }
 
-    private func sourceIcon(_ task: TaskItem) -> String {
-        switch task.sourceType {
-        case "track": return "binoculars"
-        case "digest": return "doc.text.magnifyingglass"
-        case "briefing": return "sun.max"
-        case "chat": return "bubble.left.and.bubble.right"
-        case "jira": return "tray.full"
-        default: return "square.and.pencil"
+    private func levelBadge(_ target: Target) -> some View {
+        let label: String
+        switch target.level {
+        case "quarter": label = "Q"
+        case "month": label = "M"
+        case "week": label = "W"
+        case "day": label = "D"
+        case "custom": label = target.customLabel.isEmpty ? "C" : String(target.customLabel.prefix(1))
+        default: label = "?"
+        }
+        return Text(label)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .frame(width: 16, height: 16)
+            .background(levelColor(target.level), in: RoundedRectangle(cornerRadius: 3))
+    }
+
+    private func levelColor(_ level: String) -> Color {
+        switch level {
+        case "quarter": return .purple
+        case "month": return .blue
+        case "week": return .teal
+        case "day": return .green
+        default: return .gray
         }
     }
 
     @ViewBuilder
-    private func jiraBadge(_ task: TaskItem) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: "tray.full")
+    private func periodLabel(_ target: Target) -> some View {
+        if !target.periodStart.isEmpty {
+            Text(target.periodStart)
                 .font(.caption2)
-            Text(task.sourceID)
-                .font(.caption2)
-                .fontWeight(.medium)
+                .foregroundStyle(.tertiary)
         }
-        .foregroundStyle(.blue)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 1)
-        .background(.blue.opacity(0.1), in: Capsule())
     }
 }

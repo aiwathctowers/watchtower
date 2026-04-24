@@ -251,13 +251,17 @@ struct MeetingNotesView: View {
         creatingTaskForID = noteID
         do {
             let taskID = try db.dbPool.write { dbConn in
-                let id = try TaskQueries.create(
+                let today = TargetQueries.todayDateString()
+                let id = try TargetQueries.create(
                     dbConn,
                     text: note.text,
+                    level: "day",
+                    periodStart: today,
+                    periodEnd: today,
                     sourceType: "manual",
                     sourceID: "meeting_note:\(noteID)"
                 )
-                try MeetingNoteQueries.setTaskID(dbConn, noteID: noteID, taskID: id)
+                try MeetingNoteQueries.setTaskID(dbConn, noteID: noteID, taskID: Int64(id))
                 return id
             }
             _ = taskID

@@ -482,7 +482,7 @@ enum TestDatabase {
         resolved_reason TEXT NOT NULL DEFAULT '',
         snooze_until    TEXT NOT NULL DEFAULT '',
         waiting_user_ids TEXT NOT NULL DEFAULT '',
-        task_id         INTEGER,
+        target_id       INTEGER,
         read_at         TEXT,
         item_class      TEXT NOT NULL DEFAULT 'ambient',
         pinned          INTEGER NOT NULL DEFAULT 0,
@@ -772,6 +772,58 @@ enum TestDatabase {
         created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
         updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     );
+
+    CREATE TABLE IF NOT EXISTS targets (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        text                TEXT NOT NULL,
+        intent              TEXT NOT NULL DEFAULT '',
+        level               TEXT NOT NULL DEFAULT 'day'
+                            CHECK(level IN ('quarter','month','week','day','custom')),
+        custom_label        TEXT NOT NULL DEFAULT '',
+        period_start        TEXT NOT NULL DEFAULT '',
+        period_end          TEXT NOT NULL DEFAULT '',
+        parent_id           INTEGER REFERENCES targets(id) ON DELETE SET NULL,
+        status              TEXT NOT NULL DEFAULT 'todo'
+                            CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
+        priority            TEXT NOT NULL DEFAULT 'medium'
+                            CHECK(priority IN ('high','medium','low')),
+        ownership           TEXT NOT NULL DEFAULT 'mine'
+                            CHECK(ownership IN ('mine','delegated','watching')),
+        ball_on             TEXT NOT NULL DEFAULT '',
+        due_date            TEXT NOT NULL DEFAULT '',
+        snooze_until        TEXT NOT NULL DEFAULT '',
+        blocking            TEXT NOT NULL DEFAULT '',
+        tags                TEXT NOT NULL DEFAULT '[]',
+        sub_items           TEXT NOT NULL DEFAULT '[]',
+        notes               TEXT NOT NULL DEFAULT '[]',
+        progress            REAL NOT NULL DEFAULT 0.0,
+        source_type         TEXT NOT NULL DEFAULT 'manual'
+                            CHECK(source_type IN ('extract','briefing','manual','chat','inbox','jira','slack')),
+        source_id           TEXT NOT NULL DEFAULT '',
+        ai_level_confidence REAL DEFAULT NULL,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_targets_level    ON targets(level);
+    CREATE INDEX IF NOT EXISTS idx_targets_parent   ON targets(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_targets_status   ON targets(status);
+    CREATE INDEX IF NOT EXISTS idx_targets_priority ON targets(priority);
+    CREATE INDEX IF NOT EXISTS idx_targets_source   ON targets(source_type, source_id);
+
+    CREATE TABLE IF NOT EXISTS target_links (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_target_id    INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+        target_target_id    INTEGER REFERENCES targets(id) ON DELETE CASCADE,
+        external_ref        TEXT NOT NULL DEFAULT '',
+        relation            TEXT NOT NULL
+                            CHECK(relation IN ('contributes_to','blocks','related','duplicates')),
+        confidence          REAL DEFAULT NULL,
+        created_by          TEXT NOT NULL DEFAULT 'ai'
+                            CHECK(created_by IN ('ai','user')),
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_target_links_source ON target_links(source_target_id);
+    CREATE INDEX IF NOT EXISTS idx_target_links_target ON target_links(target_target_id);
     """
 
     // MARK: - Briefing Fixtures
@@ -916,6 +968,61 @@ enum TestDatabase {
                              dueDate, snoozeUntil, blocking, tags, subItems, sourceType, sourceID])
     }
 
+    // MARK: - Target Fixtures
+
+    @discardableResult
+    static func insertTarget(
+        _ db: Database,
+        text: String = "Ship the feature",
+        intent: String = "",
+        level: String = "week",
+        customLabel: String = "",
+        periodStart: String = "2026-04-20",
+        periodEnd: String = "2026-04-26",
+        parentId: Int? = nil,
+        status: String = "todo",
+        priority: String = "medium",
+        ownership: String = "mine",
+        ballOn: String = "",
+        dueDate: String = "",
+        snoozeUntil: String = "",
+        blocking: String = "",
+        tags: String = "[]",
+        subItems: String = "[]",
+        notes: String = "[]",
+        progress: Double = 0.0,
+        sourceType: String = "manual",
+        sourceID: String = "",
+        aiLevelConfidence: Double? = nil
+    ) throws -> Int64 {
+        try db.execute(sql: """
+            INSERT INTO targets (text, intent, level, custom_label, period_start, period_end,
+                parent_id, status, priority, ownership, ball_on, due_date, snooze_until,
+                blocking, tags, sub_items, notes, progress, source_type, source_id, ai_level_confidence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [text, intent, level, customLabel, periodStart, periodEnd,
+                             parentId, status, priority, ownership, ballOn, dueDate, snoozeUntil,
+                             blocking, tags, subItems, notes, progress, sourceType, sourceID, aiLevelConfidence])
+        return db.lastInsertedRowID
+    }
+
+    @discardableResult
+    static func insertTargetLink(
+        _ db: Database,
+        sourceTargetId: Int,
+        targetTargetId: Int? = nil,
+        externalRef: String = "",
+        relation: String = "contributes_to",
+        confidence: Double? = nil,
+        createdBy: String = "ai"
+    ) throws -> Int64 {
+        try db.execute(sql: """
+            INSERT INTO target_links (source_target_id, target_target_id, external_ref, relation, confidence, created_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, arguments: [sourceTargetId, targetTargetId, externalRef, relation, confidence, createdBy])
+        return db.lastInsertedRowID
+    }
+
     // MARK: - Inbox Fixtures
 
     static func insertInboxItem(
@@ -932,13 +1039,13 @@ enum TestDatabase {
         aiReason: String = "",
         resolvedReason: String = "",
         snoozeUntil: String = "",
-        taskID: Int? = nil,
+        taskID: Int? = nil,       // kept for call-site compat; maps to target_id column
         readAt: String? = nil
     ) throws {
         try db.execute(sql: """
             INSERT INTO inbox_items (channel_id, message_ts, thread_ts, sender_user_id,
                 trigger_type, snippet, permalink, status, priority, ai_reason,
-                resolved_reason, snooze_until, task_id, read_at)
+                resolved_reason, snooze_until, target_id, read_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: [channelID, messageTS, threadTS, senderUserID,
                              triggerType, snippet, permalink, status, priority, aiReason,

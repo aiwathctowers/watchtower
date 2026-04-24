@@ -112,7 +112,7 @@ func (db *DB) GetChannelStats(currentUserID string) ([]ChannelStatRow, error) {
 	return stats, rows.Err()
 }
 
-// GetChannelValueSignals returns per-channel value signals from related entities (decisions, tracks, tasks, inbox).
+// GetChannelValueSignals returns per-channel value signals from related entities (decisions, tracks, targets, inbox).
 // Only channels with at least one non-zero signal are included in the result map.
 func (db *DB) GetChannelValueSignals() (map[string]ChannelValueSignals, error) {
 	cutoff := float64(time.Now().AddDate(0, 0, -30).Unix())
@@ -134,7 +134,7 @@ func (db *DB) GetChannelValueSignals() (map[string]ChannelValueSignals, error) {
 		),
 		task_via_digest AS (
 			SELECT d.channel_id, COUNT(*) AS cnt
-			FROM tasks t
+			FROM targets t
 			JOIN digests d ON t.source_type = 'digest' AND t.source_id = CAST(d.id AS TEXT)
 			WHERE t.status IN ('todo','in_progress','blocked')
 			  AND d.channel_id != ''
@@ -142,7 +142,7 @@ func (db *DB) GetChannelValueSignals() (map[string]ChannelValueSignals, error) {
 		),
 		task_via_inbox AS (
 			SELECT i.channel_id, COUNT(*) AS cnt
-			FROM tasks t
+			FROM targets t
 			JOIN inbox_items i ON t.source_type = 'inbox' AND t.source_id = CAST(i.id AS TEXT)
 			WHERE t.status IN ('todo','in_progress','blocked')
 			GROUP BY i.channel_id

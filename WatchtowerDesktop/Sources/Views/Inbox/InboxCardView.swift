@@ -183,7 +183,7 @@ struct InboxCardView: View {
                     Button("Till Monday")   { onSnooze(.tillMonday) }
                 }
                 Button("Dismiss", role: .destructive, action: onDismiss)
-                if !item.hasLinkedTask {
+                if !item.hasLinkedTarget {
                     Button("Create Task", action: onCreateTask)
                 }
             }

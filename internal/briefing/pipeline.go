@@ -26,19 +26,19 @@ type BriefingResult struct {
 
 // AttentionItem is something requiring the user's immediate focus.
 type AttentionItem struct {
-	Text        string `json:"text"`
-	SourceType  string `json:"source_type"` // track, digest, people, task
-	SourceID    string `json:"source_id"`
-	Priority    string `json:"priority"` // high, medium
-	Reason      string `json:"reason"`
-	SuggestTask bool   `json:"suggest_task,omitempty"`
+	Text          string `json:"text"`
+	SourceType    string `json:"source_type"` // track, digest, people, target
+	SourceID      string `json:"source_id"`
+	Priority      string `json:"priority"` // high, medium
+	Reason        string `json:"reason"`
+	SuggestTarget bool   `json:"suggest_target,omitempty"`
 }
 
-// YourDayItem is a track/task for the user's day.
+// YourDayItem is a track/target for the user's day.
 type YourDayItem struct {
 	Text      string `json:"text"`
 	TrackID   int    `json:"track_id,omitempty"`
-	TaskID    int    `json:"task_id,omitempty"`
+	TargetID  int    `json:"target_id,omitempty"`
 	DueDate   string `json:"due_date,omitempty"`
 	Priority  string `json:"priority"`
 	Status    string `json:"status"`
@@ -144,7 +144,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	}
 
 	// Gather data in parallel-friendly sections.
-	tasksCtx, hasRealTasks := p.gatherTasks()
+	targetsCtx, hasRealTargets := p.gatherTargets()
 	tracksCtx, hasRealTracks := p.gatherTracks()
 	inboxCtx, hasRealInbox := p.gatherInbox()
 	calendarCtx := p.gatherCalendar()
@@ -156,7 +156,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	jiraCtx := p.gatherJiraContext(currentUserID)
 
 	// Check we have some data (suggestion text alone doesn't count).
-	hasData := digestsCtx != "" || dailyDigestCtx != "" || hasRealTracks || hasRealTasks || hasRealInbox
+	hasData := digestsCtx != "" || dailyDigestCtx != "" || hasRealTracks || hasRealTargets || hasRealInbox
 	if !hasData {
 		p.logger.Println("briefing: no digests or tracks available, skipping")
 		return 0, nil
@@ -182,7 +182,7 @@ func (p *Pipeline) RunForDate(ctx context.Context, date string) (int, error) {
 	systemPrompt := fmt.Sprintf(promptTmpl,
 		userName, date, role,
 		langDirective,
-		tasksCtx,
+		targetsCtx,
 		inboxCtx,
 		calendarCtx,
 		tracksCtx,
@@ -274,27 +274,27 @@ func (p *Pipeline) getPrompt(id, role string) (string, int) {
 	return tmpl, 0
 }
 
-// gatherTasks loads active tasks for the briefing.
-// Returns the formatted context string and whether real tasks were found.
-func (p *Pipeline) gatherTasks() (string, bool) {
-	tasks, err := p.db.GetTasksForBriefing()
+// gatherTargets loads active targets for the briefing.
+// Returns the formatted context string and whether real targets were found.
+func (p *Pipeline) gatherTargets() (string, bool) {
+	targets, err := p.db.GetTargetsForBriefing()
 	if err != nil {
-		p.logger.Printf("briefing: error loading tasks: %v", err)
+		p.logger.Printf("briefing: error loading targets: %v", err)
 		return "", false
 	}
 
-	if len(tasks) == 0 {
-		return "(No active tasks.)\n", false
+	if len(targets) == 0 {
+		return "(No active targets.)\n", false
 	}
 
 	today := time.Now().Format("2006-01-02")
 	var sb strings.Builder
-	for _, t := range tasks {
+	for _, t := range targets {
 		overdue := ""
 		if t.DueDate != "" && t.DueDate < today {
 			overdue = " OVERDUE"
 		}
-		sb.WriteString(fmt.Sprintf("- [task_id=%d %s%s] %s\n", t.ID, t.Priority, overdue, t.Text))
+		sb.WriteString(fmt.Sprintf("- [target_id=%d level=%s %s%s] %s\n", t.ID, t.Level, t.Priority, overdue, t.Text))
 		if t.Intent != "" {
 			sb.WriteString(fmt.Sprintf("  Why: %s\n", t.Intent))
 		}

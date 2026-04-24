@@ -206,8 +206,8 @@ func runInboxShow(cmd *cobra.Command, args []string) error {
 	if item.SnoozeUntil != "" {
 		fmt.Fprintf(out, "Snoozed until: %s\n", item.SnoozeUntil)
 	}
-	if item.TaskID != nil {
-		fmt.Fprintf(out, "Task: #%d\n", *item.TaskID)
+	if item.TargetID != nil {
+		fmt.Fprintf(out, "Target: #%d\n", *item.TargetID)
 	}
 
 	fmt.Fprintf(out, "Created: %s | Updated: %s\n", item.CreatedAt, item.UpdatedAt)
@@ -505,7 +505,7 @@ func runInboxTask(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("inbox item #%d not found: %w", id, err)
 	}
 
-	task := db.Task{
+	target := db.Target{
 		Text:       item.Snippet,
 		Status:     "todo",
 		Priority:   item.Priority,
@@ -514,16 +514,16 @@ func runInboxTask(cmd *cobra.Command, args []string) error {
 		SourceID:   strconv.Itoa(item.ID),
 	}
 
-	taskID, err := database.CreateTask(task)
+	targetID, err := database.CreateTarget(target)
 	if err != nil {
-		return fmt.Errorf("creating task: %w", err)
+		return fmt.Errorf("creating target: %w", err)
 	}
 
-	if err := database.LinkInboxTask(id, int(taskID)); err != nil {
-		return fmt.Errorf("linking task: %w", err)
+	if err := database.LinkInboxTarget(id, int(targetID)); err != nil {
+		return fmt.Errorf("linking target: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Created task #%d from inbox item #%d\n", taskID, id)
+	fmt.Fprintf(cmd.OutOrStdout(), "Created target #%d from inbox item #%d\n", targetID, id)
 	return nil
 }
 

@@ -53,6 +53,17 @@ const (
 	DefaultDayPlanMaxTimeblocks     = 3
 	DefaultDayPlanMinBacklog        = 3
 	DefaultDayPlanMaxBacklog        = 8
+
+	// Targets defaults
+	DefaultTargetsExtractEnabled        = true
+	DefaultTargetsExtractMaxPerCall     = 10
+	DefaultTargetsExtractTimeoutSeconds = 30
+	DefaultTargetsExtractModel          = "" // empty → provider default
+
+	DefaultTargetsResolverSlackEnabled        = true
+	DefaultTargetsResolverJiraEnabled         = true
+	DefaultTargetsResolverMCPTimeoutSeconds   = 10
+	DefaultTargetsResolverActiveSnapshotLimit = 100
 )
 
 // RoleDisplayNames maps role keys to human-readable display names.

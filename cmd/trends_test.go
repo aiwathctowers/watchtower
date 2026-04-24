@@ -43,7 +43,7 @@ func TestRunTrends_WithWeeklyDigest(t *testing.T) {
 
 	now := float64(time.Now().Unix())
 	_, err = database.UpsertDigest(db.Digest{
-		PeriodFrom:   now - 7*86400,
+		PeriodFrom:   now - 6*86400, // use 6 days to stay within the 7-day query window
 		PeriodTo:     now,
 		Type:         "weekly",
 		Summary:      "Busy week with many API changes and deployments",

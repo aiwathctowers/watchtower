@@ -282,7 +282,7 @@ func TestGetChannelValueSignals_Basic(t *testing.T) {
 	require.NoError(t, err)
 
 	// Task via digest
-	_, err = db.Exec(`INSERT INTO tasks (text, status, source_type, source_id) VALUES ('task1', 'todo', 'digest', '1')`)
+	_, err = db.Exec(`INSERT INTO targets (text, status, source_type, source_id, period_start, period_end) VALUES ('task1', 'todo', 'digest', '1', '2026-01-01', '2026-12-31')`)
 	require.NoError(t, err)
 
 	// Pending inbox
@@ -338,7 +338,7 @@ func TestGetChannelValueSignals_TaskViaDigest(t *testing.T) {
 
 	_, err := db.Exec(`INSERT INTO digests (channel_id, period_from, period_to, type, summary, message_count) VALUES ('C1', 1700000000, 1700086400, 'channel', 'test', 5)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO tasks (text, status, source_type, source_id) VALUES ('do X', 'in_progress', 'digest', '1')`)
+	_, err = db.Exec(`INSERT INTO targets (text, status, source_type, source_id, period_start, period_end) VALUES ('do X', 'in_progress', 'digest', '1', '2026-01-01', '2026-12-31')`)
 	require.NoError(t, err)
 
 	signals, err := db.GetChannelValueSignals()
@@ -353,7 +353,7 @@ func TestGetChannelValueSignals_TaskViaInbox(t *testing.T) {
 
 	_, err := db.Exec(`INSERT INTO inbox_items (channel_id, message_ts, sender_user_id, trigger_type, status) VALUES ('C1', '1700000001.000100', 'U2', 'mention', 'resolved')`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO tasks (text, status, source_type, source_id) VALUES ('reply', 'blocked', 'inbox', '1')`)
+	_, err = db.Exec(`INSERT INTO targets (text, status, source_type, source_id, period_start, period_end) VALUES ('reply', 'blocked', 'inbox', '1', '2026-01-01', '2026-12-31')`)
 	require.NoError(t, err)
 
 	signals, err := db.GetChannelValueSignals()

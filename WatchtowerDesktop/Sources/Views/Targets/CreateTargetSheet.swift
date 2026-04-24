@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct CreateTaskSheet: View {
+struct CreateTargetSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
@@ -11,13 +11,24 @@ struct CreateTaskSheet: View {
 
     @State private var text: String = ""
     @State private var intent: String = ""
+    @State private var level: String = "day"
     @State private var priority: String = "medium"
-    @State private var dueDate: Date?
-    @State private var hasDueDate: Bool = false
-    @State private var subItems: [TaskSubItem] = []
+    @State private var periodStart: Date = Date()
+    @State private var periodEnd: Date = Date()
+    @State private var hasPeriod: Bool = false
+    @State private var subItems: [TargetSubItem] = []
     @State private var newSubItemText: String = ""
     @State private var errorMessage: String?
-    @State private var isGenerating: Bool = false
+    // V1: hidden — pending Swift→Go CLI bridge (see spec "Out of Scope V2")
+    // @State private var showExtractSheet = false
+    // @State private var highlightExtract: Bool = false
+
+    private let dateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt
+    }()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +38,7 @@ struct CreateTaskSheet: View {
             Divider()
             sheetFooter
         }
-        .frame(width: 480, height: 560)
+        .frame(width: 500, height: 580)
         .onAppear {
             text = prefillText
             intent = prefillIntent
@@ -36,7 +47,7 @@ struct CreateTaskSheet: View {
 
     private var sheetHeader: some View {
         HStack {
-            Text("New Task")
+            Text("New Target")
                 .font(.headline)
             Spacer()
             Button("Cancel") { dismiss() }
@@ -49,10 +60,11 @@ struct CreateTaskSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 textField
-                aiGenerateButton
+                // V1: "Paste and extract" button hidden — pending Swift→Go CLI bridge (see spec "Out of Scope V2")
                 intentField
+                levelRow
                 priorityRow
-                dueDateRow
+                periodRow
                 checklistSection
                 sourceInfo
                 errorRow
@@ -63,39 +75,12 @@ struct CreateTaskSheet: View {
 
     private var textField: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("What needs to be done?")
+            Text("What is the goal?")
                 .font(.subheadline)
                 .fontWeight(.medium)
-            TextField("Task description", text: $text, axis: .vertical)
+            TextField("Target description", text: $text, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
-        }
-    }
-
-    private var aiGenerateButton: some View {
-        HStack {
-            Button {
-                generateWithAI()
-            } label: {
-                HStack(spacing: 6) {
-                    if isGenerating {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "sparkles")
-                    }
-                    Text(isGenerating ? "Generating..." : "Generate with AI")
-                }
-            }
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
-
-            Spacer()
-
-            if isGenerating {
-                Text("AI is breaking down the task...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -106,6 +91,23 @@ struct CreateTaskSheet: View {
                 .fontWeight(.medium)
             TextField("Context or intent", text: $intent)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private var levelRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Level")
+                .font(.subheadline)
+                .fontWeight(.medium)
+            Picker("Level", selection: $level) {
+                Text("Quarter").tag("quarter")
+                Text("Month").tag("month")
+                Text("Week").tag("week")
+                Text("Day").tag("day")
+                Text("Custom").tag("custom")
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
         }
     }
 
@@ -124,21 +126,24 @@ struct CreateTaskSheet: View {
         }
     }
 
-    private var dueDateRow: some View {
-        HStack {
-            Toggle("Due date", isOn: $hasDueDate)
+    private var periodRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Custom period", isOn: $hasPeriod)
                 .font(.subheadline)
                 .fontWeight(.medium)
-            if hasDueDate {
-                DatePicker(
-                    "",
-                    selection: Binding(
-                        get: { dueDate ?? Date() },
-                        set: { dueDate = $0 }
-                    ),
-                    displayedComponents: [.date, .hourAndMinute]
-                )
-                .labelsHidden()
+            if hasPeriod {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start").font(.caption).foregroundStyle(.secondary)
+                        DatePicker("", selection: $periodStart, displayedComponents: .date)
+                            .labelsHidden()
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("End").font(.caption).foregroundStyle(.secondary)
+                        DatePicker("", selection: $periodEnd, displayedComponents: .date)
+                            .labelsHidden()
+                    }
+                }
             }
         }
     }
@@ -178,7 +183,7 @@ struct CreateTaskSheet: View {
                     .onSubmit {
                         let trimmed = newSubItemText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            subItems.append(TaskSubItem(text: trimmed, done: false))
+                            subItems.append(TargetSubItem(text: trimmed, done: false))
                             newSubItemText = ""
                         }
                     }
@@ -212,7 +217,7 @@ struct CreateTaskSheet: View {
         HStack {
             Spacer()
             Button("Create") {
-                createTask()
+                createTarget()
             }
             .keyboardShortcut(.defaultAction)
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -229,105 +234,9 @@ struct CreateTaskSheet: View {
         }
     }
 
-    // MARK: - AI Generation
-
-    private func generateWithAI() {
-        guard let cliPath = Constants.findCLIPath() else {
-            errorMessage = "watchtower binary not found"
-            return
-        }
-
-        let taskText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !taskText.isEmpty else { return }
-
-        isGenerating = true
-        errorMessage = nil
-
-        Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: cliPath)
-
-            var args = ["tasks", "generate", "--text", taskText]
-            if prefillSourceType != "manual" && !prefillSourceID.isEmpty {
-                args += ["--source-type", prefillSourceType, "--source-id", prefillSourceID]
-            }
-            process.arguments = args
-            process.environment = Constants.resolvedEnvironment()
-
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-
-                let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let outStr = String(data: outData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                let errStr = String(data: errData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                await MainActor.run {
-                    isGenerating = false
-
-                    if process.terminationStatus != 0 {
-                        errorMessage = errStr.isEmpty ? "AI generation failed" : errStr
-                        return
-                    }
-
-                    applyGeneratedResult(outStr)
-                }
-            } catch {
-                await MainActor.run {
-                    isGenerating = false
-                    errorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func applyGeneratedResult(_ jsonStr: String) {
-        guard let data = jsonStr.data(using: .utf8) else {
-            errorMessage = "Invalid response from AI"
-            return
-        }
-
-        struct GeneratedTask: Decodable {
-            let text: String?
-            let intent: String?
-            let priority: String?
-            // swiftlint:disable:next identifier_name
-            let due_date: String?
-            // swiftlint:disable:next identifier_name
-            let sub_items: [TaskSubItem]?
-        }
-
-        do {
-            let result = try JSONDecoder().decode(GeneratedTask.self, from: data)
-
-            if let t = result.text, !t.isEmpty { text = t }
-            if let i = result.intent, !i.isEmpty { intent = i }
-            if let p = result.priority, ["high", "medium", "low"].contains(p) { priority = p }
-            if let d = result.due_date, !d.isEmpty,
-               let date = TaskItem.parseDueDate(d) {
-                dueDate = date
-                hasDueDate = true
-            }
-            if let items = result.sub_items, !items.isEmpty {
-                subItems = items
-            }
-        } catch {
-            errorMessage = "Failed to parse AI response: \(error.localizedDescription)"
-        }
-    }
-
     // MARK: - Create
 
-    private func createTask() {
+    private func createTarget() {
         guard let db = appState.databaseManager else {
             errorMessage = "Database not available"
             return
@@ -336,12 +245,9 @@ struct CreateTaskSheet: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let dueDateStr: String
-        if hasDueDate, let dueDate {
-            dueDateStr = TaskItem.formatDueDate(dueDate)
-        } else {
-            dueDateStr = ""
-        }
+        let today = dateFormatter.string(from: Date())
+        let start = hasPeriod ? dateFormatter.string(from: periodStart) : today
+        let end = hasPeriod ? dateFormatter.string(from: periodEnd) : today
 
         let subItemsJSON: String
         if subItems.isEmpty {
@@ -355,15 +261,17 @@ struct CreateTaskSheet: View {
 
         do {
             _ = try db.dbPool.write { dbConn in
-                try TaskQueries.create(
+                try TargetQueries.create(
                     dbConn,
                     text: trimmed,
                     intent: intent.trimmingCharacters(in: .whitespacesAndNewlines),
+                    level: level,
+                    periodStart: start,
+                    periodEnd: end,
                     priority: priority,
-                    dueDate: dueDateStr,
+                    subItems: subItemsJSON,
                     sourceType: prefillSourceType,
-                    sourceID: prefillSourceID,
-                    subItems: subItemsJSON
+                    sourceID: prefillSourceID
                 )
             }
             dismiss()

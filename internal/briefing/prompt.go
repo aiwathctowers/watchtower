@@ -7,7 +7,7 @@ package briefing
 //   2. date           — YYYY-MM-DD
 //   3. role           — user's role (or empty)
 //   4. langDirective  — "Respond in <language>"
-//   5. tasksCtx       — active tasks with priority and due dates
+//   5. targetsCtx     — active targets with level, priority and due dates
 //   6. inboxCtx       — pending inbox items awaiting response
 //   7. calendarCtx    — today's calendar events with attendee context
 //   8. tracksCtx      — active tracks with status, participants, priority

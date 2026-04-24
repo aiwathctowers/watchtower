@@ -143,8 +143,8 @@ final class InboxModelTests: XCTestCase {
         let item = try XCTUnwrap(db.read {
             try InboxItem.fetchOne($0, sql: "SELECT * FROM inbox_items LIMIT 1")
         })
-        XCTAssertTrue(item.hasLinkedTask)
-        XCTAssertEqual(item.taskID, 42)
+        XCTAssertTrue(item.hasLinkedTarget)
+        XCTAssertEqual(item.targetID, 42)
     }
 
     func testNoTask() throws {
@@ -153,8 +153,8 @@ final class InboxModelTests: XCTestCase {
         let item = try XCTUnwrap(db.read {
             try InboxItem.fetchOne($0, sql: "SELECT * FROM inbox_items LIMIT 1")
         })
-        XCTAssertFalse(item.hasLinkedTask)
-        XCTAssertNil(item.taskID)
+        XCTAssertFalse(item.hasLinkedTarget)
+        XCTAssertNil(item.targetID)
     }
 
     func testPriorityColor() throws {
@@ -302,13 +302,13 @@ final class InboxQueryTests: XCTestCase {
 
     // MARK: - linkTask
 
-    func testLinkTask() throws {
+    func testLinkTarget() throws {
         let db = try TestDatabase.create()
         try db.write { try TestDatabase.insertInboxItem($0) }
-        try db.write { try InboxQueries.linkTask($0, inboxID: 1, taskID: 42) }
+        try db.write { try InboxQueries.linkTarget($0, inboxID: 1, targetID: 42) }
         let item = try XCTUnwrap(db.read { try InboxQueries.fetchByID($0, id: 1) })
-        XCTAssertEqual(item.taskID, 42)
-        XCTAssertTrue(item.hasLinkedTask)
+        XCTAssertEqual(item.targetID, 42)
+        XCTAssertTrue(item.hasLinkedTarget)
     }
 
     // MARK: - dismiss
@@ -354,16 +354,16 @@ final class InboxQueryTests: XCTestCase {
         }
         XCTAssertGreaterThan(taskID, 0)
 
-        // Verify task was created
-        let task = try XCTUnwrap(db.read { try TaskQueries.fetchByID($0, id: Int(taskID)) })
-        XCTAssertEqual(task.text, "Please review PR")
-        XCTAssertEqual(task.sourceType, "inbox")
-        XCTAssertEqual(task.sourceID, "1")
+        // Verify target was created
+        let target = try XCTUnwrap(db.read { try TargetQueries.fetchByID($0, id: Int(taskID)) })
+        XCTAssertEqual(target.text, "Please review PR")
+        XCTAssertEqual(target.sourceType, "inbox")
+        XCTAssertEqual(target.sourceID, "1")
 
         // Verify inbox item was linked
         let updated = try XCTUnwrap(db.read { try InboxQueries.fetchByID($0, id: 1) })
-        XCTAssertEqual(updated.taskID, Int(taskID))
-        XCTAssertTrue(updated.hasLinkedTask)
+        XCTAssertEqual(updated.targetID, Int(taskID))
+        XCTAssertTrue(updated.hasLinkedTarget)
     }
 }
 
@@ -484,7 +484,7 @@ final class InboxViewModelTests: XCTestCase {
         vm.createTask(from: item)
 
         let updated = try XCTUnwrap(vm.itemByID(item.id))
-        XCTAssertTrue(updated.hasLinkedTask)
+        XCTAssertTrue(updated.hasLinkedTarget)
     }
 
     @MainActor

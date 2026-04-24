@@ -3,38 +3,21 @@ import GRDB
 
 @MainActor
 @Observable
-final class TasksViewModel {
-    var todayTasks: [TaskItem] = []
-    var allTasks: [TaskItem] = []
+final class TargetsViewModel {
+    var todayTargets: [Target] = []
+    var allTargets: [Target] = []
     var activeCount: Int = 0
     var overdueCount: Int = 0
     var isLoading = false
     var errorMessage: String?
 
     // Filters
+    var levelFilter: String?
     var statusFilter: String?
     var priorityFilter: String?
     var ownershipFilter: String?
     var showDone: Bool = false
-    var sourceFilter: SourceFilter = .all
-
-    enum SourceFilter: String, CaseIterable {
-        case all = "All"
-        case jira = "Jira"
-        case slack = "Slack"
-        case manual = "Manual"
-
-        func matches(_ sourceType: String) -> Bool {
-            switch self {
-            case .all: return true
-            case .jira: return sourceType == "jira"
-            case .slack:
-                return ["track", "digest", "briefing", "chat", "inbox"]
-                    .contains(sourceType)
-            case .manual: return sourceType == "manual"
-            }
-        }
-    }
+    var searchText: String = ""
 
     private let dbManager: DatabaseManager
     private var observationTask: Task<Void, Never>?
@@ -49,7 +32,7 @@ final class TasksViewModel {
         let dbPool = dbManager.dbPool
         observationTask = Task { [weak self] in
             let observation = ValueObservation.tracking { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks") ?? 0
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM targets") ?? 0
             }
             do {
                 for try await _ in observation.values(in: dbPool).dropFirst() {
@@ -64,56 +47,54 @@ final class TasksViewModel {
         isLoading = true
         do {
             let result = try dbManager.dbPool.read { db in
-                let counts = try TaskQueries.fetchCounts(db)
-                let all = try TaskQueries.fetchAll(
-                    db,
-                    status: self.statusFilter,
-                    priority: self.priorityFilter,
-                    ownership: self.ownershipFilter,
-                    includeDone: self.showDone
-                )
+                let counts = try TargetQueries.fetchCounts(db)
+                var filter = TargetFilter()
+                filter.level = self.levelFilter
+                filter.status = self.statusFilter
+                filter.priority = self.priorityFilter
+                filter.ownership = self.ownershipFilter
+                filter.includeDone = self.showDone
+                if !self.searchText.isEmpty {
+                    filter.search = self.searchText
+                }
+                let all = try TargetQueries.fetchAll(db, filter: filter)
                 return (all, counts)
             }
 
-            let tasks = result.0
+            let targets = result.0
             activeCount = result.1.active
             overdueCount = result.1.overdue
 
-            // Apply source filter
-            let filtered = sourceFilter == .all
-                ? tasks
-                : tasks.filter { sourceFilter.matches($0.sourceType) }
-
             // Today: overdue + due today + high priority active
-            todayTasks = filtered.filter { task in
-                task.isActive && (task.isOverdue || task.isDueToday || task.priority == "high")
+            todayTargets = targets.filter { target in
+                target.isActive && (target.isOverdue || target.isDueToday || target.priority == "high")
             }
 
-            // All: everything else (excluding what's in today)
-            let todayIDs = Set(todayTasks.map(\.id))
-            allTasks = filtered.filter { !todayIDs.contains($0.id) }
+            // All: everything else
+            let todayIDs = Set(todayTargets.map(\.id))
+            allTargets = targets.filter { !todayIDs.contains($0.id) }
 
             errorMessage = nil
         } catch {
-            todayTasks = []
-            allTasks = []
+            todayTargets = []
+            allTargets = []
             errorMessage = error.localizedDescription
         }
         isLoading = false
     }
 
-    func markDone(_ task: TaskItem) {
-        updateStatus(task, to: "done")
+    func markDone(_ target: Target) {
+        updateStatus(target, to: "done")
     }
 
-    func dismiss(_ task: TaskItem) {
-        updateStatus(task, to: "dismissed")
+    func dismiss(_ target: Target) {
+        updateStatus(target, to: "dismissed")
     }
 
-    func snooze(_ task: TaskItem, until: String) {
+    func snooze(_ target: Target, until: Date) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.snooze(db, id: task.id, until: until)
+                try TargetQueries.snooze(db, id: target.id, until: until)
             }
             load()
         } catch {
@@ -121,15 +102,13 @@ final class TasksViewModel {
         }
     }
 
-    func toggleSubItem(_ task: TaskItem, index: Int) {
-        var items = task.decodedSubItems
+    func toggleSubItem(_ target: Target, index: Int) {
+        var items = target.decodedSubItems
         guard index >= 0, index < items.count else { return }
         items[index].done.toggle()
-        guard let data = try? JSONEncoder().encode(items),
-              let json = String(data: data, encoding: .utf8) else { return }
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateSubItems(db, id: task.id, subItems: json)
+                try TargetQueries.updateSubItems(db, id: target.id, subItems: items)
             }
             load()
         } catch {
@@ -137,12 +116,15 @@ final class TasksViewModel {
         }
     }
 
-    func updateText(_ task: TaskItem, to text: String) {
+    func updateText(_ target: Target, to text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateText(db, id: task.id, text: trimmed)
+                try db.execute(
+                    sql: "UPDATE targets SET text = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [trimmed, target.id]
+                )
             }
             load()
         } catch {
@@ -150,10 +132,13 @@ final class TasksViewModel {
         }
     }
 
-    func updateIntent(_ task: TaskItem, to intent: String) {
+    func updateIntent(_ target: Target, to intent: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateIntent(db, id: task.id, intent: intent.trimmingCharacters(in: .whitespacesAndNewlines))
+                try db.execute(
+                    sql: "UPDATE targets SET intent = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [intent.trimmingCharacters(in: .whitespacesAndNewlines), target.id]
+                )
             }
             load()
         } catch {
@@ -161,10 +146,13 @@ final class TasksViewModel {
         }
     }
 
-    func updateDueDate(_ task: TaskItem, to dueDate: String) {
+    func updateDueDate(_ target: Target, to dueDate: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateDueDate(db, id: task.id, dueDate: dueDate)
+                try db.execute(
+                    sql: "UPDATE targets SET due_date = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [dueDate, target.id]
+                )
             }
             load()
         } catch {
@@ -172,10 +160,13 @@ final class TasksViewModel {
         }
     }
 
-    func updateOwnership(_ task: TaskItem, to ownership: String) {
+    func updateOwnership(_ target: Target, to ownership: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateOwnership(db, id: task.id, ownership: ownership)
+                try db.execute(
+                    sql: "UPDATE targets SET ownership = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [ownership, target.id]
+                )
             }
             load()
         } catch {
@@ -183,10 +174,13 @@ final class TasksViewModel {
         }
     }
 
-    func updateBlocking(_ task: TaskItem, to blocking: String) {
+    func updateBlocking(_ target: Target, to blocking: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateBlocking(db, id: task.id, blocking: blocking.trimmingCharacters(in: .whitespacesAndNewlines))
+                try db.execute(
+                    sql: "UPDATE targets SET blocking = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [blocking.trimmingCharacters(in: .whitespacesAndNewlines), target.id]
+                )
             }
             load()
         } catch {
@@ -194,10 +188,13 @@ final class TasksViewModel {
         }
     }
 
-    func updateBallOn(_ task: TaskItem, to ballOn: String) {
+    func updateBallOn(_ target: Target, to ballOn: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateBallOn(db, id: task.id, ballOn: ballOn.trimmingCharacters(in: .whitespacesAndNewlines))
+                try db.execute(
+                    sql: "UPDATE targets SET ball_on = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [ballOn.trimmingCharacters(in: .whitespacesAndNewlines), target.id]
+                )
             }
             load()
         } catch {
@@ -205,42 +202,40 @@ final class TasksViewModel {
         }
     }
 
-    func addSubItem(_ task: TaskItem, text: String) {
+    func addSubItem(_ target: Target, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var items = task.decodedSubItems
-        items.append(TaskSubItem(text: trimmed, done: false))
-        saveSubItems(task, items: items)
+        var items = target.decodedSubItems
+        items.append(TargetSubItem(text: trimmed, done: false))
+        saveSubItems(target, items: items)
     }
 
-    func removeSubItem(_ task: TaskItem, index: Int) {
-        var items = task.decodedSubItems
+    func removeSubItem(_ target: Target, index: Int) {
+        var items = target.decodedSubItems
         guard index >= 0, index < items.count else { return }
         items.remove(at: index)
-        saveSubItems(task, items: items)
+        saveSubItems(target, items: items)
     }
 
-    func editSubItem(_ task: TaskItem, index: Int, newText: String) {
+    func editSubItem(_ target: Target, index: Int, newText: String) {
         let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var items = task.decodedSubItems
+        var items = target.decodedSubItems
         guard index >= 0, index < items.count else { return }
         items[index].text = trimmed
-        saveSubItems(task, items: items)
+        saveSubItems(target, items: items)
     }
 
-    func moveSubItem(_ task: TaskItem, from source: IndexSet, to destination: Int) {
-        var items = task.decodedSubItems
+    func moveSubItem(_ target: Target, from source: IndexSet, to destination: Int) {
+        var items = target.decodedSubItems
         items.move(fromOffsets: source, toOffset: destination)
-        saveSubItems(task, items: items)
+        saveSubItems(target, items: items)
     }
 
-    private func saveSubItems(_ task: TaskItem, items: [TaskSubItem]) {
-        guard let data = try? JSONEncoder().encode(items),
-              let json = String(data: data, encoding: .utf8) else { return }
+    private func saveSubItems(_ target: Target, items: [TargetSubItem]) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateSubItems(db, id: task.id, subItems: json)
+                try TargetQueries.updateSubItems(db, id: target.id, subItems: items)
             }
             load()
         } catch {
@@ -248,15 +243,15 @@ final class TasksViewModel {
         }
     }
 
-    func replaceSubItems(_ task: TaskItem, items: [TaskSubItem]) {
-        saveSubItems(task, items: items)
+    func replaceSubItems(_ target: Target, items: [TargetSubItem]) {
+        saveSubItems(target, items: items)
     }
 
-    func updateSubItemDueDate(_ task: TaskItem, index: Int, dueDate: String?) {
-        var items = task.decodedSubItems
+    func updateSubItemDueDate(_ target: Target, index: Int, dueDate: String?) {
+        var items = target.decodedSubItems
         guard index >= 0, index < items.count else { return }
         items[index].dueDate = dueDate
-        saveSubItems(task, items: items)
+        saveSubItems(target, items: items)
     }
 
     // MARK: - Notes
@@ -267,28 +262,31 @@ final class TasksViewModel {
         return fmt
     }()
 
-    func addNote(_ task: TaskItem, text: String) {
+    func addNote(_ target: Target, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var notes = task.decodedNotes
+        var notes = target.decodedNotes
         let now = Self.iso8601Formatter.string(from: Date())
-        notes.append(TaskNote(text: trimmed, createdAt: now))
-        saveNotes(task, notes: notes)
+        notes.append(TargetNote(text: trimmed, createdAt: now))
+        saveNotes(target, notes: notes)
     }
 
-    func removeNote(_ task: TaskItem, index: Int) {
-        var notes = task.decodedNotes
+    func removeNote(_ target: Target, index: Int) {
+        var notes = target.decodedNotes
         guard index >= 0, index < notes.count else { return }
         notes.remove(at: index)
-        saveNotes(task, notes: notes)
+        saveNotes(target, notes: notes)
     }
 
-    private func saveNotes(_ task: TaskItem, notes: [TaskNote]) {
+    private func saveNotes(_ target: Target, notes: [TargetNote]) {
         guard let data = try? JSONEncoder().encode(notes),
               let json = String(data: data, encoding: .utf8) else { return }
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateNotes(db, id: task.id, notes: json)
+                try db.execute(
+                    sql: "UPDATE targets SET notes = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?",
+                    arguments: [json, target.id]
+                )
             }
             load()
         } catch {
@@ -296,10 +294,10 @@ final class TasksViewModel {
         }
     }
 
-    func updatePriority(_ task: TaskItem, to priority: String) {
+    func updatePriority(_ target: Target, to priority: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updatePriority(db, id: task.id, priority: priority)
+                try TargetQueries.updatePriority(db, id: target.id, priority: priority)
             }
             load()
         } catch {
@@ -307,10 +305,10 @@ final class TasksViewModel {
         }
     }
 
-    func updateStatus(_ task: TaskItem, to status: String) {
+    func updateStatus(_ target: Target, to status: String) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.updateStatus(db, id: task.id, status: status)
+                try TargetQueries.updateStatus(db, id: target.id, status: status)
             }
             load()
         } catch {
@@ -318,10 +316,10 @@ final class TasksViewModel {
         }
     }
 
-    func deleteTask(_ task: TaskItem) {
+    func deleteTarget(_ target: Target) {
         do {
             try dbManager.dbPool.write { db in
-                try TaskQueries.delete(db, id: task.id)
+                try TargetQueries.delete(db, id: target.id)
             }
             load()
         } catch {
@@ -336,23 +334,33 @@ final class TasksViewModel {
         }
     }
 
-    func itemByID(_ id: Int) -> TaskItem? {
+    func itemByID(_ id: Int) -> Target? {
         do {
             return try dbManager.dbPool.read { db in
-                try TaskQueries.fetchByID(db, id: id)
+                try TargetQueries.fetchByID(db, id: id)
             }
         } catch {
             return nil
         }
     }
 
-    func submitFeedback(taskID: Int, rating: Int) {
+    func fetchLinks(for targetID: Int) -> [TargetLink] {
+        do {
+            return try dbManager.dbPool.read { db in
+                try TargetQueries.fetchLinks(db, targetID: targetID, direction: .both)
+            }
+        } catch {
+            return []
+        }
+    }
+
+    func submitFeedback(targetID: Int, rating: Int) {
         do {
             try dbManager.dbPool.write { db in
                 try FeedbackQueries.addFeedback(
                     db,
-                    entityType: "task",
-                    entityID: "\(taskID)",
+                    entityType: "target",
+                    entityID: "\(targetID)",
                     rating: rating,
                     comment: ""
                 )

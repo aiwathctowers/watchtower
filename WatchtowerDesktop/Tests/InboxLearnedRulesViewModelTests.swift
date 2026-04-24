@@ -52,7 +52,7 @@ final class InboxLearnedRulesViewModelTests: XCTestCase {
         await vm.addRule(ruleType: "source_mute", scopeKey: "sender:U9", weight: -0.5)
 
         // Verify DB row has source='user_rule'
-        let rows = try pool.read { db in
+        let rows = try await pool.read { db in
             try Row.fetchAll(db, sql: "SELECT * FROM inbox_learned_rules WHERE scope_key = 'sender:U9'")
         }
         XCTAssertEqual(rows.count, 1)

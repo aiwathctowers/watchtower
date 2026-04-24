@@ -22,32 +22,32 @@ func testPipeline(d *db.DB) *Pipeline {
 	return &Pipeline{db: d}
 }
 
-// TestGatherTasks_OnlyActive seeds 3 tasks (todo, in_progress, done) and
-// verifies that gatherTasks returns only the 2 active ones.
-func TestGatherTasks_OnlyActive(t *testing.T) {
+// TestGatherTargets_OnlyActive seeds 3 targets (todo, in_progress, done) and
+// verifies that gatherTargets returns only the 2 active ones.
+func TestGatherTargets_OnlyActive(t *testing.T) {
 	d := gatherTestDB(t)
 	p := testPipeline(d)
 
-	tasks := []db.Task{
-		{Text: "todo task", Status: "todo", Priority: "medium", Ownership: "mine", SourceType: "manual", Tags: "[]", SubItems: "[]", Notes: "[]"},
-		{Text: "in_progress task", Status: "in_progress", Priority: "high", Ownership: "mine", SourceType: "manual", Tags: "[]", SubItems: "[]", Notes: "[]"},
-		{Text: "done task", Status: "done", Priority: "low", Ownership: "mine", SourceType: "manual", Tags: "[]", SubItems: "[]", Notes: "[]"},
+	targets := []db.Target{
+		{Text: "todo target", Status: "todo", Priority: "medium", Ownership: "mine", SourceType: "manual"},
+		{Text: "in_progress target", Status: "in_progress", Priority: "high", Ownership: "mine", SourceType: "manual"},
+		{Text: "done target", Status: "done", Priority: "low", Ownership: "mine", SourceType: "manual"},
 	}
-	for _, tk := range tasks {
-		_, err := d.CreateTask(tk)
+	for _, tk := range targets {
+		_, err := d.CreateTarget(tk)
 		require.NoError(t, err)
 	}
 
-	got, err := p.gatherTasks()
+	got, err := p.gatherTargets()
 	require.NoError(t, err)
-	require.Len(t, got, 2, "expected 2 active tasks (todo + in_progress)")
+	require.Len(t, got, 2, "expected 2 active targets (todo + in_progress)")
 
 	statuses := map[string]bool{}
 	for _, tk := range got {
 		statuses[tk.Status] = true
 	}
-	require.True(t, statuses["todo"], "expected todo task in results")
-	require.True(t, statuses["in_progress"], "expected in_progress task in results")
+	require.True(t, statuses["todo"], "expected todo target in results")
+	require.True(t, statuses["in_progress"], "expected in_progress target in results")
 }
 
 // TestGatherBriefing_FallbackYesterday seeds yesterday's briefing only and

@@ -123,30 +123,34 @@ enum InboxQueries {
         )
     }
 
-    // MARK: - Task
+    // MARK: - Target
 
-    static func linkTask(_ db: Database, inboxID: Int, taskID: Int) throws {
+    static func linkTarget(_ db: Database, inboxID: Int, targetID: Int) throws {
         try db.execute(
             sql: """
-                UPDATE inbox_items SET task_id = ?,
+                UPDATE inbox_items SET target_id = ?,
                     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
                 WHERE id = ?
                 """,
-            arguments: [taskID, inboxID]
+            arguments: [targetID, inboxID]
         )
     }
 
     @discardableResult
     static func createTask(_ db: Database, from item: InboxItem) throws -> Int64 {
         let text = item.snippet.isEmpty ? "Follow up on message" : item.snippet
-        let taskID = try TaskQueries.create(
+        let today = TargetQueries.todayDateString()
+        let targetID = try TargetQueries.create(
             db,
             text: text,
+            level: "day",
+            periodStart: today,
+            periodEnd: today,
             sourceType: "inbox",
             sourceID: String(item.id)
         )
-        try linkTask(db, inboxID: item.id, taskID: Int(taskID))
-        return taskID
+        try linkTarget(db, inboxID: item.id, targetID: targetID)
+        return Int64(targetID)
     }
 
     // MARK: - Pinned / Feed / Seen

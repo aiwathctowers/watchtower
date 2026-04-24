@@ -15,7 +15,7 @@ import (
 type promptInputs struct {
 	Date, Weekday, NowLocal, UserRole  string
 	WorkingHoursStart, WorkingHoursEnd string
-	CalendarEvents, Tasks, Briefing    string
+	CalendarEvents, Targets, Briefing  string
 	Jira, People, Manual, Previous     string
 	Feedback                           string
 }
@@ -34,7 +34,7 @@ func (p *Pipeline) buildPrompt(in *promptInputs) (string, string) {
 	return fmt.Sprintf(tmpl,
 		in.Date, in.Weekday, in.NowLocal, in.UserRole,
 		in.WorkingHoursStart, in.WorkingHoursEnd,
-		in.CalendarEvents, in.Tasks, in.Briefing,
+		in.CalendarEvents, in.Targets, in.Briefing,
 		in.Jira, in.People, in.Manual, in.Previous,
 		in.Feedback,
 	), version
@@ -61,18 +61,18 @@ func formatCalendarSection(events []db.CalendarEvent) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// formatTasksSection renders active tasks for the prompt.
-func formatTasksSection(tasks []db.Task) string {
-	if len(tasks) == 0 {
+// formatTargetsSection renders active targets for the prompt.
+func formatTargetsSection(targets []db.Target) string {
+	if len(targets) == 0 {
 		return "(none)"
 	}
 	var sb strings.Builder
-	for _, t := range tasks {
+	for _, t := range targets {
 		due := ""
 		if t.DueDate != "" {
 			due = " due:" + t.DueDate
 		}
-		fmt.Fprintf(&sb, "- [task_id=%d priority=%s%s] %s", t.ID, t.Priority, due, t.Text)
+		fmt.Fprintf(&sb, "- [target_id=%d level=%s priority=%s%s] %s", t.ID, t.Level, t.Priority, due, t.Text)
 		if t.Intent != "" {
 			fmt.Fprintf(&sb, " — %s", t.Intent)
 		}
@@ -219,10 +219,10 @@ func shortTime(iso string) string {
 	return iso
 }
 
-// tasksIDSet builds a set of task IDs (as strings) from a task slice.
-func tasksIDSet(tasks []db.Task) map[string]bool {
-	m := make(map[string]bool, len(tasks))
-	for _, t := range tasks {
+// targetsIDSet builds a set of target IDs (as strings) from a target slice.
+func targetsIDSet(targets []db.Target) map[string]bool {
+	m := make(map[string]bool, len(targets))
+	for _, t := range targets {
 		m[fmt.Sprintf("%d", t.ID)] = true
 	}
 	return m

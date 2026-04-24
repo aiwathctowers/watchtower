@@ -6,8 +6,8 @@ struct TrackDetailView: View {
     var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
     @State private var chatVM: TrackChatViewModel?
-    @State private var showCreateTask = false
-    @State private var linkedTasks: [TaskItem] = []
+    @State private var showCreateTarget = false
+    @State private var linkedTargets: [Target] = []
     @State private var jiraIssues: [JiraIssue] = []
 
     var body: some View {
@@ -47,13 +47,13 @@ struct TrackDetailView: View {
                 chatVM = TrackChatViewModel(
                     track: track, viewModel: viewModel, dbManager: db
                 )
-                loadLinkedTasks(db: db)
+                loadLinkedTargets(db: db)
                 loadJiraIssues(db: db)
             }
         }
-        .onChange(of: showCreateTask) { _, isShowing in
+        .onChange(of: showCreateTarget) { _, isShowing in
             if !isShowing, let db = appState.databaseManager {
-                loadLinkedTasks(db: db)
+                loadLinkedTargets(db: db)
             }
         }
     }
@@ -480,13 +480,13 @@ struct TrackDetailView: View {
     private var actionsSection: some View {
         HStack(spacing: 8) {
             Button {
-                showCreateTask = true
+                showCreateTarget = true
             } label: {
-                Label("Take Action", systemImage: "checkmark.circle")
+                Label("Create Target", systemImage: "scope")
             }
             .buttonStyle(.bordered)
-            .sheet(isPresented: $showCreateTask) {
-                CreateTaskSheet(
+            .sheet(isPresented: $showCreateTarget) {
+                CreateTargetSheet(
                     prefillText: track.text,
                     prefillIntent: track.context,
                     prefillSourceType: "track",
@@ -608,44 +608,44 @@ struct TrackDetailView: View {
         return date < Date()
     }
 
-    // MARK: - Linked Tasks
+    // MARK: - Linked Targets
 
     @ViewBuilder
     private var linkedTasksSection: some View {
-        if !linkedTasks.isEmpty {
+        if !linkedTargets.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Tasks")
+                Text("Targets")
                     .font(.headline)
 
-                ForEach(linkedTasks) { task in
+                ForEach(linkedTargets) { target in
                     Button {
-                        appState.navigateToTask(task.id)
+                        appState.navigateToTarget(target.id)
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: task.statusIcon)
-                                .foregroundStyle(taskStatusColor(task.status))
+                            Image(systemName: target.statusIcon)
+                                .foregroundStyle(taskStatusColor(target.status))
                                 .font(.subheadline)
 
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(task.text)
+                                Text(target.text)
                                     .font(.subheadline)
                                     .lineLimit(2)
                                     .foregroundStyle(.primary)
 
                                 HStack(spacing: 6) {
-                                    Text(task.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                                    Text(target.status.replacingOccurrences(of: "_", with: " ").capitalized)
                                         .font(.caption2)
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 1)
                                         .background(
-                                            taskStatusColor(task.status).opacity(0.15),
+                                            taskStatusColor(target.status).opacity(0.15),
                                             in: Capsule()
                                         )
 
-                                    if let due = task.dueDateFormatted {
+                                    if let due = target.dueDateFormatted {
                                         Label(due, systemImage: "calendar")
                                             .font(.caption2)
-                                            .foregroundStyle(task.isOverdue ? .red : .secondary)
+                                            .foregroundStyle(target.isOverdue ? .red : .secondary)
                                     }
                                 }
                             }
@@ -666,9 +666,9 @@ struct TrackDetailView: View {
         }
     }
 
-    private func loadLinkedTasks(db: DatabaseManager) {
-        linkedTasks = (try? db.dbPool.read { database in
-            try TaskQueries.fetchBySourceRef(database, sourceType: "track", sourceID: String(track.id))
+    private func loadLinkedTargets(db: DatabaseManager) {
+        linkedTargets = (try? db.dbPool.read { database in
+            try TargetQueries.fetchBySourceRef(database, sourceType: "track", sourceID: String(track.id))
         }) ?? []
     }
 

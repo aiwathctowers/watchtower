@@ -53,21 +53,20 @@ func newTestPipeline(d *db.DB, gen digest.Generator) *Pipeline {
 
 // ── tests ──────────────────────────────────────────────────────────────────────
 
-// TestRun_InitialGenerate seeds 1 active task id=42, mockGenerator returns
-// validResponse, Run → plan created with 2 items (1 timeblock focus + 1 backlog task).
+// TestRun_InitialGenerate seeds 1 active target, mockGenerator returns
+// validResponse, Run → plan created with 2 items (1 timeblock focus + 1 backlog item).
 func TestRun_InitialGenerate(t *testing.T) {
 	d := gatherTestDB(t)
 	gen := &mockGenerator{response: validResponse()}
 	p := newTestPipeline(d, gen)
 
-	// Seed a task with id that we can predict. Insert via CreateTask.
-	taskID, err := d.CreateTask(db.Task{
+	// Seed a target with id that we can predict. Insert via CreateTarget.
+	targetID, err := d.CreateTarget(db.Target{
 		Text: "Review PRs", Status: "todo", Priority: "high",
 		Ownership: "mine", SourceType: "manual",
-		Tags: "[]", SubItems: "[]", Notes: "[]",
 	})
 	require.NoError(t, err)
-	_ = taskID // id=1 in fresh DB; AI response uses "42" which won't match but that's fine for this test
+	_ = targetID // id=1 in fresh DB; AI response uses "42" which won't match but that's fine for this test
 
 	today := time.Now().Format("2006-01-02")
 	plan, err := p.Run(context.Background(), RunOptions{UserID: "U1", Date: today})
