@@ -25,7 +25,10 @@ struct TargetDetailView: View {
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
     @State private var links: [TargetLink] = []
-    // V1: suggestLinksToast removed — "Suggest links" button hidden pending Swift→Go CLI bridge
+    @State private var showSuggestLinksSheet = false
+    @State private var suggestedLinks: SuggestedLinksResult?
+    @State private var isSuggestingLinks = false
+    @State private var suggestLinksError: String?
 
     enum Tab: String, CaseIterable {
         case details = "Details"
@@ -78,6 +81,14 @@ struct TargetDetailView: View {
             syncState()
             loadJiraIssue()
             loadLinks()
+        }
+        .sheet(isPresented: $showSuggestLinksSheet) {
+            if let suggestedLinks {
+                SuggestLinksSheet(
+                    targetID: target.id,
+                    suggestions: suggestedLinks
+                )
+            }
         }
     }
 
@@ -521,7 +532,28 @@ struct TargetDetailView: View {
                 }
             }
 
-            // V1: "Suggest links" button hidden — pending Swift→Go CLI bridge (see spec "Out of Scope V2")
+            HStack {
+                Button {
+                    Task { await runSuggestLinks() }
+                } label: {
+                    if isSuggestingLinks {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Suggesting…")
+                        }
+                    } else {
+                        Label("Suggest links", systemImage: "sparkles")
+                    }
+                }
+                .disabled(isSuggestingLinks)
+                if let suggestLinksError {
+                    Text(suggestLinksError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+            }
+            .padding(.top, 8)
         }
     }
 
@@ -822,5 +854,29 @@ struct TargetDetailView: View {
         let trimmed = editingBallOn.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != target.ballOn else { return }
         viewModel.updateBallOn(target, to: trimmed)
+    }
+
+    // MARK: - Actions
+
+    private func runSuggestLinks() async {
+        guard let runner = ProcessCLIRunner.makeDefault() else {
+            suggestLinksError = "watchtower CLI not found in PATH"
+            return
+        }
+        isSuggestingLinks = true
+        suggestLinksError = nil
+        defer { isSuggestingLinks = false }
+        do {
+            let service = TargetSuggestLinksService(runner: runner)
+            let result = try await service.suggest(targetID: target.id)
+            if result.parentID == nil && result.secondaryLinks.isEmpty {
+                suggestLinksError = "AI had no suggestions"
+                return
+            }
+            suggestedLinks = result
+            showSuggestLinksSheet = true
+        } catch {
+            suggestLinksError = "Suggest-links failed: \(error.localizedDescription)"
+        }
     }
 }
