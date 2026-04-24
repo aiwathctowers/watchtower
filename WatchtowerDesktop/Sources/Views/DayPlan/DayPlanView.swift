@@ -276,7 +276,7 @@ struct DayPlanView: View {
         switch item.sourceType {
         case .task:
             if let id = Int(sid) {
-                appState.navigateToTask(id)
+                appState.navigateToTarget(id)
             }
         case .briefingAttention:
             // briefing_attention source_id points at the attention item's inner source
