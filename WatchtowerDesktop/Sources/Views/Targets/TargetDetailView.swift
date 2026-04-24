@@ -26,6 +26,7 @@ struct TargetDetailView: View {
     @State private var jiraSiteURL: String?
     @State private var links: [TargetLink] = []
     @State private var showSuggestLinksSheet = false
+    @State private var showDeleteConfirm = false
     @State private var suggestedLinks: SuggestedLinksResult?
     @State private var isSuggestingLinks = false
     @State private var suggestLinksError: String?
@@ -44,6 +45,17 @@ struct TargetDetailView: View {
                     tabButton(tab)
                 }
                 Spacer()
+                Menu {
+                    Button("Delete…", role: .destructive) {
+                        showDeleteConfirm = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.trailing, 8)
                 if let onClose {
                     Button { onClose() } label: {
                         Image(systemName: "xmark")
@@ -89,6 +101,24 @@ struct TargetDetailView: View {
                     suggestions: suggestedLinks
                 )
             }
+        }
+        .confirmationDialog(
+            {
+                let label = target.text.count > 60
+                    ? String(target.text.prefix(60)) + "…"
+                    : target.text
+                return "Delete \"\(label)\"?"
+            }(),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                viewModel.deleteTarget(target)
+                onClose?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This action cannot be undone.")
         }
     }
 
