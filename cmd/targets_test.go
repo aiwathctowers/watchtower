@@ -519,6 +519,16 @@ func TestRunTargets_RequiresConfig(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestTargetsExtractCmdHasJSONFlag(t *testing.T) {
+	flag := targetsExtractCmd.Flags().Lookup("json")
+	if flag == nil {
+		t.Fatal("targets extract should have --json flag")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--json default should be false, got %q", flag.DefValue)
+	}
+}
+
 // resetTargetsFlags resets all list flags to zero values before each test.
 func resetTargetsFlags() {
 	targetsFlagStatus = ""

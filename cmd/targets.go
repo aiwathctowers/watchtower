@@ -52,6 +52,7 @@ var (
 	targetsFlagExtractText      string
 	targetsFlagExtractSourceRef string
 	targetsFlagExtractFromInbox int
+	targetsFlagExtractJSON      bool
 )
 
 var targetsCmd = &cobra.Command{
@@ -210,6 +211,7 @@ func init() {
 	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractText, "text", "", "raw text to extract targets from")
 	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractSourceRef, "source-ref", "", "source reference (e.g. slack:C123:ts, inbox:42)")
 	targetsExtractCmd.Flags().IntVar(&targetsFlagExtractFromInbox, "from-inbox", 0, "load raw text from inbox item with this ID")
+	targetsExtractCmd.Flags().BoolVar(&targetsFlagExtractJSON, "json", false, "output extracted targets as JSON (non-interactive; caller is responsible for persistence)")
 
 	// link flags
 	targetsLinkCmd.Flags().IntVar(&targetsFlagLinkParent, "parent", 0, "set parent target ID")
@@ -573,6 +575,21 @@ func runTargetsExtract(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 
+	if targetsFlagExtractJSON {
+		jsonOut := struct {
+			Extracted    []jsonProposedTarget `json:"extracted"`
+			OmittedCount int                  `json:"omitted_count"`
+			Notes        string               `json:"notes"`
+		}{
+			Extracted:    toJSONProposedTargets(result.Extracted),
+			OmittedCount: result.OmittedCount,
+			Notes:        result.Notes,
+		}
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(jsonOut)
+	}
+
 	if len(result.Extracted) == 0 {
 		fmt.Fprintln(out, "No targets extracted.")
 		return nil
@@ -626,6 +643,70 @@ func runTargetsExtract(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintln(out)
 	return nil
+}
+
+// jsonProposedTarget is the JSON wire format for a proposed target (Swift Decodable).
+// It is a cmd-layer adapter — do NOT merge into internal/targets.
+type jsonProposedTarget struct {
+	Text              string             `json:"text"`
+	Intent            string             `json:"intent"`
+	Level             string             `json:"level"`
+	CustomLabel       string             `json:"custom_label"`
+	PeriodStart       string             `json:"period_start"`
+	PeriodEnd         string             `json:"period_end"`
+	Priority          string             `json:"priority"`
+	DueDate           string             `json:"due_date"`
+	ParentID          *int64             `json:"parent_id"`
+	AILevelConfidence *float64           `json:"ai_level_confidence"`
+	SecondaryLinks    []jsonProposedLink `json:"secondary_links"`
+}
+
+type jsonProposedLink struct {
+	TargetID    *int64   `json:"target_id"`
+	ExternalRef string   `json:"external_ref"`
+	Relation    string   `json:"relation"`
+	Confidence  *float64 `json:"confidence"`
+}
+
+func toJSONProposedTargets(items []targets.ProposedTarget) []jsonProposedTarget {
+	out := make([]jsonProposedTarget, 0, len(items))
+	for _, pt := range items {
+		j := jsonProposedTarget{
+			Text:        pt.Text,
+			Intent:      pt.Intent,
+			Level:       pt.Level,
+			CustomLabel: pt.CustomLabel,
+			PeriodStart: pt.PeriodStart,
+			PeriodEnd:   pt.PeriodEnd,
+			Priority:    pt.Priority,
+			DueDate:     pt.DueDate,
+		}
+		if pt.ParentID.Valid {
+			pid := pt.ParentID.Int64
+			j.ParentID = &pid
+		}
+		if pt.AILevelConfidence.Valid {
+			c := pt.AILevelConfidence.Float64
+			j.AILevelConfidence = &c
+		}
+		for _, l := range pt.SecondaryLinks {
+			jl := jsonProposedLink{
+				ExternalRef: l.ExternalRef,
+				Relation:    l.Relation,
+			}
+			if l.TargetID.Valid {
+				tid := l.TargetID.Int64
+				jl.TargetID = &tid
+			}
+			if l.Confidence.Valid {
+				c := l.Confidence.Float64
+				jl.Confidence = &c
+			}
+			j.SecondaryLinks = append(j.SecondaryLinks, jl)
+		}
+		out = append(out, j)
+	}
+	return out
 }
 
 func runTargetsLink(cmd *cobra.Command, args []string) error {
