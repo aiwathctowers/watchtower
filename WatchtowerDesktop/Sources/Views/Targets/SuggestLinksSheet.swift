@@ -132,6 +132,8 @@ struct SuggestLinksSheet: View {
                 }
                 for idx in selectedLinks.sorted() {
                     let link = suggestions.secondaryLinks[idx]
+                    // target_links CHECK requires at least one of target_target_id / external_ref.
+                    guard link.targetId != nil || !link.externalRef.isEmpty else { continue }
                     try dbConn.execute(
                         sql: """
                             INSERT OR IGNORE INTO target_links
