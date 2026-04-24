@@ -9,6 +9,7 @@ struct BriefingDetailView: View {
     @State private var calendarEvents: [CalendarEvent] = []
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
+    @State private var dayPlanExists: Bool = false
 
     var body: some View {
         ScrollView {
@@ -35,7 +36,18 @@ struct BriefingDetailView: View {
             jiraConnected = JiraQueries.isConnected()
             jiraSiteURL = JiraConfigHelper.readSiteURL()
             loadCalendarEvents()
+            refreshDayPlanExists()
         }
+    }
+
+    private func refreshDayPlanExists() {
+        guard let db = appState.databaseManager else {
+            dayPlanExists = false
+            return
+        }
+        dayPlanExists = (try? db.dbPool.read { db in
+            try DayPlanQueries.fetchByDate(db, date: briefing.date) != nil
+        }) ?? false
     }
 
     // MARK: - Calendar
@@ -72,6 +84,20 @@ struct BriefingDetailView: View {
                 Text(briefing.dateLabel)
                     .font(.title2)
                     .fontWeight(.bold)
+
+                Spacer()
+
+                if dayPlanExists {
+                    Button {
+                        appState.navigateToDayPlan(briefing.date)
+                    } label: {
+                        Label("Day Plan", systemImage: "calendar.day.timeline.left")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Open day plan for \(briefing.date)")
+                }
             }
 
             if !briefing.role.isEmpty {

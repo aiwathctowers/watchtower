@@ -12,6 +12,7 @@ final class DayPlanViewModel {
 
     var plan: DayPlan?
     var items: [DayPlanItem] = []
+    var calendarEventsByID: [String: CalendarEvent] = [:]
     var isGenerating: Bool = false
     var generationError: String?
     var feedbackDraft: String = ""
@@ -46,19 +47,44 @@ final class DayPlanViewModel {
                 items = try await dbPool.read { db in
                     try DayPlanQueries.fetchItems(db, planId: p.id)
                 }
+                calendarEventsByID = try await loadCalendarEvents(for: items)
             } else {
                 items = []
+                calendarEventsByID = [:]
             }
         } catch {
             generationError = error.localizedDescription
         }
     }
 
+    private func loadCalendarEvents(for items: [DayPlanItem]) async throws -> [String: CalendarEvent] {
+        let ids = items.compactMap { item -> String? in
+            guard item.sourceType == .calendar, let sid = item.sourceId, !sid.isEmpty else { return nil }
+            return sid
+        }
+        guard !ids.isEmpty else { return [:] }
+        return try await dbPool.read { db in
+            var map: [String: CalendarEvent] = [:]
+            for id in ids {
+                if let ev = try CalendarQueries.fetchEvent(db, id: id) {
+                    map[id] = ev
+                }
+            }
+            return map
+        }
+    }
+
     // MARK: - Computed Views
 
-    /// Timeblock items sorted by start time (nil start times sort last).
+    /// Timed timeblocks (excluding all-day calendar events) sorted by start time.
     var timeblocks: [DayPlanItem] {
-        items.filter { $0.kind == .timeblock }
+        items.filter { $0.kind == .timeblock && !isAllDayCalendar($0) }
+             .sorted { ($0.startTime ?? .distantFuture) < ($1.startTime ?? .distantFuture) }
+    }
+
+    /// All-day calendar timeblocks, shown in a collapsible chip above the timeline.
+    var allDayItems: [DayPlanItem] {
+        items.filter { $0.kind == .timeblock && isAllDayCalendar($0) }
              .sorted { ($0.startTime ?? .distantFuture) < ($1.startTime ?? .distantFuture) }
     }
 
@@ -66,6 +92,11 @@ final class DayPlanViewModel {
     var backlogItems: [DayPlanItem] {
         items.filter { $0.kind == .backlog }
              .sorted { $0.orderIndex < $1.orderIndex }
+    }
+
+    private func isAllDayCalendar(_ item: DayPlanItem) -> Bool {
+        guard item.sourceType == .calendar, let sid = item.sourceId else { return false }
+        return calendarEventsByID[sid]?.isAllDay ?? false
     }
 
     /// (done count, total count) across all items.

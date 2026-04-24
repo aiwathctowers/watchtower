@@ -45,6 +45,12 @@ final class AppState {
     /// Set to navigate to a specific target from anywhere in the app.
     var pendingTargetID: Int?
 
+    /// Set to navigate to a specific briefing from anywhere in the app.
+    var pendingBriefingID: Int?
+
+    /// Set to navigate to the day plan for a specific date from anywhere in the app.
+    var pendingDayPlanDate: String?
+
     /// Watches for new digests and sends notifications.
     private(set) var digestWatcher: DigestWatcher?
 
@@ -106,6 +112,16 @@ final class AppState {
     func navigateToTarget(_ targetID: Int) {
         pendingTargetID = targetID
         selectedDestination = .targets
+    }
+
+    func navigateToBriefing(_ briefingID: Int) {
+        pendingBriefingID = briefingID
+        selectedDestination = .briefings
+    }
+
+    func navigateToDayPlan(_ date: String? = nil) {
+        pendingDayPlanDate = date
+        selectedDestination = .dayPlan
     }
 
     private var isInitializing = false

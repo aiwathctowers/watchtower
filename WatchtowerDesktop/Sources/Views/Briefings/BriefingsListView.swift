@@ -25,12 +25,22 @@ struct BriefingsListView: View {
                 viewModel = vm
                 vm.startObserving()
             }
+            if let id = appState.pendingBriefingID {
+                selectedBriefingID = id
+                appState.pendingBriefingID = nil
+            }
         }
         .onChange(of: appState.isDBAvailable) {
             if viewModel == nil, let db = appState.databaseManager {
                 let vm = BriefingViewModel(dbManager: db)
                 viewModel = vm
                 vm.startObserving()
+            }
+        }
+        .onChange(of: appState.pendingBriefingID) { _, newID in
+            if let id = newID {
+                selectedBriefingID = id
+                appState.pendingBriefingID = nil
             }
         }
         .onChange(of: selectedBriefingID) { _, newID in
