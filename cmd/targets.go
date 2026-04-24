@@ -53,6 +53,9 @@ var (
 	targetsFlagExtractSourceRef string
 	targetsFlagExtractFromInbox int
 	targetsFlagExtractJSON      bool
+
+	// suggest-links subcommand flags
+	targetsFlagSuggestLinksJSON bool
 )
 
 var targetsCmd = &cobra.Command{
@@ -212,6 +215,9 @@ func init() {
 	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractSourceRef, "source-ref", "", "source reference (e.g. slack:C123:ts, inbox:42)")
 	targetsExtractCmd.Flags().IntVar(&targetsFlagExtractFromInbox, "from-inbox", 0, "load raw text from inbox item with this ID")
 	targetsExtractCmd.Flags().BoolVar(&targetsFlagExtractJSON, "json", false, "output extracted targets as JSON (non-interactive; caller is responsible for persistence)")
+
+	// suggest-links flags
+	targetsSuggestLinksCmd.Flags().BoolVar(&targetsFlagSuggestLinksJSON, "json", false, "output suggested links as JSON (non-interactive; caller is responsible for persistence)")
 
 	// link flags
 	targetsLinkCmd.Flags().IntVar(&targetsFlagLinkParent, "parent", 0, "set parent target ID")
@@ -821,6 +827,37 @@ func runTargetsSuggestLinks(cmd *cobra.Command, args []string) error {
 	result, err := pipe.LinkExisting(ctx, int64(id))
 	if err != nil {
 		return fmt.Errorf("suggest-links failed: %w", err)
+	}
+
+	if targetsFlagSuggestLinksJSON {
+		jsonOut := struct {
+			ParentID       *int64             `json:"parent_id"`
+			SecondaryLinks []jsonProposedLink `json:"secondary_links"`
+		}{
+			SecondaryLinks: make([]jsonProposedLink, 0, len(result.SecondaryLinks)),
+		}
+		if result.ParentID.Valid {
+			pid := result.ParentID.Int64
+			jsonOut.ParentID = &pid
+		}
+		for _, l := range result.SecondaryLinks {
+			jl := jsonProposedLink{
+				ExternalRef: l.ExternalRef,
+				Relation:    l.Relation,
+			}
+			if l.TargetID.Valid {
+				tid := l.TargetID.Int64
+				jl.TargetID = &tid
+			}
+			if l.Confidence.Valid {
+				c := l.Confidence.Float64
+				jl.Confidence = &c
+			}
+			jsonOut.SecondaryLinks = append(jsonOut.SecondaryLinks, jl)
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(jsonOut)
 	}
 
 	out := cmd.OutOrStdout()

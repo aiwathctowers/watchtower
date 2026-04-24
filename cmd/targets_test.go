@@ -539,3 +539,13 @@ func resetTargetsFlags() {
 	targetsFlagLevel = ""
 	targetsFlagSource = ""
 }
+
+func TestTargetsSuggestLinksCmdHasJSONFlag(t *testing.T) {
+	flag := targetsSuggestLinksCmd.Flags().Lookup("json")
+	if flag == nil {
+		t.Fatal("targets suggest-links should have --json flag")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--json default should be false, got %q", flag.DefValue)
+	}
+}
