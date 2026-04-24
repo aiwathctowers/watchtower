@@ -25,6 +25,15 @@ enum BriefingQueries {
         )
     }
 
+    /// Fetch the most recent briefing for a specific date (YYYY-MM-DD).
+    static func fetchByDate(_ db: Database, date: String) throws -> Briefing? {
+        try Briefing.fetchOne(
+            db,
+            sql: "SELECT * FROM briefings WHERE date = ? ORDER BY created_at DESC LIMIT 1",
+            arguments: [date]
+        )
+    }
+
     static func fetchLatest(_ db: Database) throws -> Briefing? {
         try Briefing.fetchOne(
             db,

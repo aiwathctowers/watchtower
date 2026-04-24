@@ -4,6 +4,7 @@ struct DayPlanItemRow: View {
     let item: DayPlanItem
     let onToggle: () -> Void
     let onDelete: () -> Void
+    let onNavigateSource: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -15,9 +16,9 @@ struct DayPlanItemRow: View {
             }
             .buttonStyle(.plain)
 
-            // Title + rationale
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+            // Title + source badge + rationale
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Text(item.title)
                         .font(.callout)
                         .fontWeight(.medium)
@@ -29,6 +30,24 @@ struct DayPlanItemRow: View {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
                             .foregroundStyle(.orange)
+                    }
+
+                    if let label = sourceBadgeLabel {
+                        Button(action: onNavigateSource) {
+                            HStack(spacing: 3) {
+                                Image(systemName: sourceBadgeIcon)
+                                    .font(.caption2)
+                                Text(label)
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(sourceColor.opacity(0.15), in: Capsule())
+                            .foregroundStyle(sourceColor)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open source: \(label)")
                     }
                 }
 
@@ -54,6 +73,10 @@ struct DayPlanItemRow: View {
                 } else {
                     Button("Mark Done") { onToggle() }
                 }
+                if sourceBadgeLabel != nil {
+                    Divider()
+                    Button("Open source") { onNavigateSource() }
+                }
                 Divider()
                 Button("Delete", role: .destructive) { onDelete() }
                     .disabled(item.isReadOnly)
@@ -69,6 +92,48 @@ struct DayPlanItemRow: View {
         .padding(.vertical, 8)
         .contentShape(Rectangle())
     }
+
+    // MARK: - Source badge
+
+    private var sourceBadgeLabel: String? {
+        switch item.sourceType {
+        case .task:
+            guard let sid = item.sourceId, !sid.isEmpty else { return "task" }
+            return "task:\(sid)"
+        case .jira:
+            return item.sourceId
+        case .briefingAttention:
+            return "briefing"
+        case .focus:
+            return "focus"
+        case .manual, .calendar:
+            return nil
+        }
+    }
+
+    private var sourceBadgeIcon: String {
+        switch item.sourceType {
+        case .calendar:          return "calendar"
+        case .focus:             return "brain.head.profile"
+        case .task:              return "checkmark.circle"
+        case .jira:              return "ticket"
+        case .briefingAttention: return "sun.max"
+        case .manual:            return "pin.fill"
+        }
+    }
+
+    private var sourceColor: Color {
+        switch item.sourceType {
+        case .calendar:          return .gray
+        case .focus:             return .blue
+        case .task:              return .green
+        case .jira:              return .purple
+        case .briefingAttention: return .yellow
+        case .manual:            return .orange
+        }
+    }
+
+    // MARK: - Priority
 
     private func priorityBadge(_ priority: String) -> some View {
         Text(priority.capitalized)
