@@ -9,9 +9,9 @@ import (
 
 func TestBuildUserPrefs_TopByRelevance(t *testing.T) {
 	d := testDB(t)
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.9, Source: "user_rule"})
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "channel:C9", Weight: -0.5, Source: "implicit"})
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_boost", ScopeKey: "sender:U2", Weight: 0.7, Source: "explicit_feedback"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.9, Source: "user_rule"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "channel:C9", Weight: -0.5, Source: "implicit"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_boost", ScopeKey: "sender:U2", Weight: 0.7, Source: "explicit_feedback"})
 
 	items := []db.InboxItem{
 		{SenderUserID: "U1", ChannelID: "Cx"},
@@ -43,8 +43,8 @@ func TestBuildUserPrefs_EmptyWhenNoRules(t *testing.T) {
 
 func TestBuildUserPrefs_SortedByAbsWeight(t *testing.T) {
 	d := testDB(t)
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:Uweak", Weight: -0.1, Source: "implicit"})
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:Ustrong", Weight: -0.9, Source: "user_rule"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:Uweak", Weight: -0.1, Source: "implicit"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:Ustrong", Weight: -0.9, Source: "user_rule"})
 
 	items := []db.InboxItem{
 		{SenderUserID: "Uweak", ChannelID: "Cx"},
@@ -77,7 +77,7 @@ func TestBuildUserPrefs_EmptyItems(t *testing.T) {
 
 func TestBuildUserPrefs_DeduplicatesScopes(t *testing.T) {
 	d := testDB(t)
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.5, Source: "implicit"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.5, Source: "implicit"})
 
 	// Two items with same sender — scope should not be duplicated.
 	items := []db.InboxItem{

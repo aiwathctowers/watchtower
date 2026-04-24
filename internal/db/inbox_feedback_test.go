@@ -40,7 +40,7 @@ func TestInboxFeedback_Record(t *testing.T) {
 	}
 	var r int
 	var reason string
-	rows.Scan(&r, &reason)
+	_ = rows.Scan(&r, &reason)
 	if r != -1 || reason != "never_show" {
 		t.Errorf("got r=%d reason=%s", r, reason)
 	}
@@ -50,8 +50,8 @@ func TestInboxFeedback_ListForItem(t *testing.T) {
 	database := openTestDB(t)
 
 	itemID := seedInboxItem(t, database, "U1", "C1", "mention")
-	database.RecordInboxFeedback(itemID, 1, "")
-	database.RecordInboxFeedback(itemID, -1, "source_noise")
+	_ = database.RecordInboxFeedback(itemID, 1, "")
+	_ = database.RecordInboxFeedback(itemID, -1, "source_noise")
 
 	got, err := database.GetFeedbackForItem(itemID)
 	if err != nil {

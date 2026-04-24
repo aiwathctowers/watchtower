@@ -45,7 +45,7 @@ func TestInboxLearnedRules_UserRuleProtected(t *testing.T) {
 	database := openTestDB(t)
 
 	// User-created rule
-	database.UpsertLearnedRule(InboxLearnedRule{
+	_ = database.UpsertLearnedRule(InboxLearnedRule{
 		RuleType: "source_mute", ScopeKey: "channel:C1", Weight: -0.9, Source: "user_rule", EvidenceCount: 0,
 	})
 
@@ -66,9 +66,9 @@ func TestInboxLearnedRules_UserRuleProtected(t *testing.T) {
 func TestInboxLearnedRules_ListByRelevance(t *testing.T) {
 	database := openTestDB(t)
 
-	database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.5, Source: "implicit"})
-	database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_boost", ScopeKey: "sender:U2", Weight: 0.8, Source: "explicit_feedback"})
-	database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "channel:C1", Weight: -0.7, Source: "implicit"})
+	_ = database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.5, Source: "implicit"})
+	_ = database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_boost", ScopeKey: "sender:U2", Weight: 0.8, Source: "explicit_feedback"})
+	_ = database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "channel:C1", Weight: -0.7, Source: "implicit"})
 
 	got, err := database.ListLearnedRulesByScope([]string{"sender:U1", "channel:C99"}, 10)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestInboxLearnedRules_ListByRelevance(t *testing.T) {
 
 func TestInboxLearnedRules_Delete(t *testing.T) {
 	database := openTestDB(t)
-	database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "x", Weight: -1, Source: "user_rule"})
+	_ = database.UpsertLearnedRule(InboxLearnedRule{RuleType: "source_mute", ScopeKey: "x", Weight: -1, Source: "user_rule"})
 	if err := database.DeleteLearnedRule("source_mute", "x"); err != nil {
 		t.Fatal(err)
 	}

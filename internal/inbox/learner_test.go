@@ -32,7 +32,7 @@ func TestLearner_MuteOnHighDismissRate(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		id := seedInboxItem(t, d, sender, "C1", "mention")
 		if i < 9 {
-			d.Exec(`UPDATE inbox_items SET status='dismissed', updated_at=? WHERE id=?`, time.Now().Format(time.RFC3339), id)
+			_, _ = d.Exec(`UPDATE inbox_items SET status='dismissed', updated_at=? WHERE id=?`, time.Now().Format(time.RFC3339), id)
 		}
 	}
 	if _, err := RunImplicitLearner(context.Background(), d, 30*24*time.Hour); err != nil {
@@ -54,7 +54,7 @@ func TestLearner_BelowThresholdNoRule(t *testing.T) {
 	d := testDB(t)
 	for i := 0; i < 4; i++ {
 		id := seedInboxItem(t, d, "U2", "C1", "mention")
-		d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
+		_, _ = d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
 	}
 	RunImplicitLearner(context.Background(), d, 30*24*time.Hour) //nolint:errcheck
 	_, err := d.GetLearnedRule("source_mute", "sender:U2")
@@ -65,10 +65,10 @@ func TestLearner_BelowThresholdNoRule(t *testing.T) {
 
 func TestLearner_DoesNotOverwriteUserRule(t *testing.T) {
 	d := testDB(t)
-	d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U3", Weight: -0.4, Source: "user_rule"})
+	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U3", Weight: -0.4, Source: "user_rule"})
 	for i := 0; i < 10; i++ {
 		id := seedInboxItem(t, d, "U3", "C1", "mention")
-		d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
+		_, _ = d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
 	}
 	RunImplicitLearner(context.Background(), d, 30*24*time.Hour) //nolint:errcheck
 	r, _ := d.GetLearnedRule("source_mute", "sender:U3")
@@ -83,7 +83,7 @@ func TestLearner_ChannelMute(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		id := seedInboxItem(t, d, "U1", "C99", "mention")
 		if i < 8 {
-			d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
+			_, _ = d.Exec(`UPDATE inbox_items SET status='dismissed' WHERE id=?`, id)
 		}
 	}
 	if _, err := RunImplicitLearner(context.Background(), d, 30*24*time.Hour); err != nil {

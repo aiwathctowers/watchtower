@@ -39,8 +39,8 @@ func TestFeedback_SourceNoise_WeakerMute(t *testing.T) {
 func TestFeedback_WrongClass_DowngradesItem(t *testing.T) {
 	d := newTestDB(t)
 	defer d.Close()
-	id := seedInboxItem(t, d, "U3", "C1", "mention") // default actionable
-	SubmitFeedback(context.Background(), d, id, -1, "wrong_class")  //nolint:errcheck
+	id := seedInboxItem(t, d, "U3", "C1", "mention")               // default actionable
+	SubmitFeedback(context.Background(), d, id, -1, "wrong_class") //nolint:errcheck
 	var cls string
 	d.QueryRow(`SELECT item_class FROM inbox_items WHERE id=?`, id).Scan(&cls) //nolint:errcheck
 	if cls != "ambient" {

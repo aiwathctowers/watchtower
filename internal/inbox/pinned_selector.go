@@ -3,9 +3,9 @@ package inbox
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"log"
-	_ "embed"
 	"text/template"
 	"time"
 

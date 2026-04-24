@@ -65,7 +65,9 @@ func (db *DB) ListAllLearnedRules() ([]InboxLearnedRule, error) {
 	var out []InboxLearnedRule
 	for rows.Next() {
 		var r InboxLearnedRule
-		rows.Scan(&r.ID, &r.RuleType, &r.ScopeKey, &r.Weight, &r.Source, &r.EvidenceCount, &r.LastUpdated)
+		if err := rows.Scan(&r.ID, &r.RuleType, &r.ScopeKey, &r.Weight, &r.Source, &r.EvidenceCount, &r.LastUpdated); err != nil {
+			return nil, err
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -99,7 +101,9 @@ func (db *DB) ListLearnedRulesByScope(scopeKeys []string, limit int) ([]InboxLea
 	var out []InboxLearnedRule
 	for rows.Next() {
 		var r InboxLearnedRule
-		rows.Scan(&r.ID, &r.RuleType, &r.ScopeKey, &r.Weight, &r.Source, &r.EvidenceCount, &r.LastUpdated)
+		if err := rows.Scan(&r.ID, &r.RuleType, &r.ScopeKey, &r.Weight, &r.Source, &r.EvidenceCount, &r.LastUpdated); err != nil {
+			return nil, err
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()

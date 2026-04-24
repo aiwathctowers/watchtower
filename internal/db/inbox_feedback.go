@@ -37,7 +37,9 @@ func (db *DB) GetFeedbackForItem(itemID int64) ([]InboxFeedback, error) {
 	var out []InboxFeedback
 	for rows.Next() {
 		var f InboxFeedback
-		rows.Scan(&f.ID, &f.InboxItemID, &f.Rating, &f.Reason, &f.CreatedAt)
+		if err := rows.Scan(&f.ID, &f.InboxItemID, &f.Rating, &f.Reason, &f.CreatedAt); err != nil {
+			return nil, err
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()

@@ -24,7 +24,6 @@ func seedJiraIssue(t *testing.T, d *db.DB, key, assigneeAccountID string, update
 	}
 }
 
-
 func TestJiraDetector_AssignedToMe(t *testing.T) {
 	d := testDB(t)
 	seedJiraIssue(t, d, "WT-123", "alice", time.Now().Add(-1*time.Hour))

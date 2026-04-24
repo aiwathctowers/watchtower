@@ -9,7 +9,7 @@ import (
 )
 
 // SubmitFeedback writes a feedback row and updates learned rules based on rating/reason.
-// rating: -1 negative, +1 positive. reason: one of source_noise, wrong_priority, wrong_class, never_show, ''.
+// rating: -1 negative, +1 positive. reason: one of source_noise, wrong_priority, wrong_class, never_show, ”.
 // An optional logger may be passed as the last argument; if omitted, no rule-update log is emitted.
 func SubmitFeedback(ctx context.Context, database *db.DB, itemID int64, rating int, reason string, logger ...*log.Logger) error {
 	// 1. Write raw feedback row first.
