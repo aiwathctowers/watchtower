@@ -61,6 +61,53 @@ enum MessageQueries {
     static func countByChannel(_ db: Database, channelID: String) throws -> Int {
         try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM messages WHERE channel_id = ?", arguments: [channelID]) ?? 0
     }
+
+    /// Full thread (root + replies) in chronological order. Mirrors Go's GetThreadContext but unbounded
+    /// up to `limit` so the UI shows the full conversation, not just the AI-prompt slice.
+    static func fetchInboxThread(_ db: Database, channelID: String, threadTS: String, limit: Int = 200) throws -> [Message] {
+        try Message.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM messages
+                WHERE channel_id = ? AND (thread_ts = ? OR ts = ?) AND is_deleted = 0
+                ORDER BY ts_unix ASC
+                LIMIT ?
+                """,
+            arguments: [channelID, threadTS, threadTS, limit]
+        )
+    }
+
+    /// Window of top-level (non-threaded) channel messages around a trigger ts: `before` messages
+    /// strictly before, the trigger itself, and `after` messages strictly after — chronological.
+    static func fetchInboxChannelWindow(_ db: Database, channelID: String, aroundTS: String, before: Int = 10, after: Int = 10) throws -> [Message] {
+        let earlier = try Message.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM messages
+                WHERE channel_id = ? AND ts < ?
+                  AND (thread_ts IS NULL OR thread_ts = '' OR thread_ts = ts)
+                  AND is_deleted = 0
+                ORDER BY ts_unix DESC
+                LIMIT ?
+                """,
+            arguments: [channelID, aroundTS, before]
+        ).reversed()
+
+        let triggerAndAfter = try Message.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM messages
+                WHERE channel_id = ? AND ts >= ?
+                  AND (thread_ts IS NULL OR thread_ts = '' OR thread_ts = ts)
+                  AND is_deleted = 0
+                ORDER BY ts_unix ASC
+                LIMIT ?
+                """,
+            arguments: [channelID, aroundTS, after + 1]
+        )
+
+        return Array(earlier) + triggerAndAfter
+    }
 }
 
 struct MessageWithContext: FetchableRecord, Decodable, Identifiable, Equatable {

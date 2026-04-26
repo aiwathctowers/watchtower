@@ -6,6 +6,9 @@ struct InboxDetailView: View {
     var onClose: (() -> Void)?
     @Environment(AppState.self) private var appState
 
+    @State private var liveMessages: [InboxConversationMessage] = []
+    @State private var hasLoaded = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -20,6 +23,18 @@ struct InboxDetailView: View {
             }
             .padding()
         }
+        .onAppear(perform: loadIfNeeded)
+        .onChange(of: item.id) { _, _ in
+            hasLoaded = false
+            liveMessages = []
+            loadIfNeeded()
+        }
+    }
+
+    private func loadIfNeeded() {
+        guard !hasLoaded else { return }
+        liveMessages = viewModel.loadConversation(for: item)
+        hasLoaded = true
     }
 
     // MARK: - Header
@@ -140,13 +155,26 @@ struct InboxDetailView: View {
 
     @ViewBuilder
     private var contextSection: some View {
-        let messages = conversationMessages
-        if !messages.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(messages.enumerated()), id: \.offset) { idx, msg in
-                    let prevAuthor = idx > 0 ? messages[idx - 1].author : nil
-                    let sameAuthor = prevAuthor == msg.author
-                    chatBubble(msg, showAuthor: !sameAuthor)
+        if !hasLoaded {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Loading conversation...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            let messages = conversationMessages
+            if messages.isEmpty {
+                Text("No conversation messages found locally yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(messages.enumerated()), id: \.offset) { idx, msg in
+                        let prevAuthor = idx > 0 ? messages[idx - 1].author : nil
+                        let sameAuthor = prevAuthor == msg.author
+                        chatBubble(msg, showAuthor: !sameAuthor)
+                    }
                 }
             }
         }
@@ -158,19 +186,25 @@ struct InboxDetailView: View {
         let isHighlighted: Bool // the trigger message
     }
 
+    /// Live thread/channel-window messages from the local DB take precedence; if the daemon
+    /// hasn't synced those messages yet we fall back to the stored snapshot in `item.context`
+    /// plus the snippet, so the user always sees something.
     private var conversationMessages: [ChatMessage] {
-        var result: [ChatMessage] = []
+        if !liveMessages.isEmpty {
+            return liveMessages.map { msg in
+                ChatMessage(author: msg.author, text: msg.text, isHighlighted: msg.isTrigger)
+            }
+        }
 
+        var result: [ChatMessage] = []
         let snippetText = SlackTextParser.toPlainText(item.snippet)
         let senderName = viewModel.senderName(for: item)
 
-        // Thread context lines first; highlight if it matches the trigger snippet
         for line in contextLines {
             let isSnippet = line.author == senderName && line.text == snippetText
             result.append(ChatMessage(author: line.author, text: line.text, isHighlighted: isSnippet))
         }
 
-        // If snippet wasn't found in context, append it as the trigger message
         if !snippetText.isEmpty && !result.contains(where: { $0.isHighlighted }) {
             result.append(ChatMessage(author: senderName, text: snippetText, isHighlighted: true))
         }

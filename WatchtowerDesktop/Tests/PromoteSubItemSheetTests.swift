@@ -87,4 +87,24 @@ final class PromoteSubItemSheetTests: XCTestCase {
         )
         _ = sheet.body
     }
+
+    /// Covers the new `cliRunner` injection point added for the "Refine with AI"
+    /// flow — body must still render without trapping when a runner is supplied.
+    func testSheetInitializesWithInjectedCLIRunner() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        let vm = TargetsViewModel(dbManager: mgr)
+        let parent = try await makeParent(mgr: mgr)
+        let subItem = TargetSubItem(text: "first", done: false, dueDate: nil)
+        let runner = FakeCLIRunner(stdout: Data("{}".utf8))
+
+        let sheet = PromoteSubItemSheet(
+            parent: parent,
+            subItem: subItem,
+            subItemIndex: 0,
+            viewModel: vm,
+            cliRunner: runner
+        )
+        _ = sheet.body
+    }
 }

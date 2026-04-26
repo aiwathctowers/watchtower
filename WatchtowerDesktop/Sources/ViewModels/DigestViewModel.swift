@@ -11,6 +11,37 @@ final class DigestViewModel {
     var errorMessage: String?
     var unreadDigestCount: Int = 0
     var unreadDecisionCount: Int = 0
+    var sortOrder: SortOrder = .newestFirst
+
+    enum SortOrder: String, CaseIterable {
+        case newestFirst = "Newest first"
+        case oldestFirst = "Oldest first"
+
+        var systemImage: String {
+            self == .newestFirst ? "arrow.down" : "arrow.up"
+        }
+    }
+
+    func setSortOrder(_ order: SortOrder) {
+        guard order != sortOrder else { return }
+        sortOrder = order
+        digests = applySort(digests)
+        decisionEntries = applySortDecisions(decisionEntries)
+    }
+
+    private func applySort(_ items: [Digest]) -> [Digest] {
+        switch sortOrder {
+        case .newestFirst: return items.sorted { $0.periodTo > $1.periodTo }
+        case .oldestFirst: return items.sorted { $0.periodTo < $1.periodTo }
+        }
+    }
+
+    private func applySortDecisions(_ items: [DecisionEntry]) -> [DecisionEntry] {
+        switch sortOrder {
+        case .newestFirst: return items.sorted { $0.date > $1.date }
+        case .oldestFirst: return items.sorted { $0.date < $1.date }
+        }
+    }
 
     // Pagination — digests
     private(set) var hasMoreDigests = true
@@ -139,7 +170,7 @@ final class DigestViewModel {
                     currentUserID: uid
                 )
             }
-            digests = result.digests
+            digests = applySort(result.digests)
             digestsOffset = result.digests.count
             hasMoreDigests = result.digests.count >= digestsPageSize
             channelNameCache = result.channelNames
@@ -254,8 +285,7 @@ final class DigestViewModel {
             }
         }
 
-        entries.sort { $0.date > $1.date }
-        return entries
+        return applySortDecisions(entries)
     }
 
     // MARK: - Read tracking
@@ -427,7 +457,7 @@ final class DigestViewModel {
                 }
                 channelNameCache.merge(names) { _, new in new }
             }
-            digests.append(contentsOf: batch)
+            digests = applySort(digests + batch)
             digestsOffset += batch.count
             hasMoreDigests = batch.count >= digestsPageSize
         } catch {

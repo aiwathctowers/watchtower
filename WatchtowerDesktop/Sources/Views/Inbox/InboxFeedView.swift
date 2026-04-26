@@ -7,6 +7,7 @@ struct InboxFeedView: View {
     @Environment(AppState.self) private var appState
     @State private var vm: InboxViewModel?
     @State private var feedbackItem: InboxItem?
+    @State private var detailItem: InboxItem?
     @State private var tab: Tab = .feed
 
     enum Tab { case feed, learned }
@@ -48,6 +49,14 @@ struct InboxFeedView: View {
                     vm.submitFeedback(item, rating: rating, reason: reason)
                     feedbackItem = nil
                 }
+            }
+        }
+        .sheet(item: $detailItem) { item in
+            if let vm {
+                InboxDetailView(item: item, viewModel: vm) {
+                    detailItem = nil
+                }
+                .frame(minWidth: 560, idealWidth: 640, minHeight: 480, idealHeight: 640)
             }
         }
     }
@@ -161,9 +170,8 @@ struct InboxFeedView: View {
     }
 
     private func openItem(_ item: InboxItem, vm: InboxViewModel) {
-        if let url = vm.slackMessageURL(for: item) {
-            NSWorkspace.shared.open(url)
-        }
+        vm.markSeen(item)
+        detailItem = item
     }
 
     private func snoozeItem(_ item: InboxItem, option: InboxCardView.SnoozeOption, vm: InboxViewModel) {

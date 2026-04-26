@@ -31,6 +31,12 @@ struct TargetDetailView: View {
     @State private var suggestedLinks: SuggestedLinksResult?
     @State private var isSuggestingLinks = false
     @State private var suggestLinksError: String?
+    @FocusState private var focusedField: Field?
+
+    enum Field: Hashable {
+        case text
+        case intent
+    }
 
     enum Tab: String, CaseIterable {
         case details = "Details"
@@ -104,6 +110,13 @@ struct TargetDetailView: View {
             syncState()
             loadJiraIssue()
             loadLinks()
+        }
+        .onChange(of: focusedField) { oldValue, _ in
+            switch oldValue {
+            case .text: commitText()
+            case .intent: commitIntent()
+            case .none: break
+            }
         }
         .sheet(isPresented: $showSuggestLinksSheet) {
             if let suggestedLinks {
@@ -191,12 +204,26 @@ struct TargetDetailView: View {
                 Spacer()
             }
 
-            TextField("Target description", text: $editingText, axis: .vertical)
-                .font(.title3)
-                .fontWeight(.semibold)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit { commitText() }
+            ZStack(alignment: .topLeading) {
+                if editingText.isEmpty {
+                    Text("Target description")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $editingText)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .frame(minHeight: 44, maxHeight: 160)
+                    .focused($focusedField, equals: .text)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
                 statusLabel
@@ -217,14 +244,26 @@ struct TargetDetailView: View {
     // MARK: - Intent
 
     private var intentSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Intent")
                 .font(.headline)
-            TextField("Why this target matters...", text: $editingIntent)
-                .font(.callout)
-                .textFieldStyle(.plain)
-                .foregroundStyle(.secondary)
-                .onSubmit { commitIntent() }
+            ZStack(alignment: .topLeading) {
+                if editingIntent.isEmpty {
+                    Text("Why this target matters…")
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $editingIntent)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .frame(minHeight: 56, maxHeight: 160)
+                    .focused($focusedField, equals: .intent)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 

@@ -8,6 +8,19 @@ enum ItemClass: String, Codable, Equatable {
     case ambient
 }
 
+// MARK: - InboxConversationMessage
+
+/// A single message in the live conversation view rendered by `InboxDetailView`.
+/// Loaded on demand from the local `messages` table — represents the current state
+/// of the thread/channel, not the snapshot frozen into `inbox_items.context` at detect time.
+struct InboxConversationMessage: Identifiable, Equatable {
+    let id: String       // message ts (channel-local)
+    let author: String   // resolved display name
+    let text: String     // cleaned via SlackTextParser
+    let isTrigger: Bool  // matches the inbox item's message_ts
+    let date: Date
+}
+
 // MARK: - InboxItem
 
 struct InboxItem: FetchableRecord, Identifiable, Equatable {

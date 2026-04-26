@@ -410,8 +410,10 @@ final class TargetsViewModel {
             index: index,
             overrides: overrides
         )
-        // GRDB ValueObservation will fire load() when the CLI subprocess writes
-        // to the targets table, so an explicit load() here would duplicate it.
+        // CLI subprocess writes through its own SQLite connection, so GRDB's
+        // in-process ValueObservation never sees the change. Refresh manually
+        // so the parent's stripped sub_items and the new child show up.
+        load()
         return result.id
     }
 
@@ -433,7 +435,9 @@ final class TargetsViewModel {
                 overrides: item.overrides
             )
         }
-        // Same rationale as promoteSubItem: rely on ValueObservation.
+        // Same rationale as promoteSubItem: cross-process CLI writes bypass our
+        // in-process ValueObservation, so refresh after the batch finishes.
+        load()
     }
 }
 
