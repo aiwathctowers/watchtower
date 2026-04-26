@@ -110,6 +110,40 @@ final class SlackTextParserTests: XCTestCase {
         XCTAssertEqual(SlackTextParser.toPlainText(input), "Just a normal message")
     }
 
+    // MARK: - Date templates
+
+    func testDateTemplateWithFallback() {
+        let input = "Today-<!date^1776981600^{date_long}|Friday, April 24, 2026>"
+        XCTAssertEqual(SlackTextParser.toPlainText(input), "Today-Friday, April 24, 2026")
+    }
+
+    func testDateTemplateWithoutFallbackFormatsTimestamp() {
+        let input = "At <!date^1700000000^{date_short}>"
+        let result = SlackTextParser.toPlainText(input)
+        XCTAssertTrue(result.hasPrefix("At "))
+        XCTAssertFalse(result.contains("<!date"))
+        XCTAssertFalse(result.contains("1700000000"))
+    }
+
+    // MARK: - User-name resolution
+
+    func testUserMentionResolvesViaLookup() {
+        let input = "Ping <@U09H4EMS85U> about this"
+        let result = SlackTextParser.toPlainText(input, userNames: ["U09H4EMS85U": "Roman Olifir"])
+        XCTAssertEqual(result, "Ping @Roman Olifir about this")
+    }
+
+    func testUserMentionFallsBackToIDWhenUnknown() {
+        let input = "Ping <@U09H4EMS85U> about this"
+        XCTAssertEqual(SlackTextParser.toPlainText(input), "Ping @U09H4EMS85U about this")
+    }
+
+    func testUserMentionWithInlineNameIgnoresLookup() {
+        let input = "Hey <@U09H4EMS85U|roman>"
+        let result = SlackTextParser.toPlainText(input, userNames: ["U09H4EMS85U": "Roman Olifir"])
+        XCTAssertEqual(result, "Hey @roman")
+    }
+
     // MARK: - AttributedString
 
     func testAttributedStringDoesNotCrash() {
@@ -122,5 +156,22 @@ final class SlackTextParserTests: XCTestCase {
         let input = "Hello world"
         let result = SlackTextParser.toAttributedString(input)
         XCTAssertEqual(String(result.characters), "Hello world")
+    }
+
+    func testAttributedStringAutolinksBareURLs() {
+        let input = "See https://whitebit-dev.atlassian.net/browse/REG-4 now"
+        let result = SlackTextParser.toAttributedString(input)
+        var foundLink = false
+        for run in result.runs where run.link != nil {
+            foundLink = true
+            XCTAssertEqual(run.link?.absoluteString, "https://whitebit-dev.atlassian.net/browse/REG-4")
+        }
+        XCTAssertTrue(foundLink, "Bare URL should become a clickable link")
+    }
+
+    func testAttributedStringResolvesUserMentionViaLookup() {
+        let input = "Hey <@U09H4EMS85U>"
+        let result = SlackTextParser.toAttributedString(input, userNames: ["U09H4EMS85U": "Roman Olifir"])
+        XCTAssertEqual(String(result.characters), "Hey @Roman Olifir")
     }
 }

@@ -13,6 +13,8 @@ enum CardSize {
 struct InboxCardView: View {
     let item: InboxItem
     let size: CardSize
+    var senderName: String? = nil
+    var userNames: [String: String] = [:]
     let onOpen: () -> Void
     let onSnooze: (SnoozeOption) -> Void
     let onDismiss: () -> Void
@@ -42,7 +44,7 @@ struct InboxCardView: View {
     private var compactView: some View {
         HStack(spacing: 6) {
             triggerIcon
-            Text(SlackTextParser.toPlainText(item.snippet))
+            Text(snippetAttributed)
                 .lineLimit(1)
                 .font(.callout)
             Spacer()
@@ -68,7 +70,7 @@ struct InboxCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(SlackTextParser.toPlainText(item.snippet))
+            Text(snippetAttributed)
                 .lineLimit(2)
                 .font(.callout)
             actionBar
@@ -89,14 +91,14 @@ struct InboxCardView: View {
                     .lineLimit(1)
                 Spacer()
             }
-            Text(SlackTextParser.toPlainText(item.snippet))
+            Text(snippetAttributed)
                 .font(.body)
             if !item.aiReason.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "sparkles")
                         .foregroundStyle(.yellow)
                         .font(.caption)
-                    Text(SlackTextParser.toPlainText(item.aiReason))
+                    Text(SlackTextParser.toAttributedString(item.aiReason, userNames: userNames))
                         .font(.caption)
                 }
                 .padding(8)
@@ -166,9 +168,17 @@ struct InboxCardView: View {
         }
     }
 
-    /// Display name for the sender — resolved to user ID until a name resolver is injected.
+    /// Display name for the sender — resolved via `senderName` injection when available.
     private var senderDisplay: String {
-        item.senderUserID.isEmpty ? "Unknown" : item.senderUserID
+        if let name = senderName, !name.isEmpty { return name }
+        if let resolved = userNames[item.senderUserID], !resolved.isEmpty { return resolved }
+        return item.senderUserID.isEmpty ? "Unknown" : item.senderUserID
+    }
+
+    /// Snippet rendered as AttributedString: resolves `<@U…>` mentions to display names via
+    /// `userNames`, autolinks bare URLs, and preserves inline markdown.
+    private var snippetAttributed: AttributedString {
+        SlackTextParser.toAttributedString(item.snippet, userNames: userNames)
     }
 
     // MARK: - Action Bar

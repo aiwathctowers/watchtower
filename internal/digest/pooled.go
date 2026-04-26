@@ -72,3 +72,16 @@ type sessionSourceKey struct{}
 func WithSource(ctx context.Context, source string) context.Context {
 	return context.WithValue(ctx, sessionSourceKey{}, source)
 }
+
+// Source tags passed via WithSource select the model tier a Generator should
+// use for the call. Any harness implementing digest.Generator MUST honor the
+// tier sources below by mapping them to an appropriate model in its backend:
+//
+//	SourceLight → lightweight/fast model (e.g. Haiku, gpt-5.4-mini, ...)
+//
+// Per-pipeline source names (e.g. "digest.channel", "inbox.prioritize") remain
+// valid and are routed by each harness's ModelForSource for finer control.
+// An unknown or empty source falls back to the harness's default model.
+const (
+	SourceLight = "light"
+)

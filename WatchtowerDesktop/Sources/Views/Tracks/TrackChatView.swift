@@ -305,9 +305,12 @@ final class TrackChatViewModel {
             try WorkspaceQueries.fetchWorkspace(db)
         }
         let teamID = ws?.id ?? "unknown"
+        let rawDomain = ws?.domain ?? ""
+        let domain = rawDomain.isEmpty ? "unknown" : rawDomain
 
         let channelIDs = track.decodedChannelIDs
         let channelList = channelIDs.isEmpty ? "none" : channelIDs.joined(separator: ", ")
+        let channelInClause = channelIDs.joined(separator: "','")
 
         return """
         You are Watchtower, an AI assistant helping the user understand a specific track \
@@ -333,19 +336,45 @@ final class TrackChatViewModel {
         Database: \(dbPath)
         \(schema)
 
+        === WORKSPACE ===
+        Slack team ID: \(teamID)
+        Slack web domain: \(domain).slack.com
+
         === QUERY TIPS ===
+        - Always SELECT m.thread_ts alongside m.ts so you can build correct links for threaded messages.
         - Find messages in track channels:
-          SELECT m.text, u.display_name, m.ts FROM messages m
+          SELECT m.text, u.display_name, m.ts, m.thread_ts FROM messages m
           JOIN users u ON m.user_id = u.id
-          WHERE m.channel_id IN ('\(channelIDs.joined(separator: "','"))')
+          WHERE m.channel_id IN ('\(channelInClause)')
           ORDER BY m.ts_unix DESC LIMIT 20
-        - Deep link format: slack://channel?team=\(teamID)&id={channel_id}&message={ts}
+
+        === LINKING RULES ===
+        ALWAYS use markdown links with descriptive text in the user's language. Never output bare URLs.
+
+        Channel link:
+          [#channel-name](slack://channel?team=\(teamID)&id={channel_id})
+
+        Message link (top-level message, thread_ts is NULL or empty):
+          [описательный текст](slack://channel?team=\(teamID)&id={channel_id}&message={ts})
+
+        Message link inside a thread — use thread_ts (the parent's ts), NOT the reply's ts:
+          [описательный текст](slack://channel?team=\(teamID)&id={channel_id}&message={thread_ts})
+
+        Web permalink (only when the user explicitly asks for an https link):
+          Top-level:     https://\(domain).slack.com/archives/{channel_id}/p{ts_without_dot}
+          Thread reply:  https://\(domain).slack.com/archives/{channel_id}/p{ts_without_dot}?thread_ts={thread_ts}&cid={channel_id}
+          Remove the dot from ts: 1740577800.000100 → p1740577800000100
+
+        Rules:
+        - Every referenced message MUST have a link
+        - Link text describes WHAT is linked, not "link" or "click here"
+        - Always SELECT channel_id, ts, AND thread_ts when fetching messages so you can build correct links
+        - NEVER link to a channel when the user asked for a specific message — resolve the actual ts first
 
         === RESPONSE STYLE ===
         - Be concise and direct
         - Match the user's language
         - Use markdown for readability
-        - Include Slack links when referencing messages
         """
     }
 }

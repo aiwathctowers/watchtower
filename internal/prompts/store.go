@@ -32,6 +32,7 @@ const (
 	TasksGenerate      = "tasks.generate"
 	TasksUpdate        = "tasks.update"
 	MeetingPrep        = "meeting.prep"
+	MeetingExtractTopics = "meeting.extract_topics"
 	DayPlanGenerate    = "day_plan.generate"
 	TargetsExtract     = "targets.extract"
 	TargetsLink        = "targets.link"

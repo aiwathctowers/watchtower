@@ -7,12 +7,12 @@ struct MeetingNotesView: View {
     @State private var notes: [MeetingNote] = []
     @State private var newQuestionText = ""
     @State private var newNoteText = ""
-    @State private var editingNoteID: Int64?
     @State private var creatingTaskForID: Int64?
     @State private var errorMessage: String?
+    @State private var showExtractSheet = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             if let error = errorMessage {
                 Text(error)
                     .font(.caption)
@@ -23,65 +23,103 @@ struct MeetingNotesView: View {
             notesSection
         }
         .onAppear { loadNotes() }
+        .sheet(isPresented: $showExtractSheet) {
+            ExtractMeetingTopicsSheet(
+                eventID: eventID,
+                existingTopicSortOrderCeiling: questions.last?.sortOrder ?? -1,
+                onCreated: { loadNotes() }
+            )
+        }
     }
 
     // MARK: - Questions Section
 
     private var questionsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
                 Image(systemName: "checklist")
                     .foregroundStyle(.blue)
                 Text("Discussion Topics")
                     .font(.headline)
+                Spacer()
+                Button {
+                    showExtractSheet = true
+                } label: {
+                    Label("Paste and extract", systemImage: "sparkles")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             .padding(.top, 4)
 
-            ForEach(questions) { note in
-                questionRow(note)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(questions) { note in
+                    questionRow(note)
+                }
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: "plus.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                TextField("Add a topic...", text: $newQuestionText)
-                    .textFieldStyle(.plain)
-                    .font(.callout)
-                    .onSubmit { addQuestion() }
-            }
-            .padding(.vertical, 2)
+            addTopicRow
         }
     }
 
     private func questionRow(_ note: MeetingNote) -> some View {
-        HStack(spacing: 6) {
-            Button {
-                toggleChecked(note)
-            } label: {
-                Image(systemName: note.isChecked ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(note.isChecked ? .green : .secondary)
+        let accent: Color = note.isChecked ? .green : .blue
+        return HStack(alignment: .top, spacing: 0) {
+            Rectangle()
+                .fill(accent)
+                .frame(width: 3)
+
+            HStack(alignment: .top, spacing: 8) {
+                Button {
+                    toggleChecked(note)
+                } label: {
+                    Image(systemName: note.isChecked ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(note.isChecked ? .green : .secondary)
+                        .font(.callout)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 1)
+
+                Text(note.text)
                     .font(.callout)
+                    .textSelection(.enabled)
+                    .strikethrough(note.isChecked)
+                    .foregroundStyle(note.isChecked ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                noteActions(note)
             }
-            .buttonStyle(.plain)
-
-            Text(note.text)
-                .font(.callout)
-                .strikethrough(note.isChecked)
-                .foregroundStyle(note.isChecked ? .secondary : .primary)
-
-            Spacer()
-
-            noteActions(note)
+            .padding(10)
         }
-        .padding(.vertical, 2)
+        .background(accent.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var addTopicRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.circle")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            TextField("Add a topic...", text: $newQuestionText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .lineLimit(1...3)
+                .onSubmit { addQuestion() }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .background(
+            Color.secondary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
     }
 
     // MARK: - Notes Section
 
     private var notesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
                 Image(systemName: "note.text")
                     .foregroundStyle(.blue)
                 Text("Meeting Notes")
@@ -89,47 +127,63 @@ struct MeetingNotesView: View {
             }
             .padding(.top, 4)
 
-            ForEach(freeformNotes) { note in
-                noteRow(note)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(freeformNotes) { note in
+                    noteRow(note)
+                }
             }
 
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "plus.circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                    .padding(.top, 4)
-                TextField("Add a note...", text: $newNoteText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.callout)
-                    .lineLimit(1...4)
-                    .onSubmit { addNote() }
-            }
-            .padding(.vertical, 2)
+            addNoteRow
         }
     }
 
     private func noteRow(_ note: MeetingNote) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "circle.fill")
-                .font(.system(size: 4))
-                .padding(.top, 7)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle()
+                .fill(Color.orange)
+                .frame(width: 3)
 
-            Text(note.text)
-                .font(.callout)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: 8) {
+                Text(note.text)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            noteActions(note)
+                noteActions(note)
+            }
+            .padding(10)
         }
-        .padding(.vertical, 2)
+        .background(Color.orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var addNoteRow: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "plus.circle")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+                .padding(.top, 4)
+            TextField("Add a note...", text: $newNoteText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .lineLimit(1...5)
+                .onSubmit { addNote() }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .background(
+            Color.secondary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
     }
 
     // MARK: - Actions
 
     private func noteActions(_ note: MeetingNote) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             if let taskID = note.taskID {
-                Label("Task #\(taskID)", systemImage: "checkmark.circle.fill")
+                Label("#\(taskID)", systemImage: "checkmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
                     .font(.caption2)
                     .foregroundStyle(.green)
             } else {

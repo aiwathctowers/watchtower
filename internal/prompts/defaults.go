@@ -24,6 +24,7 @@ var Defaults = map[string]string{
 	TasksGenerate:      defaultTasksGenerate,
 	TasksUpdate:        defaultTasksUpdate,
 	MeetingPrep:        defaultMeetingPrep,
+	MeetingExtractTopics: defaultMeetingExtractTopics,
 	DayPlanGenerate:    defaultDayPlanGenerate,
 	TargetsExtract:     defaultTargetsExtract,
 	TargetsLink:        defaultTargetsLink,
@@ -49,6 +50,7 @@ var AllIDs = []string{
 	TasksGenerate,
 	TasksUpdate,
 	MeetingPrep,
+	MeetingExtractTopics,
 	DayPlanGenerate,
 	TargetsExtract,
 	TargetsLink,
@@ -106,6 +108,7 @@ var Descriptions = map[string]string{
 	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
 	TasksUpdate:        "Task update — AI-powered task modification from user instruction",
 	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
+	MeetingExtractTopics: "Meeting extract topics — split pasted text into atomic discussion topics for a meeting's Discussion Topics list",
 	DayPlanGenerate:    "Day plan generation — AI-powered daily schedule with timeblocks, backlog, and calendar conflict avoidance",
 	TargetsExtract:     "Target extraction — multi-target AI extraction from raw text with URL enrichments and hierarchy linking",
 	TargetsLink:        "Target linking — single-target parent and secondary link proposal against active snapshot",
@@ -1012,6 +1015,35 @@ Rules:
 
 === USER NOTES ===
 %s`
+
+const defaultMeetingExtractTopics = `You split a raw blob of meeting-prep text into atomic discussion topics.
+
+=== MEETING TITLE ===
+%s
+=== /MEETING TITLE ===
+
+%s
+
+=== RAW TEXT ===
+%s
+=== /RAW TEXT ===
+
+Return ONLY a JSON object (no markdown fences, no commentary) matching this exact schema:
+
+{
+  "topics": [
+    {"text": "string (<=200 chars)", "priority": "high|medium|low|"}
+  ],
+  "notes": "optional short message about what was skipped or merged"
+}
+
+Rules:
+- Produce 1-15 atomic topics. Merge near-duplicates. Skip pure recap unless it flags a decision needed.
+- Each topic is a single idea that can be discussed independently.
+- Strip markdown syntax (**bold**, numbered lists, emojis, leading "Topic:" labels) from the topic text.
+- Prefer imperative / question phrasing — "Discuss X", "Decide on Y", "Confirm Z".
+- priority is optional. Use "" when unclear. Use "high" only for explicit blockers or urgency signals.
+- Return an empty topics array if the text has no actionable content.`
 
 const defaultTargetsExtract = `You are a goal-extraction assistant. Given raw text (a Slack message, email paste, or form input), extract actionable targets (goals, tasks, deliverables) and return them as structured JSON.
 

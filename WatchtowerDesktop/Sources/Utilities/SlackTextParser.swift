@@ -14,7 +14,9 @@ enum SlackTextParser {
     private static let userMentionWithNamePattern = try? NSRegularExpression(pattern: #"<@U[A-Z0-9]+\|([^>]+)>"#)
     private static let userMentionPattern = try? NSRegularExpression(pattern: #"<@(U[A-Z0-9]+)>"#)
     private static let channelMentionPattern = try? NSRegularExpression(pattern: #"<#C[A-Z0-9]+\|([^>]+)>"#)
-    private static let specialMentionPattern = try? NSRegularExpression(pattern: #"<!(\w+)(\|[^>]+)?>"#)
+    private static let dateTemplatePattern = try? NSRegularExpression(pattern: #"<!date\^(\d+)\^[^|>]*(?:\|([^>]*))?>"#)
+    private static let specialMentionPattern = try? NSRegularExpression(pattern: #"<!(\w+)(?:\|[^>]+)?>"#)
+    private static let bareURLPattern = try? NSRegularExpression(pattern: #"(?<![<(\[])\b(https?://[^\s<>)\]]+)"#)
     private static let codeBlockRegex = try? NSRegularExpression(pattern: #"```[\s\S]*?```"#, options: [.dotMatchesLineSeparators])
     private static let inlineCodeRegex = try? NSRegularExpression(pattern: #"`([^`]+)`"#)
     private static let boldRegex = try? NSRegularExpression(pattern: #"(?<!\w)\*([^\*]+)\*(?!\w)"#)
@@ -26,9 +28,10 @@ enum SlackTextParser {
 
     // MARK: - Plain text (strips all formatting)
 
-    /// Convert Slack mrkdwn to plain text
-    static func toPlainText(_ input: String) -> String {
-        var text = resolveEntities(input)
+    /// Convert Slack mrkdwn to plain text.
+    /// - Parameter userNames: optional `userID -> displayName` map used to resolve bare `<@U…>` mentions.
+    static func toPlainText(_ input: String, userNames: [String: String] = [:]) -> String {
+        var text = resolveEntities(input, userNames: userNames)
         text = SlackEmoji.resolve(text)
         text = stripFormatting(text)
         return text
@@ -37,10 +40,12 @@ enum SlackTextParser {
     // MARK: - Rich text (AttributedString)
 
     /// Convert Slack mrkdwn to AttributedString with formatting preserved.
-    static func toAttributedString(_ input: String) -> AttributedString {
-        var text = resolveEntities(input)
+    /// - Parameter userNames: optional `userID -> displayName` map used to resolve bare `<@U…>` mentions.
+    static func toAttributedString(_ input: String, userNames: [String: String] = [:]) -> AttributedString {
+        var text = resolveEntities(input, userNames: userNames)
         text = SlackEmoji.resolve(text)
         text = slackToMarkdown(text)
+        text = autolinkBareURLs(text)
 
         // Try parsing as Markdown; fall back to plain text
         if let attributed = try? AttributedString(
@@ -54,9 +59,25 @@ enum SlackTextParser {
 
     // MARK: - Internal helpers
 
-    /// Resolve Slack entities: links, user mentions, channel mentions.
-    static func resolveEntities(_ input: String) -> String {
+    /// Resolve Slack entities: links, user mentions, channel mentions, date templates.
+    /// - Parameter userNames: optional `userID -> displayName` map; bare `<@U…>` mentions are
+    ///   replaced with `@DisplayName` when a match is found, otherwise fall back to the user ID.
+    static func resolveEntities(_ input: String, userNames: [String: String] = [:]) -> String {
         var text = input
+
+        // Date templates: <!date^TS^format|fallback> → fallback (or formatted TS if no fallback)
+        if let pattern = dateTemplatePattern {
+            text = replaceMatches(in: text, pattern: pattern) { match, source in
+                let fallback = capturedString(match, at: 2, in: source)
+                if let fallback, !fallback.isEmpty { return fallback }
+                if let tsStr = capturedString(match, at: 1, in: source),
+                   let ts = TimeInterval(tsStr) {
+                    let date = Date(timeIntervalSince1970: ts)
+                    return Self.fallbackDateFormatter.string(from: date)
+                }
+                return ""
+            }
+        }
 
         // Resolve links: <https://url|display text> → display text, <https://url> → url
         if let pattern = linkPattern {
@@ -78,11 +99,15 @@ enum SlackTextParser {
             )
         }
 
-        // User mentions without display name: <@U123ABC> → @U123ABC
+        // User mentions without display name: <@U123ABC> → @DisplayName if known, else @U123ABC
         if let pattern = userMentionPattern {
-            text = pattern.stringByReplacingMatches(
-                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "@$1"
-            )
+            text = replaceMatches(in: text, pattern: pattern) { match, source in
+                guard let uid = capturedString(match, at: 1, in: source) else { return "" }
+                if let name = userNames[uid], !name.isEmpty {
+                    return "@\(name)"
+                }
+                return "@\(uid)"
+            }
         }
 
         // Channel mentions: <#C123ABC|channel-name> → #channel-name
@@ -100,6 +125,53 @@ enum SlackTextParser {
         }
 
         return text
+    }
+
+    // MARK: - Regex helpers
+
+    private static let fallbackDateFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        return fmt
+    }()
+
+    private static func capturedString(
+        _ match: NSTextCheckingResult,
+        at group: Int,
+        in source: String
+    ) -> String? {
+        guard group < match.numberOfRanges else { return nil }
+        let range = match.range(at: group)
+        guard range.location != NSNotFound, let swiftRange = Range(range, in: source) else { return nil }
+        return String(source[swiftRange])
+    }
+
+    private static func replaceMatches(
+        in source: String,
+        pattern: NSRegularExpression,
+        transform: (NSTextCheckingResult, String) -> String
+    ) -> String {
+        let fullRange = NSRange(source.startIndex..., in: source)
+        let matches = pattern.matches(in: source, range: fullRange)
+        guard !matches.isEmpty else { return source }
+
+        var result = source
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            let replacement = transform(match, result)
+            result.replaceSubrange(range, with: replacement)
+        }
+        return result
+    }
+
+    /// Wrap bare URLs in `<…>` so `AttributedString(markdown:)` renders them as autolinks.
+    private static func autolinkBareURLs(_ text: String) -> String {
+        guard let pattern = bareURLPattern else { return text }
+        return replaceMatches(in: text, pattern: pattern) { match, source in
+            guard let url = capturedString(match, at: 1, in: source) else { return "" }
+            return "<\(url)>"
+        }
     }
 
     /// Strip all formatting marks for plain text output.

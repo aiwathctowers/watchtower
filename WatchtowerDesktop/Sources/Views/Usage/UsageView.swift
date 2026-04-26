@@ -111,13 +111,13 @@ struct UsageView: View {
                 summaryItem(label: "AI Calls", value: "\(viewModel.totalCalls)")
                 summaryItem(
                     label: "Input",
-                    value: formatTokens(viewModel.totalInputTokens),
-                    tooltip: "Input tokens sent to the API (excluding cache reads)"
+                    value: formatTokens(viewModel.totalApiTokens),
+                    tooltip: "Total input tokens processed by the API (includes cache reads and cache writes)"
                 )
                 summaryItem(
-                    label: "Input (+ cache)",
-                    value: formatTokens(viewModel.totalApiTokens),
-                    tooltip: "Total input tokens including cache reads and cache writes"
+                    label: "Uncached",
+                    value: formatTokens(viewModel.totalInputTokens),
+                    tooltip: "Input tokens billed at the non-cached rate (excludes cache reads and writes)"
                 )
                 summaryItem(label: "Output", value: formatTokens(viewModel.totalOutputTokens))
 
@@ -214,7 +214,7 @@ private struct RunRow: View {
                         .background(.quaternary)
                         .clipShape(Capsule())
 
-                    tokenBadge("In", count: run.inputTokens)
+                    tokenBadge("In", count: run.totalApiTokens)
                     tokenBadge("Out", count: run.outputTokens)
 
                     Text(timeString(run.startedAt))
@@ -252,10 +252,11 @@ private struct RunRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if run.totalApiTokens > 0 {
-                    Label("API total: \(formatTokens(run.totalApiTokens))", systemImage: "arrow.up.arrow.down")
+                if run.inputTokens > 0 {
+                    Label("Uncached: \(formatTokens(run.inputTokens))", systemImage: "arrow.up.arrow.down")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .help("Input tokens billed at the non-cached rate")
                 }
             }
             .padding(.bottom, 4)
@@ -288,7 +289,7 @@ private struct RunRow: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        tokenBadge("In", count: step.inputTokens, small: true)
+                        tokenBadge("In", count: step.totalApiTokens, small: true)
                         tokenBadge("Out", count: step.outputTokens, small: true)
 
                     }

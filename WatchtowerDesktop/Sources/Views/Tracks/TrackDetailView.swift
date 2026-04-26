@@ -479,6 +479,15 @@ struct TrackDetailView: View {
 
     private var actionsSection: some View {
         HStack(spacing: 8) {
+            if let slackURL {
+                Button {
+                    NSWorkspace.shared.open(slackURL)
+                } label: {
+                    Label("Open in Slack", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
             Button {
                 showCreateTarget = true
             } label: {
@@ -520,6 +529,24 @@ struct TrackDetailView: View {
                 )
             }
         }
+    }
+
+    private var slackURL: URL? {
+        let refs = track.decodedSourceRefs
+        if let first = refs.first, !first.ts.isEmpty {
+            let chID = first.channelID ?? track.decodedChannelIDs.first
+            if let chID, !chID.isEmpty {
+                return viewModel.slackMessageURL(
+                    channelID: chID,
+                    messageTS: first.ts,
+                    threadTS: first.threadTS
+                )
+            }
+        }
+        if let chID = track.decodedChannelIDs.first, !chID.isEmpty {
+            return viewModel.slackChannelURL(channelID: chID)
+        }
+        return nil
     }
 
     // MARK: - Jira Issues

@@ -16,6 +16,10 @@ var (
 	meetingPrepFlagJSON         bool
 	meetingPrepFlagForceRefresh bool
 	meetingPrepFlagUserNotes    string
+
+	meetingExtractTopicsFlagText    string
+	meetingExtractTopicsFlagEventID string
+	meetingExtractTopicsFlagJSON    bool
 )
 
 var meetingPrepCmd = &cobra.Command{
@@ -26,11 +30,23 @@ var meetingPrepCmd = &cobra.Command{
 	RunE:  runMeetingPrep,
 }
 
+var meetingExtractTopicsCmd = &cobra.Command{
+	Use:   "extract-topics",
+	Short: "Split pasted text into discrete discussion topics (AI)",
+	Long:  "Extracts atomic discussion topics from pasted text (recap, notes, rambling status) for seeding a meeting's Discussion Topics list. Non-interactive — caller persists the result.",
+	RunE:  runMeetingExtractTopics,
+}
+
 func init() {
 	rootCmd.AddCommand(meetingPrepCmd)
 	meetingPrepCmd.Flags().BoolVar(&meetingPrepFlagJSON, "json", false, "output as JSON")
 	meetingPrepCmd.Flags().BoolVar(&meetingPrepFlagForceRefresh, "force-refresh", false, "regenerate even if cached result exists")
 	meetingPrepCmd.Flags().StringVar(&meetingPrepFlagUserNotes, "user-notes", "", "additional context or agenda notes from the user")
+
+	meetingPrepCmd.AddCommand(meetingExtractTopicsCmd)
+	meetingExtractTopicsCmd.Flags().StringVar(&meetingExtractTopicsFlagText, "text", "", "raw text to split into topics (required)")
+	meetingExtractTopicsCmd.Flags().StringVar(&meetingExtractTopicsFlagEventID, "event-id", "", "optional event id for title context")
+	meetingExtractTopicsCmd.Flags().BoolVar(&meetingExtractTopicsFlagJSON, "json", false, "output as JSON (default format is also JSON — kept for symmetry)")
 }
 
 func runMeetingPrep(cmd *cobra.Command, args []string) error {
@@ -159,4 +175,46 @@ func runMeetingPrep(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func runMeetingExtractTopics(cmd *cobra.Command, args []string) error {
+	if meetingExtractTopicsFlagText == "" {
+		return fmt.Errorf("--text is required")
+	}
+
+	cfg, err := config.Load(flagConfig)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	if flagWorkspace != "" {
+		cfg.ActiveWorkspace = flagWorkspace
+	}
+	if err := cfg.ValidateWorkspace(); err != nil {
+		return err
+	}
+
+	database, err := db.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	gen := cliGenerator(cfg)
+	pipe := meeting.New(database, cfg, gen, nil)
+
+	eventTitle := ""
+	if meetingExtractTopicsFlagEventID != "" {
+		if ev, err := database.GetCalendarEventByID(meetingExtractTopicsFlagEventID); err == nil && ev != nil {
+			eventTitle = ev.Title
+		}
+	}
+
+	result, err := pipe.ExtractDiscussionTopics(cmd.Context(), meetingExtractTopicsFlagText, eventTitle)
+	if err != nil {
+		return err
+	}
+
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
 }
