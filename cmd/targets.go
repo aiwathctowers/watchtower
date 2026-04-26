@@ -60,6 +60,9 @@ var (
 
 	// delete subcommand flags
 	targetsFlagDeleteJSON bool
+
+	// promote-subitem subcommand flags
+	targetsFlagPromoteJSON bool
 )
 
 var targetsCmd = &cobra.Command{
@@ -179,6 +182,16 @@ var targetsAIUpdateCmd = &cobra.Command{
 	RunE:  runTargetsAIUpdate,
 }
 
+var targetsPromoteSubItemCmd = &cobra.Command{
+	Use:   "promote-subitem <target-id> <sub-item-index>",
+	Short: "Convert a sub-item into a standalone child target",
+	Long: "Promotes the sub-item at the given index of the target to a new child target with parent_id set. " +
+		"The sub-item is removed from the parent's checklist. By default fields are inherited from the parent " +
+		"(level, period, priority, ownership, tags, intent) and from the sub-item (text, due_date); flags override.",
+	Args: cobra.ExactArgs(2),
+	RunE: runTargetsPromoteSubItem,
+}
+
 func init() {
 	rootCmd.AddCommand(targetsCmd)
 	targetsCmd.AddCommand(
@@ -196,6 +209,7 @@ func init() {
 		targetsGenerateCmd,
 		targetsNoteCmd,
 		targetsAIUpdateCmd,
+		targetsPromoteSubItemCmd,
 	)
 	targetsNoteCmd.AddCommand(targetsNoteAddCmd, targetsNoteListCmd)
 
@@ -264,6 +278,18 @@ func init() {
 	// ai-update flags
 	targetsAIUpdateCmd.Flags().StringVar(&targetsFlagInstruction, "instruction", "", "what to change (required)")
 	_ = targetsAIUpdateCmd.MarkFlagRequired("instruction")
+
+	// promote-subitem flags — every flag is optional; presence (Changed) toggles the override.
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagText, "text", "", "override the child target text (default: sub-item text)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagIntent, "intent", "", "override the child intent (default: parent intent)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagLevel, "level", "", "override the child level (quarter, month, week, day, custom)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPriority, "priority", "", "override the child priority (high, medium, low)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagOwnership, "ownership", "", "override the child ownership (mine, delegated, watching)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagDue, "due", "", "override the child due date (YYYY-MM-DDTHH:MM)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPeriodStart, "period-start", "", "override the child period start (YYYY-MM-DD)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPeriodEnd, "period-end", "", "override the child period end (YYYY-MM-DD)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagTags, "tags", "", "override comma-separated tags (default: parent tags)")
+	targetsPromoteSubItemCmd.Flags().BoolVar(&targetsFlagPromoteJSON, "json", false, "output the new child target as JSON")
 }
 
 func runTargetsList(cmd *cobra.Command, _ []string) error {
@@ -1402,5 +1428,106 @@ func runTargetsAIUpdate(cmd *cobra.Command, args []string) error {
 
 	jsonStr := extractJSON(result)
 	fmt.Fprintln(cmd.OutOrStdout(), jsonStr)
+	return nil
+}
+
+func runTargetsPromoteSubItem(cmd *cobra.Command, args []string) error {
+	parentID, err := strconv.Atoi(args[0])
+	if err != nil || parentID <= 0 {
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
+	}
+	idx, err := strconv.Atoi(args[1])
+	if err != nil || idx < 0 {
+		return fmt.Errorf("invalid sub-item index %q: must be a non-negative integer", args[1])
+	}
+
+	database, err := openDBFromConfig()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	overrides := db.PromoteOverrides{}
+	if cmd.Flags().Changed("text") {
+		v := targetsFlagText
+		overrides.Text = &v
+	}
+	if cmd.Flags().Changed("intent") {
+		v := targetsFlagIntent
+		overrides.Intent = &v
+	}
+	if cmd.Flags().Changed("level") {
+		v := targetsFlagLevel
+		overrides.Level = &v
+	}
+	if cmd.Flags().Changed("priority") {
+		v := targetsFlagPriority
+		overrides.Priority = &v
+	}
+	if cmd.Flags().Changed("ownership") {
+		v := targetsFlagOwnership
+		overrides.Ownership = &v
+	}
+	if cmd.Flags().Changed("due") {
+		v := targetsFlagDue
+		overrides.DueDate = &v
+	}
+	if cmd.Flags().Changed("period-start") {
+		v := targetsFlagPeriodStart
+		overrides.PeriodStart = &v
+	}
+	if cmd.Flags().Changed("period-end") {
+		v := targetsFlagPeriodEnd
+		overrides.PeriodEnd = &v
+	}
+	if cmd.Flags().Changed("tags") {
+		// Comma-separated input → JSON array. Empty input → empty array (clears tags).
+		var parts []string
+		if trimmed := strings.TrimSpace(targetsFlagTags); trimmed != "" {
+			for _, p := range strings.Split(targetsFlagTags, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					parts = append(parts, p)
+				}
+			}
+		}
+		if parts == nil {
+			parts = []string{}
+		}
+		buf, _ := json.Marshal(parts)
+		s := string(buf)
+		overrides.Tags = &s
+	}
+
+	childID, err := database.PromoteSubItemToChild(parentID, idx, overrides)
+	if err != nil {
+		return fmt.Errorf("promoting sub-item: %w", err)
+	}
+
+	if targetsFlagPromoteJSON {
+		child, err := database.GetTargetByID(int(childID))
+		if err != nil {
+			return fmt.Errorf("loading new child target: %w", err)
+		}
+		payload := map[string]any{
+			"id":           child.ID,
+			"text":         child.Text,
+			"level":        child.Level,
+			"priority":     child.Priority,
+			"status":       child.Status,
+			"due_date":     child.DueDate,
+			"period_start": child.PeriodStart,
+			"period_end":   child.PeriodEnd,
+			"parent_id":    parentID,
+			"source_type":  child.SourceType,
+			"source_id":    child.SourceID,
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(payload)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Promoted sub-item #%d of target #%d to new child target #%d\n",
+		idx, parentID, childID)
 	return nil
 }

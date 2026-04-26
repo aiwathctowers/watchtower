@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 68, v)
+	assert.Equal(t, 69, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -533,7 +533,7 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 68, v)
+	assert.Equal(t, 69, v)
 
 	// v45 drops old tracks and recreates with hybrid v2 schema.
 	// Verify new tracks table exists with v2 columns.
@@ -783,7 +783,7 @@ func TestMigration_v67_Backfill(t *testing.T) {
 
 	var ver int
 	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&ver))
-	assert.Equal(t, 68, ver)
+	assert.Equal(t, 69, ver)
 
 	// Backfill: reaction → ambient, mention → actionable.
 	var classReaction, classMention string

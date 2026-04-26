@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 68"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 69"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -3122,7 +3122,7 @@ afterV48:
 			notes               TEXT NOT NULL DEFAULT '[]',
 			progress            REAL NOT NULL DEFAULT 0.0,
 			source_type         TEXT NOT NULL DEFAULT 'manual'
-			                    CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack')),
+			                    CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack','promoted_subitem')),
 			source_id           TEXT NOT NULL DEFAULT '',
 			ai_level_confidence REAL DEFAULT NULL,
 			created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -3355,8 +3355,8 @@ afterV48:
 			waiting_user_ids TEXT NOT NULL DEFAULT '[]',
 			target_id       INTEGER,
 			read_at         TEXT,
-			created_at      TEXT NOT NULL,
-			updated_at      TEXT NOT NULL,
+			created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 			item_class      TEXT NOT NULL DEFAULT 'actionable' CHECK(item_class IN ('actionable','ambient')),
 			pinned          INTEGER NOT NULL DEFAULT 0,
 			archived_at     TEXT,
@@ -3441,6 +3441,93 @@ afterV48:
 			return fmt.Errorf("committing migration v68: %w", err)
 		}
 		version = 68
+	}
+
+	if version < 69 {
+		// v69: extend targets.source_type CHECK to allow 'promoted_subitem'
+		// (used when a sub-item is promoted to a standalone child target).
+		// SQLite cannot ALTER a CHECK constraint, so we rebuild the table.
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v69: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`CREATE TABLE targets_new (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			text                TEXT NOT NULL,
+			intent              TEXT NOT NULL DEFAULT '',
+			level               TEXT NOT NULL DEFAULT 'day'
+			                    CHECK(level IN ('quarter','month','week','day','custom')),
+			custom_label        TEXT NOT NULL DEFAULT '',
+			period_start        TEXT NOT NULL DEFAULT '',
+			period_end          TEXT NOT NULL DEFAULT '',
+			parent_id           INTEGER REFERENCES targets(id) ON DELETE SET NULL,
+			status              TEXT NOT NULL DEFAULT 'todo'
+			                    CHECK(status IN ('todo','in_progress','blocked','done','dismissed','snoozed')),
+			priority            TEXT NOT NULL DEFAULT 'medium'
+			                    CHECK(priority IN ('high','medium','low')),
+			ownership           TEXT NOT NULL DEFAULT 'mine'
+			                    CHECK(ownership IN ('mine','delegated','watching')),
+			ball_on             TEXT NOT NULL DEFAULT '',
+			due_date            TEXT NOT NULL DEFAULT '',
+			snooze_until        TEXT NOT NULL DEFAULT '',
+			blocking            TEXT NOT NULL DEFAULT '',
+			tags                TEXT NOT NULL DEFAULT '[]',
+			sub_items           TEXT NOT NULL DEFAULT '[]',
+			notes               TEXT NOT NULL DEFAULT '[]',
+			progress            REAL NOT NULL DEFAULT 0.0,
+			source_type         TEXT NOT NULL DEFAULT 'manual'
+			                    CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack','promoted_subitem')),
+			source_id           TEXT NOT NULL DEFAULT '',
+			ai_level_confidence REAL DEFAULT NULL,
+			created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+			updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		)`); err != nil {
+			return fmt.Errorf("migrate v69: create targets_new: %w", err)
+		}
+
+		if _, err := tx.Exec(`INSERT INTO targets_new
+			(id, text, intent, level, custom_label, period_start, period_end, parent_id,
+			 status, priority, ownership, ball_on, due_date, snooze_until, blocking,
+			 tags, sub_items, notes, progress, source_type, source_id, ai_level_confidence,
+			 created_at, updated_at)
+			SELECT id, text, intent, level, custom_label, period_start, period_end, parent_id,
+			 status, priority, ownership, ball_on, due_date, snooze_until, blocking,
+			 tags, sub_items, notes, progress, source_type, source_id, ai_level_confidence,
+			 created_at, updated_at FROM targets`); err != nil {
+			return fmt.Errorf("migrate v69: copy targets: %w", err)
+		}
+
+		if _, err := tx.Exec(`DROP TABLE targets`); err != nil {
+			return fmt.Errorf("migrate v69: drop targets: %w", err)
+		}
+		if _, err := tx.Exec(`ALTER TABLE targets_new RENAME TO targets`); err != nil {
+			return fmt.Errorf("migrate v69: rename targets: %w", err)
+		}
+
+		for _, idx := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_targets_level     ON targets(level)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_parent    ON targets(parent_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_period    ON targets(period_start, period_end)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_status    ON targets(status)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_priority  ON targets(priority)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_due       ON targets(due_date)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_source    ON targets(source_type, source_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_targets_updated   ON targets(updated_at DESC)`,
+		} {
+			if _, err := tx.Exec(idx); err != nil {
+				return fmt.Errorf("migrate v69: index: %w", err)
+			}
+		}
+
+		if _, err := tx.Exec("PRAGMA user_version = 69"); err != nil {
+			return fmt.Errorf("setting schema version v69: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v69: %w", err)
+		}
+		version = 69
 	}
 
 	_ = version // silence unused variable if this is the last migration

@@ -20,6 +20,7 @@ struct TargetDetailView: View {
     @State private var editingSubItemText: String = ""
     @State private var subItemDueDateIndex: Int?
     @State private var subItemDueDate: Date = Date()
+    @State private var promotingSubItem: PromotingSubItemContext?
     @State private var newNoteText: String = ""
     @State private var jiraIssue: JiraIssue?
     @State private var jiraConnected = false
@@ -35,6 +36,12 @@ struct TargetDetailView: View {
         case details = "Details"
         case links = "Links"
         case activity = "Activity"
+    }
+
+    /// Identifies a sub-item the user is currently promoting via `PromoteSubItemSheet`.
+    struct PromotingSubItemContext: Identifiable {
+        let id: Int          // sub-item index, doubles as Identifiable id
+        let item: TargetSubItem
     }
 
     var body: some View {
@@ -101,6 +108,14 @@ struct TargetDetailView: View {
                     suggestions: suggestedLinks
                 )
             }
+        }
+        .sheet(item: $promotingSubItem) { ctx in
+            PromoteSubItemSheet(
+                parent: target,
+                subItem: ctx.item,
+                subItemIndex: ctx.id,
+                viewModel: viewModel
+            )
         }
         .confirmationDialog(
             {
@@ -399,6 +414,16 @@ struct TargetDetailView: View {
             Spacer(minLength: 0)
 
             Button {
+                promotingSubItem = PromotingSubItemContext(id: index, item: item)
+            } label: {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Convert to sub-target")
+
+            Button {
                 viewModel.removeSubItem(target, index: index)
             } label: {
                 Image(systemName: "xmark.circle")
@@ -408,6 +433,13 @@ struct TargetDetailView: View {
             .buttonStyle(.plain)
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Button {
+                promotingSubItem = PromotingSubItemContext(id: index, item: item)
+            } label: {
+                Label("Convert to sub-target", systemImage: "arrow.up.right.square")
+            }
+        }
     }
 
     // MARK: - Notes

@@ -3,9 +3,11 @@ package cmd
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"strconv"
 	"testing"
 
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -59,7 +61,8 @@ func TestTargetsCommandRegistered(t *testing.T) {
 
 func TestTargetsSubcommandsRegistered(t *testing.T) {
 	expected := []string{"show", "create", "extract", "link", "unlink", "suggest-links",
-		"done", "dismiss", "delete", "snooze", "update", "generate", "note", "ai-update"}
+		"done", "dismiss", "delete", "snooze", "update", "generate", "note", "ai-update",
+		"promote-subitem"}
 	registered := map[string]bool{}
 	for _, sub := range targetsCmd.Commands() {
 		registered[sub.Name()] = true
@@ -599,4 +602,191 @@ func TestTargetsSuggestLinksCmdHasJSONFlag(t *testing.T) {
 	if flag.DefValue != "false" {
 		t.Errorf("--json default should be false, got %q", flag.DefValue)
 	}
+}
+
+// --- promote-subitem ---
+
+// resetPromoteSubItemFlags clears Changed state on every flag of the
+// promote-subitem command so tests stay isolated.
+func resetPromoteSubItemFlags() {
+	targetsPromoteSubItemCmd.Flags().VisitAll(func(f *pflag.Flag) {
+		f.Changed = false
+		_ = f.Value.Set(f.DefValue)
+	})
+}
+
+// createTestTargetWithSubItems inserts a parent target with the given
+// inheritance-relevant fields and an arbitrary sub-items JSON. Returns the ID.
+func createTestTargetWithSubItems(t *testing.T, text, level, priority, subItemsJSON string) int64 {
+	t.Helper()
+	database, err := openDBFromConfig()
+	require.NoError(t, err)
+	defer database.Close()
+	id, err := database.CreateTarget(db.Target{
+		Text:        text,
+		Intent:      "the why",
+		Level:       level,
+		PeriodStart: "2026-04-20",
+		PeriodEnd:   "2026-04-26",
+		Status:      "in_progress",
+		Priority:    priority,
+		Ownership:   "mine",
+		BallOn:      "alice",
+		Tags:        `["a","b"]`,
+		SubItems:    subItemsJSON,
+		SourceType:  "manual",
+	})
+	require.NoError(t, err)
+	return id
+}
+
+func TestPromoteSubItemCmd_HasExpectedFlags(t *testing.T) {
+	for _, name := range []string{
+		"text", "intent", "level", "priority", "ownership",
+		"due", "period-start", "period-end", "tags", "json",
+	} {
+		assert.NotNil(t, targetsPromoteSubItemCmd.Flags().Lookup(name),
+			"promote-subitem must have --%s flag", name)
+	}
+}
+
+func TestPromoteSubItem_Success(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	parentID := createTestTargetWithSubItems(t, "Parent", "week", "high",
+		`[{"text":"first","done":false},{"text":"second","done":false}]`)
+
+	buf := new(bytes.Buffer)
+	targetsPromoteSubItemCmd.SetOut(buf)
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd,
+		[]string{strconv.FormatInt(parentID, 10), "0"})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Promoted sub-item #0")
+
+	// Verify side effects on parent and child.
+	database, err := openDBFromConfig()
+	require.NoError(t, err)
+	defer database.Close()
+
+	parent, err := database.GetTargetByID(int(parentID))
+	require.NoError(t, err)
+	assert.Contains(t, parent.SubItems, "second", "remaining sub-item should still be there")
+	assert.NotContains(t, parent.SubItems, "first", "promoted sub-item should be removed")
+
+	children, err := database.GetTargets(db.TargetFilter{ParentID: &parentID, IncludeDone: true})
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "first", children[0].Text)
+	assert.Equal(t, "week", children[0].Level, "level inherited from parent")
+	assert.Equal(t, "high", children[0].Priority, "priority inherited from parent")
+	assert.Equal(t, "promoted_subitem", children[0].SourceType)
+}
+
+func TestPromoteSubItem_JSONOutput(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	parentID := createTestTargetWithSubItems(t, "P", "day", "medium",
+		`[{"text":"sole","done":false}]`)
+
+	buf := new(bytes.Buffer)
+	targetsPromoteSubItemCmd.SetOut(buf)
+	require.NoError(t, targetsPromoteSubItemCmd.Flags().Set("json", "true"))
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd,
+		[]string{strconv.FormatInt(parentID, 10), "0"})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &payload))
+	assert.Equal(t, "sole", payload["text"])
+	assert.Equal(t, "day", payload["level"])
+	assert.Equal(t, "promoted_subitem", payload["source_type"])
+	assert.EqualValues(t, parentID, payload["parent_id"])
+	// id is a number > 0
+	idVal, ok := payload["id"].(float64)
+	require.True(t, ok, "id field should be numeric in JSON")
+	assert.Greater(t, idVal, float64(0))
+}
+
+func TestPromoteSubItem_OverridesApplied(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	parentID := createTestTargetWithSubItems(t, "Parent", "week", "high",
+		`[{"text":"rough","done":false}]`)
+
+	require.NoError(t, targetsPromoteSubItemCmd.ParseFlags([]string{
+		"--text", "polished",
+		"--level", "day",
+		"--priority", "low",
+		"--due", "2026-05-01T10:00",
+		"--tags", "x,y",
+	}))
+
+	buf := new(bytes.Buffer)
+	targetsPromoteSubItemCmd.SetOut(buf)
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd,
+		[]string{strconv.FormatInt(parentID, 10), "0"})
+	require.NoError(t, err)
+
+	database, err := openDBFromConfig()
+	require.NoError(t, err)
+	defer database.Close()
+
+	children, err := database.GetTargets(db.TargetFilter{ParentID: &parentID, IncludeDone: true})
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	c := children[0]
+	assert.Equal(t, "polished", c.Text)
+	assert.Equal(t, "day", c.Level)
+	assert.Equal(t, "low", c.Priority)
+	assert.Equal(t, "2026-05-01T10:00", c.DueDate)
+	assert.Equal(t, `["x","y"]`, c.Tags)
+}
+
+func TestPromoteSubItem_InvalidTargetID(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd, []string{"abc", "0"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid target ID")
+}
+
+func TestPromoteSubItem_InvalidIndex(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd, []string{"1", "-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid sub-item index")
+}
+
+func TestPromoteSubItem_OutOfRange(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	parentID := createTestTargetWithSubItems(t, "P", "day", "medium",
+		`[{"text":"only","done":false}]`)
+
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd,
+		[]string{strconv.FormatInt(parentID, 10), "5"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "out of range")
+}
+
+func TestPromoteSubItem_ParentNotFound(t *testing.T) {
+	cleanup := setupTargetsTestEnv(t)
+	defer cleanup()
+	resetPromoteSubItemFlags()
+
+	err := targetsPromoteSubItemCmd.RunE(targetsPromoteSubItemCmd, []string{"99999", "0"})
+	require.Error(t, err)
 }
