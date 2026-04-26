@@ -893,6 +893,15 @@ CREATE TABLE IF NOT EXISTS meeting_notes (
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_notes_event ON meeting_notes(event_id);
 
+-- Meeting recaps (AI-generated post-meeting summary; one row per event)
+CREATE TABLE IF NOT EXISTS meeting_recaps (
+    event_id    TEXT PRIMARY KEY REFERENCES calendar_events(id) ON DELETE CASCADE,
+    source_text TEXT NOT NULL,
+    recap_json  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
 -- Calendar auth state (tracks whether the Google refresh token is still valid)
 CREATE TABLE IF NOT EXISTS calendar_auth_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),

@@ -83,7 +83,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 69"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 70"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -3536,6 +3536,30 @@ afterV48:
 			return fmt.Errorf("committing migration v69: %w", err)
 		}
 		version = 69
+	}
+
+	if version < 70 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v70 tx: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS meeting_recaps (
+			event_id    TEXT PRIMARY KEY REFERENCES calendar_events(id) ON DELETE CASCADE,
+			source_text TEXT NOT NULL,
+			recap_json  TEXT NOT NULL,
+			created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("creating meeting_recaps: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 70"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v70: %w", err)
+		}
+		version = 70
 	}
 
 	_ = version // silence unused variable if this is the last migration
