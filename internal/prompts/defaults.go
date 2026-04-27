@@ -6,27 +6,29 @@ package prompts
 // in digest, tracks, and analysis packages. They serve as the
 // initial seed and fallback when no DB version exists.
 var Defaults = map[string]string{
-	DigestChannel:      defaultDigestChannel,
-	DigestDaily:        defaultDigestDaily,
-	DigestWeekly:       defaultDigestWeekly,
-	DigestPeriod:       defaultDigestPeriod,
-	TracksExtract:      defaultTracksExtract,
-	TracksUpdate:       defaultTracksUpdate,
-	GuideUser:          defaultGuideUser,
-	GuidePeriod:        defaultGuidePeriod,
-	PeopleReduce:       defaultPeopleReduce,
-	PeopleTeam:         defaultPeopleTeam,
-	BriefingDaily:      defaultBriefingDaily,
-	InboxPrioritize:    defaultInboxPrioritize,
-	DigestChannelBatch: defaultDigestChannelBatch,
-	TracksExtractBatch: defaultTracksExtractBatch,
-	PeopleBatch:        defaultPeopleBatch,
-	TasksGenerate:      defaultTasksGenerate,
-	TasksUpdate:        defaultTasksUpdate,
-	MeetingPrep:        defaultMeetingPrep,
-	DayPlanGenerate:    defaultDayPlanGenerate,
-	TargetsExtract:     defaultTargetsExtract,
-	TargetsLink:        defaultTargetsLink,
+	DigestChannel:        defaultDigestChannel,
+	DigestDaily:          defaultDigestDaily,
+	DigestWeekly:         defaultDigestWeekly,
+	DigestPeriod:         defaultDigestPeriod,
+	TracksExtract:        defaultTracksExtract,
+	TracksUpdate:         defaultTracksUpdate,
+	GuideUser:            defaultGuideUser,
+	GuidePeriod:          defaultGuidePeriod,
+	PeopleReduce:         defaultPeopleReduce,
+	PeopleTeam:           defaultPeopleTeam,
+	BriefingDaily:        defaultBriefingDaily,
+	InboxPrioritize:      defaultInboxPrioritize,
+	DigestChannelBatch:   defaultDigestChannelBatch,
+	TracksExtractBatch:   defaultTracksExtractBatch,
+	PeopleBatch:          defaultPeopleBatch,
+	TasksGenerate:        defaultTasksGenerate,
+	TasksUpdate:          defaultTasksUpdate,
+	MeetingPrep:          defaultMeetingPrep,
+	MeetingExtractTopics: defaultMeetingExtractTopics,
+	MeetingRecap:         defaultMeetingRecap,
+	DayPlanGenerate:      defaultDayPlanGenerate,
+	TargetsExtract:       defaultTargetsExtract,
+	TargetsLink:          defaultTargetsLink,
 }
 
 // AllIDs returns prompt IDs in display order.
@@ -49,6 +51,8 @@ var AllIDs = []string{
 	TasksGenerate,
 	TasksUpdate,
 	MeetingPrep,
+	MeetingExtractTopics,
+	MeetingRecap,
 	DayPlanGenerate,
 	TargetsExtract,
 	TargetsLink,
@@ -77,6 +81,7 @@ var DefaultVersions = map[string]int{
 	TasksGenerate:      1, // v1: AI task generation with checklist and due date
 	TasksUpdate:        1, // v1: AI task update from user instruction
 	MeetingPrep:        3, // v3: Jira context for attendees (workload, shared issues)
+	MeetingRecap:       1, // v1: initial meeting recap template
 	DayPlanGenerate:    1, // v1: initial day plan template
 	TargetsExtract:     1, // v1: multi-target extraction with URL enrichments and active snapshot
 	TargetsLink:        1, // v1: single-target link proposal against active snapshot
@@ -88,27 +93,29 @@ func DefaultFor(key string) string { return Defaults[key] }
 
 // Descriptions maps prompt IDs to human-readable descriptions.
 var Descriptions = map[string]string{
-	DigestChannel:      "Channel digest — per-channel message analysis",
-	DigestDaily:        "Daily rollup — cross-channel daily summary",
-	DigestWeekly:       "Weekly trends — week-over-week analysis",
-	DigestPeriod:       "Period summary — comprehensive period overview",
-	TracksExtract:      "Track extraction — per-channel action item extraction with cross-channel merge",
-	TracksUpdate:       "Track update check — detect meaningful updates for existing tracks",
-	TracksExtractBatch: "Batch track extraction — multi-channel extraction for low-activity channels",
-	GuideUser:          "Communication guide — personal coaching per user",
-	GuidePeriod:        "Team guide — cross-user communication tips",
-	PeopleReduce:       "People card — unified profile from signals",
-	PeopleTeam:         "Team summary — cross-user attention & tips",
-	BriefingDaily:      "Daily briefing — personalized morning summary",
-	InboxPrioritize:    "Inbox prioritization — AI priority + auto-resolve for inbox items",
-	DigestChannelBatch: "Channel batch digest — multi-channel analysis for low-activity channels",
-	PeopleBatch:        "People batch cards — lightweight cards for low-data users in one AI call",
-	TasksGenerate:      "Task generation — AI-powered task breakdown with checklist, priority, and due date",
-	TasksUpdate:        "Task update — AI-powered task modification from user instruction",
-	MeetingPrep:        "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
-	DayPlanGenerate:    "Day plan generation — AI-powered daily schedule with timeblocks, backlog, and calendar conflict avoidance",
-	TargetsExtract:     "Target extraction — multi-target AI extraction from raw text with URL enrichments and hierarchy linking",
-	TargetsLink:        "Target linking — single-target parent and secondary link proposal against active snapshot",
+	DigestChannel:        "Channel digest — per-channel message analysis",
+	DigestDaily:          "Daily rollup — cross-channel daily summary",
+	DigestWeekly:         "Weekly trends — week-over-week analysis",
+	DigestPeriod:         "Period summary — comprehensive period overview",
+	TracksExtract:        "Track extraction — per-channel action item extraction with cross-channel merge",
+	TracksUpdate:         "Track update check — detect meaningful updates for existing tracks",
+	TracksExtractBatch:   "Batch track extraction — multi-channel extraction for low-activity channels",
+	GuideUser:            "Communication guide — personal coaching per user",
+	GuidePeriod:          "Team guide — cross-user communication tips",
+	PeopleReduce:         "People card — unified profile from signals",
+	PeopleTeam:           "Team summary — cross-user attention & tips",
+	BriefingDaily:        "Daily briefing — personalized morning summary",
+	InboxPrioritize:      "Inbox prioritization — AI priority + auto-resolve for inbox items",
+	DigestChannelBatch:   "Channel batch digest — multi-channel analysis for low-activity channels",
+	PeopleBatch:          "People batch cards — lightweight cards for low-data users in one AI call",
+	TasksGenerate:        "Task generation — AI-powered task breakdown with checklist, priority, and due date",
+	TasksUpdate:          "Task update — AI-powered task modification from user instruction",
+	MeetingPrep:          "Meeting prep — AI-powered meeting brief with attendee analysis, talking points, recommendations, and context gaps",
+	MeetingExtractTopics: "Meeting extract topics — split pasted text into atomic discussion topics for a meeting's Discussion Topics list",
+	MeetingRecap:         "Meeting recap — AI-structured post-meeting summary with decisions, action items, and open questions",
+	DayPlanGenerate:      "Day plan generation — AI-powered daily schedule with timeblocks, backlog, and calendar conflict avoidance",
+	TargetsExtract:       "Target extraction — multi-target AI extraction from raw text with URL enrichments and hierarchy linking",
+	TargetsLink:          "Target linking — single-target parent and secondary link proposal against active snapshot",
 }
 
 const defaultDigestChannel = `You are analyzing Slack messages from channel #%s for the period %s to %s.
@@ -1012,6 +1019,71 @@ Rules:
 
 === USER NOTES ===
 %s`
+
+const defaultMeetingExtractTopics = `You split a raw blob of meeting-prep text into atomic discussion topics.
+
+=== MEETING TITLE ===
+%s
+=== /MEETING TITLE ===
+
+%s
+
+=== RAW TEXT ===
+%s
+=== /RAW TEXT ===
+
+Return ONLY a JSON object (no markdown fences, no commentary) matching this exact schema:
+
+{
+  "topics": [
+    {"text": "string (<=200 chars)", "priority": "high|medium|low|"}
+  ],
+  "notes": "optional short message about what was skipped or merged"
+}
+
+Rules:
+- Produce 1-15 atomic topics. Merge near-duplicates. Skip pure recap unless it flags a decision needed.
+- Each topic is a single idea that can be discussed independently.
+- Strip markdown syntax (**bold**, numbered lists, emojis, leading "Topic:" labels) from the topic text.
+- Prefer imperative / question phrasing — "Discuss X", "Decide on Y", "Confirm Z".
+- priority is optional. Use "" when unclear. Use "high" only for explicit blockers or urgency signals.
+- Return an empty topics array if the text has no actionable content.`
+
+const defaultMeetingRecap = `You produce a structured recap of a meeting based on raw notes the user pasted.
+
+=== EVENT ===
+Title: %s
+Time:  %s — %s
+Attendees: %s
+Description: %s
+
+=== EXISTING DISCUSSION TOPICS (pre-meeting) ===
+%s
+
+=== EXISTING FREEFORM NOTES ===
+%s
+
+=== USER'S RAW RECAP TEXT ===
+%s
+
+%s
+
+Return ONLY a JSON object (no markdown fences, no commentary) matching:
+
+{
+  "summary": "string (1-2 sentences, what the meeting was about and outcome)",
+  "key_decisions": ["string", ...],
+  "action_items": ["string (imperative; if a person is named in the text, include them)", ...],
+  "open_questions": ["string", ...]
+}
+
+Rules:
+- Be concise; merge near-duplicates.
+- Decisions: things explicitly resolved.
+- Action items: only items with implied owner or commitment ("X will do Y" / "we'll send Y").
+- Open questions: things flagged as unresolved or "to discuss later".
+- Use empty arrays if a category has nothing.
+- Strip markdown (**bold**, numbered lists, emojis) from output strings.`
 
 const defaultTargetsExtract = `You are a goal-extraction assistant. Given raw text (a Slack message, email paste, or form input), extract actionable targets (goals, tasks, deliverables) and return them as structured JSON.
 

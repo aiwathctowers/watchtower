@@ -14,6 +14,7 @@ struct ProposedTarget: Identifiable {
     var priority: String         // "high","medium","low"
     var parentId: Int?
     var secondaryLinks: [ProposedLink]
+    var subItems: [TargetSubItem] = []
     var isSelected: Bool = true
 }
 
@@ -162,6 +163,7 @@ struct ExtractPreviewSheet: View {
                     let today = dateFormatter.string(from: Date())
                     let start = item.periodStart.isEmpty ? today : item.periodStart
                     let end = item.periodEnd.isEmpty ? today : item.periodEnd
+                    let subItemsJSON = Self.encodeSubItems(item.subItems)
                     let newID = try TargetQueries.create(
                         dbConn,
                         text: item.text,
@@ -172,6 +174,7 @@ struct ExtractPreviewSheet: View {
                         periodEnd: end,
                         parentId: item.parentId,
                         priority: item.priority,
+                        subItems: subItemsJSON,
                         sourceType: "extract",
                         aiLevelConfidence: item.levelConfidence
                     )
@@ -194,6 +197,17 @@ struct ExtractPreviewSheet: View {
         }
         onCreateSelected(toCreate)
         dismiss()
+    }
+
+    // Serialize `[TargetSubItem]` into the JSON shape persisted in targets.sub_items.
+    // Mirrors `storedSubItem` in internal/targets/store.go — `{text, done}` per item.
+    static func encodeSubItems(_ items: [TargetSubItem]) -> String {
+        guard !items.isEmpty else { return "[]" }
+        if let data = try? JSONEncoder().encode(items),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
+        return "[]"
     }
 }
 
@@ -275,6 +289,28 @@ private struct ProposedTargetCard: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            // Sub-items checklist (AI-proposed steps under this single goal)
+            if !item.subItems.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Steps (\(item.subItems.count))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(item.subItems.enumerated()), id: \.offset) { _, sub in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "circle")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 3)
+                            Text(sub.text)
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                        }
+                    }
+                }
+                .padding(.leading, 24)
             }
 
             // Secondary links chip list

@@ -3,7 +3,7 @@ package digest
 import "testing"
 
 func TestModelForSource(t *testing.T) {
-	haiku := []string{"inbox.prioritize", "digest.period", "digest.channel_batch", "people.batch"}
+	haiku := []string{SourceLight, "inbox.prioritize", "digest.period", "digest.channel_batch", "people.batch"}
 	for _, src := range haiku {
 		if got := ModelForSource(src); got != ModelHaiku {
 			t.Errorf("ModelForSource(%q) = %q, want %q", src, got, ModelHaiku)

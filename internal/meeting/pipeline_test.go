@@ -16,10 +16,11 @@ import (
 // mockGenerator implements digest.Generator for testing.
 type mockGenerator struct {
 	response string
+	err      error
 }
 
 func (m *mockGenerator) Generate(_ context.Context, _, _, _ string) (string, *digest.Usage, string, error) {
-	return m.response, &digest.Usage{}, "", nil
+	return m.response, &digest.Usage{}, "", m.err
 }
 
 func openTestDB(t *testing.T) *db.DB {

@@ -344,7 +344,7 @@ CREATE TABLE IF NOT EXISTS targets (
     notes               TEXT NOT NULL DEFAULT '[]',
     progress            REAL NOT NULL DEFAULT 0.0,
     source_type         TEXT NOT NULL DEFAULT 'manual'
-                        CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack')),
+                        CHECK(source_type IN ('extract','track','digest','briefing','manual','chat','inbox','jira','slack','promoted_subitem')),
     source_id           TEXT NOT NULL DEFAULT '',
     ai_level_confidence REAL DEFAULT NULL,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -892,6 +892,15 @@ CREATE TABLE IF NOT EXISTS meeting_notes (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_notes_event ON meeting_notes(event_id);
+
+-- Meeting recaps (AI-generated post-meeting summary; one row per event)
+CREATE TABLE IF NOT EXISTS meeting_recaps (
+    event_id    TEXT PRIMARY KEY REFERENCES calendar_events(id) ON DELETE CASCADE,
+    source_text TEXT NOT NULL,
+    recap_json  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 
 -- Calendar auth state (tracks whether the Google refresh token is still valid)
 CREATE TABLE IF NOT EXISTS calendar_auth_state (

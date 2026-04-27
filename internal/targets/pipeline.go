@@ -46,7 +46,7 @@ func (p *Pipeline) Extract(ctx context.Context, req ExtractRequest) (*ExtractRes
 	}
 
 	// Apply timeout from config.
-	timeout := 30 * time.Second
+	timeout := time.Duration(config.DefaultTargetsExtractTimeoutSeconds) * time.Second
 	if p.cfg != nil && p.cfg.Extract.TimeoutSeconds > 0 {
 		timeout = time.Duration(p.cfg.Extract.TimeoutSeconds) * time.Second
 	}
@@ -77,7 +77,7 @@ func (p *Pipeline) Extract(ctx context.Context, req ExtractRequest) (*ExtractRes
 
 	// Build and call the AI.
 	prompt := buildExtractPrompt(req, enrichments, snapshot, time.Now())
-	ctx2 := digest.WithSource(aiCtx, "targets.extract")
+	ctx2 := digest.WithSource(aiCtx, digest.SourceLight)
 
 	raw, _, _, err := p.gen.Generate(ctx2, prompt, "Extract targets from the provided text.", "")
 	if err != nil {

@@ -23,7 +23,14 @@ type ProposedTarget struct {
 	DueDate           string
 	ParentID          sql.NullInt64
 	SecondaryLinks    []ProposedLink
+	SubItems          []ProposedSubItem
 	AILevelConfidence sql.NullFloat64
+}
+
+// ProposedSubItem is one step/deliverable under a single extracted target.
+// The AI returns just the text; done is always false on creation.
+type ProposedSubItem struct {
+	Text string
 }
 
 // ProposedLink is a secondary link proposal from the AI.
@@ -68,6 +75,11 @@ type aiExtractedItem struct {
 	DueDate         string            `json:"due_date"`
 	ParentID        *int64            `json:"parent_id"`
 	SecondaryLinks  []aiSecondaryLink `json:"secondary_links"`
+	SubItems        []aiSubItem       `json:"sub_items"`
+}
+
+type aiSubItem struct {
+	Text string `json:"text"`
 }
 
 type aiSecondaryLink struct {
@@ -264,6 +276,22 @@ func parseExtractResponse(raw string, activeSnapshot []db.Target, logger *log.Lo
 			}
 
 			pt.SecondaryLinks = append(pt.SecondaryLinks, pl)
+		}
+
+		// Cap sub_items at 15 to prevent runaway sub-lists.
+		subs := item.SubItems
+		if len(subs) > 15 {
+			if logger != nil {
+				logger.Printf("targets/extractor: target %q has %d sub_items, truncating to 15", item.Text, len(subs))
+			}
+			subs = subs[:15]
+		}
+		for _, s := range subs {
+			text := strings.TrimSpace(s.Text)
+			if text == "" {
+				continue
+			}
+			pt.SubItems = append(pt.SubItems, ProposedSubItem{Text: text})
 		}
 
 		result = append(result, pt)

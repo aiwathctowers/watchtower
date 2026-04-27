@@ -1,12 +1,17 @@
 package codex
 
-import "testing"
+import (
+	"testing"
+
+	"watchtower/internal/digest"
+)
 
 func TestModelForSource(t *testing.T) {
 	tests := []struct {
 		source string
 		want   string
 	}{
+		{digest.SourceLight, ModelLightweight},
 		{"inbox.prioritize", ModelLightweight},
 		{"digest.period", ModelLightweight},
 		{"digest.channel_batch", ModelLightweight},

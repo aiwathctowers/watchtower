@@ -301,10 +301,25 @@ func (db *DB) GetTargetsForBriefing() ([]Target, error) {
 // loops from cycles or unexpectedly deep hierarchies.
 const recomputeParentProgressMaxDepth = 20
 
+// targetsQuerier is the subset of *sql.DB / *sql.Tx used by the parent-progress
+// walker, so the same logic can run inside a transaction or against the pool.
+type targetsQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 // RecomputeParentProgress updates parent.progress to AVG of non-dismissed children's progress,
 // then walks up the ancestor chain iteratively (max 20 levels). Cycles are detected via a
 // visited set; exceeding max depth logs a warning and stops without returning an error.
 func (db *DB) RecomputeParentProgress(parentID int64) error {
+	return recomputeParentProgressOn(db, parentID)
+}
+
+// recomputeParentProgressOn is the shared implementation used by both the
+// auto-commit `RecomputeParentProgress` (taking *sql.DB) and the in-tx variant
+// invoked from `PromoteSubItemToChild` (taking *sql.Tx) so the recompute is
+// part of the same atomic unit as the mutations that triggered it.
+func recomputeParentProgressOn(q targetsQuerier, parentID int64) error {
 	visited := make(map[int64]bool)
 	current := parentID
 
@@ -316,7 +331,7 @@ func (db *DB) RecomputeParentProgress(parentID int64) error {
 		visited[current] = true
 
 		var avg sql.NullFloat64
-		err := db.QueryRow(`SELECT AVG(progress) FROM targets
+		err := q.QueryRow(`SELECT AVG(progress) FROM targets
 			WHERE parent_id = ? AND status != 'dismissed'`, current).Scan(&avg)
 		if err != nil {
 			return fmt.Errorf("averaging children progress for target %d: %w", current, err)
@@ -328,12 +343,12 @@ func (db *DB) RecomputeParentProgress(parentID int64) error {
 		} else {
 			// No non-dismissed children: derive from own status.
 			var status string
-			if serr := db.QueryRow(`SELECT status FROM targets WHERE id = ?`, current).Scan(&status); serr == nil {
+			if serr := q.QueryRow(`SELECT status FROM targets WHERE id = ?`, current).Scan(&status); serr == nil {
 				newProgress = statusToProgress(status)
 			}
 		}
 
-		_, err = db.Exec(`UPDATE targets SET progress = ?,
+		_, err = q.Exec(`UPDATE targets SET progress = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
 			WHERE id = ?`, newProgress, current)
 		if err != nil {
@@ -342,7 +357,7 @@ func (db *DB) RecomputeParentProgress(parentID int64) error {
 
 		// Walk up to the next ancestor.
 		var nextParent sql.NullInt64
-		if gerr := db.QueryRow(`SELECT parent_id FROM targets WHERE id = ?`, current).Scan(&nextParent); gerr != nil || !nextParent.Valid {
+		if gerr := q.QueryRow(`SELECT parent_id FROM targets WHERE id = ?`, current).Scan(&nextParent); gerr != nil || !nextParent.Valid {
 			break // reached the root or target not found
 		}
 		current = nextParent.Int64

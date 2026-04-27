@@ -6,6 +6,7 @@ struct TargetsListView: View {
     @State private var selectedItemID: Int?
     @State private var showCreateSheet = false
     @State private var searchText = ""
+    @State private var pendingDeleteTarget: Target?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -48,6 +49,31 @@ struct TargetsListView: View {
             Button("") { showCreateSheet = true }
                 .keyboardShortcut("n", modifiers: .command)
                 .hidden()
+        }
+        .confirmationDialog(
+            pendingDeleteTarget.map { target in
+                let label = target.text.count > 60
+                    ? String(target.text.prefix(60)) + "…"
+                    : target.text
+                return "Delete \"\(label)\"?"
+            } ?? "",
+            isPresented: Binding(
+                get: { pendingDeleteTarget != nil },
+                set: { if !$0 { pendingDeleteTarget = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeleteTarget
+        ) { target in
+            Button("Delete", role: .destructive) {
+                if selectedItemID == target.id { selectedItemID = nil }
+                viewModel?.deleteTarget(target)
+                pendingDeleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteTarget = nil
+            }
+        } message: { _ in
+            Text("This action cannot be undone.")
         }
     }
 
@@ -323,7 +349,9 @@ struct TargetsListView: View {
             }
         }
         Divider()
-        Button("Delete", role: .destructive) { vm.deleteTarget(target) }
+        Button("Delete…", role: .destructive) {
+            pendingDeleteTarget = target
+        }
     }
 
     private func snoozeTarget(_ target: Target, vm: TargetsViewModel, days: Int) {

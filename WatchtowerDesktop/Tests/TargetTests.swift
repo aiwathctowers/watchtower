@@ -736,6 +736,140 @@ final class TargetsViewModelTests: XCTestCase {
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.text, "Deploy backend")
     }
+
+    func testDeleteTargetRemovesRow() throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        try mgr.dbPool.write { try TestDatabase.insertTarget($0) }
+
+        let vm = TargetsViewModel(dbManager: mgr)
+        let target = try XCTUnwrap(mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) })
+
+        vm.deleteTarget(target)
+
+        let gone = try mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) }
+        XCTAssertNil(gone)
+        XCTAssertNil(vm.errorMessage)
+    }
+
+    // MARK: - promoteSubItem
+
+    private func samplePromoteResponseJSON(id: Int = 2, parentID: Int = 1) -> String {
+        """
+        {
+          "id": \(id), "text": "x", "level": "day", "priority": "medium", "status": "todo",
+          "due_date": "", "period_start": "2026-04-20", "period_end": "2026-04-26",
+          "parent_id": \(parentID), "source_type": "promoted_subitem", "source_id": "\(parentID):0"
+        }
+        """
+    }
+
+    func testPromoteSubItemCallsCLIAndReturnsChildID() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        _ = try await mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "Parent",
+                                          subItems: #"[{"text":"first","done":false}]"#)
+        }
+        let runner = FakeCLIRunner(stdout: Data(samplePromoteResponseJSON(id: 99).utf8))
+        let vm = TargetsViewModel(dbManager: mgr, cliRunner: runner)
+        let fetched = try await mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) }
+        let parent = try XCTUnwrap(fetched)
+
+        let newID = try await vm.promoteSubItem(parent, index: 0)
+
+        XCTAssertEqual(newID, 99)
+        let args = runner.invocations.last ?? []
+        XCTAssertEqual(Array(args.prefix(5)),
+                       ["targets", "promote-subitem", "1", "0", "--json"])
+        XCTAssertNil(vm.errorMessage)
+    }
+
+    func testPromoteSubItemPassesOverridesAsFlags() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        _ = try await mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "P",
+                                          subItems: #"[{"text":"x"}]"#)
+        }
+        let runner = FakeCLIRunner(stdout: Data(samplePromoteResponseJSON().utf8))
+        let vm = TargetsViewModel(dbManager: mgr, cliRunner: runner)
+        let fetched = try await mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) }
+        let parent = try XCTUnwrap(fetched)
+
+        var overrides = PromoteSubItemOverrides()
+        overrides.level = "day"
+        overrides.priority = "low"
+        _ = try await vm.promoteSubItem(parent, index: 0, overrides: overrides)
+
+        let args = runner.invocations.last ?? []
+        XCTAssertTrue(args.contains("--level"))
+        XCTAssertTrue(args.contains("day"))
+        XCTAssertTrue(args.contains("--priority"))
+        XCTAssertTrue(args.contains("low"))
+    }
+
+    func testPromoteSubItemThrowsOnCLIFailure() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        _ = try await mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "P",
+                                          subItems: #"[{"text":"x"}]"#)
+        }
+        let runner = FakeCLIRunner(
+            error: CLIRunnerError.nonZeroExit(code: 1, stderr: "out of range")
+        )
+        let vm = TargetsViewModel(dbManager: mgr, cliRunner: runner)
+        let fetched = try await mgr.dbPool.read { try TargetQueries.fetchByID($0, id: 1) }
+        let parent = try XCTUnwrap(fetched)
+
+        do {
+            _ = try await vm.promoteSubItem(parent, index: 99)
+            XCTFail("expected error")
+        } catch {
+            // OK — caller (sheet) is responsible for surfacing the error.
+        }
+        // `errorMessage` is intentionally NOT set on failure to avoid the
+        // double-channel signaling that would surface the same error twice
+        // (banner from VM + alert from the sheet's own catch).
+        XCTAssertNil(vm.errorMessage)
+    }
+
+    func testPromoteSubItemsAfterCreateInvokesInDescendingIndexOrder() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        _ = try await mgr.dbPool.write { db in
+            try TestDatabase.insertTarget(db, text: "P",
+                                          subItems: #"[{"text":"a"},{"text":"b"},{"text":"c"},{"text":"d"}]"#)
+        }
+        let runner = FakeCLIRunner(stdout: Data(samplePromoteResponseJSON().utf8))
+        let vm = TargetsViewModel(dbManager: mgr, cliRunner: runner)
+
+        // Inputs are intentionally in non-monotonic order so a buggy "reverse"
+        // implementation would fail to produce the strict descending sequence.
+        try await vm.promoteSubItemsAfterCreate(parentID: 1, items: [
+            (index: 1, overrides: PromoteSubItemOverrides()),
+            (index: 3, overrides: PromoteSubItemOverrides()),
+            (index: 0, overrides: PromoteSubItemOverrides()),
+        ])
+
+        XCTAssertEqual(runner.invocations.count, 3)
+        XCTAssertEqual(runner.invocations[0][3], "3", "first batch call must use the highest index")
+        XCTAssertEqual(runner.invocations[1][3], "1", "second batch call must use the next-lower index")
+        XCTAssertEqual(runner.invocations[2][3], "0", "third batch call must use the lowest index")
+    }
+
+    func testPromoteSubItemsAfterCreateNoOpOnEmpty() async throws {
+        let (mgr, path) = try TestDatabase.createDatabaseManager()
+        defer { TestDatabase.cleanup(path: path) }
+        _ = try await mgr.dbPool.write { try TestDatabase.insertTarget($0) }
+        let runner = FakeCLIRunner(stdout: Data(samplePromoteResponseJSON().utf8))
+        let vm = TargetsViewModel(dbManager: mgr, cliRunner: runner)
+
+        try await vm.promoteSubItemsAfterCreate(parentID: 1, items: [])
+
+        XCTAssertTrue(runner.invocations.isEmpty, "no CLI calls should fire when items list is empty")
+    }
 }
 
 // MARK: - ExtractPreviewSheet Tests

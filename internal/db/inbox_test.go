@@ -29,6 +29,11 @@ func TestCreateInboxItem(t *testing.T) {
 	assert.Equal(t, "Hey, can you review this?", item.Snippet)
 	assert.Equal(t, "pending", item.Status)
 	assert.Equal(t, "medium", item.Priority)
+	// Regression: created_at/updated_at must always be populated.
+	// Past incident: NOT NULL constraint failures spammed the daemon log
+	// when CreateInboxItem skipped the timestamp; items were silently dropped.
+	assert.NotEmpty(t, item.CreatedAt, "created_at must be populated")
+	assert.NotEmpty(t, item.UpdatedAt, "updated_at must be populated")
 }
 
 func TestGetInboxItemByMessage(t *testing.T) {
@@ -258,20 +263,35 @@ func TestFindPendingMentions(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text, permalink) VALUES ('C1', '1000.001', 'U_OTHER', 'Hey <@U_ME> can you check this?', 'https://slack.com/p1')`)
 	require.NoError(t, err)
+	// Pipe-form mention `<@U_ME|Display Name>` — Slack frequently rewrites mentions
+	// to this form once it knows the display name. Detector must match both forms.
+	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text, permalink) VALUES ('C1', '1003.001', 'U_OTHER', 'cc <@U_ME|Vadym Trunov> please review', 'https://slack.com/p2')`)
+	require.NoError(t, err)
 	// Message that doesn't mention the user
 	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text) VALUES ('C1', '1001.001', 'U_OTHER', 'Regular message')`)
 	require.NoError(t, err)
 	// Message from the user themselves (should not match)
 	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text) VALUES ('C1', '1002.001', 'U_ME', '<@U_ME> testing self-mention')`)
 	require.NoError(t, err)
+	// Mention of a different user whose ID is a prefix-match of ours — must NOT match.
+	// Ensures the closing `>` / `|` boundary is enforced and `LIKE '%<@U_ME%'` is not used.
+	_, err = db.Exec(`INSERT INTO messages (channel_id, ts, user_id, text) VALUES ('C1', '1004.001', 'U_OTHER', 'cc <@U_MEEK> hello')`)
+	require.NoError(t, err)
 
 	candidates, err := db.FindPendingMentions("U_ME", 0)
 	require.NoError(t, err)
-	assert.Len(t, candidates, 1)
-	assert.Equal(t, "C1", candidates[0].ChannelID)
-	assert.Equal(t, "1000.001", candidates[0].MessageTS)
-	assert.Equal(t, "mention", candidates[0].TriggerType)
-	assert.Equal(t, "U_OTHER", candidates[0].SenderUserID)
+	assert.Len(t, candidates, 2)
+
+	// Both forms detected.
+	gotTS := map[string]bool{}
+	for _, c := range candidates {
+		gotTS[c.MessageTS] = true
+		assert.Equal(t, "C1", c.ChannelID)
+		assert.Equal(t, "mention", c.TriggerType)
+		assert.Equal(t, "U_OTHER", c.SenderUserID)
+	}
+	assert.True(t, gotTS["1000.001"], "strict <@U_ME> form should match")
+	assert.True(t, gotTS["1003.001"], "pipe <@U_ME|Name> form should match")
 }
 
 func TestFindPendingDMs(t *testing.T) {

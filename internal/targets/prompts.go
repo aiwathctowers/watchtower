@@ -38,6 +38,9 @@ Return ONLY a JSON object (no markdown fences, no explanation) matching this exa
       "priority": "high|medium|low",
       "due_date": "YYYY-MM-DDTHH:MM or empty string",
       "parent_id": 123,
+      "sub_items": [
+        {"text": "concrete step under this target"}
+      ],
       "secondary_links": [
         {"target_id": 7, "relation": "contributes_to", "confidence": 0.72},
         {"external_ref": "jira:PROJ-123", "relation": "contributes_to"}
@@ -50,6 +53,9 @@ Return ONLY a JSON object (no markdown fences, no explanation) matching this exa
 
 Rules:
 - Extract up to 10 targets. If there are more, set omitted_count to the number not extracted and explain briefly in notes.
+- GROUPING (important): if RAW TEXT describes ONE goal with several concrete steps / sub-deliverables / stakeholder actions, return ONE target and put the steps into sub_items. Only emit multiple top-level targets when the items are INDEPENDENT goals, not steps of the same goal. Phrases like "plus", "also", "additionally", action verbs sharing a subject/outcome, or a framing sentence followed by bullet points all indicate ONE target with sub_items.
+- sub_items: up to 15 per target. Each item is a single concrete step (<=200 chars). Use sub_items instead of splitting one goal into multiple targets.
+- LANGUAGE: preserve the language of RAW TEXT in text, intent, custom_label, sub_items.text, and notes. Do NOT translate. If the user wrote in Russian, respond in Russian; if in Ukrainian, respond in Ukrainian; if in English, English; etc.
 - level guidance: timeframe >1 month → quarter; 1-4 weeks → month or week; within this week → week; today-only → day; unclear → custom (set custom_label).
 - period_start and period_end must be YYYY-MM-DD. period_end >= period_start always.
 - parent_id must be an id from the ACTIVE TARGETS snapshot, or null. Do not invent ids.

@@ -136,6 +136,7 @@ final class AppState {
             queue: .main
         ) { [weak self] _ in
             self?.backgroundTaskManager.terminateProcessesSync()
+            DaemonManager.stopDaemonSync()
         }
         Task {
             let splashStart = ContinuousClock.now
@@ -174,8 +175,9 @@ final class AppState {
                 if !needsOnboarding && !UserDefaults.standard.bool(forKey: Constants.pipelinesCompletedKey) {
                     backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
                 } else if !needsOnboarding {
-                    // Restart daemon so it picks up the latest CLI binary
-                    restartDaemonIfRunning()
+                    // Ensure a fresh daemon is running (rebuild-safe): stop any existing
+                    // one (possibly from an older binary), then start the current binary.
+                    ensureDaemonRunning()
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -248,14 +250,18 @@ final class AppState {
         backgroundTaskManager.startPipelines(legacyPeople: analysisLegacyMode)
     }
 
-    /// Restart the daemon so it picks up the latest CLI binary (e.g. after app update or dev rebuild).
-    private func restartDaemonIfRunning() {
+    /// Ensure the daemon is running against the current CLI binary.
+    /// If an old instance is already running (e.g. from a stale dev rebuild), stop it first,
+    /// then start a fresh one. Paired with `DaemonManager.stopDaemonSync()` on app terminate
+    /// so UI quit/launch cycles the daemon lifecycle.
+    private func ensureDaemonRunning() {
         Task {
             let daemon = DaemonManager()
             daemon.resolvePathIfNeeded()
-            guard DaemonManager.checkDaemonRunning() else { return }
-            await daemon.stopDaemon()
-            try? await Task.sleep(for: .milliseconds(500))
+            if DaemonManager.checkDaemonRunning() {
+                await daemon.stopDaemon()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
             await daemon.startDaemon()
         }
     }

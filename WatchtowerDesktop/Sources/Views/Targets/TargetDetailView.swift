@@ -20,17 +20,38 @@ struct TargetDetailView: View {
     @State private var editingSubItemText: String = ""
     @State private var subItemDueDateIndex: Int?
     @State private var subItemDueDate: Date = Date()
+    @State private var promotingSubItem: PromotingSubItemContext?
     @State private var newNoteText: String = ""
     @State private var jiraIssue: JiraIssue?
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
     @State private var links: [TargetLink] = []
-    // V1: suggestLinksToast removed — "Suggest links" button hidden pending Swift→Go CLI bridge
+    @State private var showSuggestLinksSheet = false
+    @State private var showDeleteConfirm = false
+    @State private var suggestedLinks: SuggestedLinksResult?
+    @State private var isSuggestingLinks = false
+    @State private var suggestLinksError: String?
+    @FocusState private var focusedField: Field?
+
+    enum Field: Hashable {
+        case text
+        case intent
+    }
 
     enum Tab: String, CaseIterable {
         case details = "Details"
         case links = "Links"
         case activity = "Activity"
+    }
+
+    /// Identifies a sub-item the user is currently promoting via `PromoteSubItemSheet`.
+    /// Uses a fresh UUID per presentation so SwiftUI's `.sheet(item:)` always
+    /// re-presents — even when the user dismisses and immediately reopens at
+    /// the same sub-item position.
+    struct PromotingSubItemContext: Identifiable {
+        let id = UUID()
+        let index: Int
+        let item: TargetSubItem
     }
 
     var body: some View {
@@ -41,6 +62,17 @@ struct TargetDetailView: View {
                     tabButton(tab)
                 }
                 Spacer()
+                Menu {
+                    Button("Delete…", role: .destructive) {
+                        showDeleteConfirm = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.trailing, 8)
                 if let onClose {
                     Button { onClose() } label: {
                         Image(systemName: "xmark")
@@ -78,6 +110,47 @@ struct TargetDetailView: View {
             syncState()
             loadJiraIssue()
             loadLinks()
+        }
+        .onChange(of: focusedField) { oldValue, _ in
+            switch oldValue {
+            case .text: commitText()
+            case .intent: commitIntent()
+            case .none: break
+            }
+        }
+        .sheet(isPresented: $showSuggestLinksSheet) {
+            if let suggestedLinks {
+                SuggestLinksSheet(
+                    targetID: target.id,
+                    suggestions: suggestedLinks
+                )
+            }
+        }
+        .sheet(item: $promotingSubItem) { ctx in
+            PromoteSubItemSheet(
+                parent: target,
+                subItem: ctx.item,
+                subItemIndex: ctx.index,
+                viewModel: viewModel
+            )
+        }
+        .confirmationDialog(
+            {
+                let label = target.text.count > 60
+                    ? String(target.text.prefix(60)) + "…"
+                    : target.text
+                return "Delete \"\(label)\"?"
+            }(),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                viewModel.deleteTarget(target)
+                onClose?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This action cannot be undone.")
         }
     }
 
@@ -131,12 +204,26 @@ struct TargetDetailView: View {
                 Spacer()
             }
 
-            TextField("Target description", text: $editingText, axis: .vertical)
-                .font(.title3)
-                .fontWeight(.semibold)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit { commitText() }
+            ZStack(alignment: .topLeading) {
+                if editingText.isEmpty {
+                    Text("Target description")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $editingText)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .frame(minHeight: 44, maxHeight: 160)
+                    .focused($focusedField, equals: .text)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
                 statusLabel
@@ -157,14 +244,26 @@ struct TargetDetailView: View {
     // MARK: - Intent
 
     private var intentSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Intent")
                 .font(.headline)
-            TextField("Why this target matters...", text: $editingIntent)
-                .font(.callout)
-                .textFieldStyle(.plain)
-                .foregroundStyle(.secondary)
-                .onSubmit { commitIntent() }
+            ZStack(alignment: .topLeading) {
+                if editingIntent.isEmpty {
+                    Text("Why this target matters…")
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $editingIntent)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .frame(minHeight: 56, maxHeight: 160)
+                    .focused($focusedField, equals: .intent)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
@@ -358,6 +457,16 @@ struct TargetDetailView: View {
             Spacer(minLength: 0)
 
             Button {
+                promotingSubItem = PromotingSubItemContext(index: index, item: item)
+            } label: {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Convert to sub-target")
+
+            Button {
                 viewModel.removeSubItem(target, index: index)
             } label: {
                 Image(systemName: "xmark.circle")
@@ -521,7 +630,28 @@ struct TargetDetailView: View {
                 }
             }
 
-            // V1: "Suggest links" button hidden — pending Swift→Go CLI bridge (see spec "Out of Scope V2")
+            HStack {
+                Button {
+                    Task { await runSuggestLinks() }
+                } label: {
+                    if isSuggestingLinks {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Suggesting…")
+                        }
+                    } else {
+                        Label("Suggest links", systemImage: "sparkles")
+                    }
+                }
+                .disabled(isSuggestingLinks)
+                if let suggestLinksError {
+                    Text(suggestLinksError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+            }
+            .padding(.top, 8)
         }
     }
 
@@ -822,5 +952,29 @@ struct TargetDetailView: View {
         let trimmed = editingBallOn.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != target.ballOn else { return }
         viewModel.updateBallOn(target, to: trimmed)
+    }
+
+    // MARK: - Actions
+
+    private func runSuggestLinks() async {
+        guard let runner = ProcessCLIRunner.makeDefault() else {
+            suggestLinksError = "watchtower CLI not found in PATH"
+            return
+        }
+        isSuggestingLinks = true
+        suggestLinksError = nil
+        defer { isSuggestingLinks = false }
+        do {
+            let service = TargetSuggestLinksService(runner: runner)
+            let result = try await service.suggest(targetID: target.id)
+            if result.parentID == nil && result.secondaryLinks.isEmpty {
+                suggestLinksError = "AI had no suggestions"
+                return
+            }
+            suggestedLinks = result
+            showSuggestLinksSheet = true
+        } catch {
+            suggestLinksError = "Suggest-links failed: \(error.localizedDescription)"
+        }
     }
 }

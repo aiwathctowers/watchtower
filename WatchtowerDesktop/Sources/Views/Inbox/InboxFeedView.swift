@@ -7,6 +7,8 @@ struct InboxFeedView: View {
     @Environment(AppState.self) private var appState
     @State private var vm: InboxViewModel?
     @State private var feedbackItem: InboxItem?
+    @State private var expandedItemID: InboxItem.ID?
+    @State private var conversationCache: [InboxItem.ID: [InboxConversationMessage]] = [:]
     @State private var tab: Tab = .feed
 
     enum Tab { case feed, learned }
@@ -34,7 +36,13 @@ struct InboxFeedView: View {
                 learnedContent
             }
         }
-        .onAppear { initViewModel() }
+        .onAppear {
+            initViewModel()
+            // Cross-process daemon writes don't fire GRDB ValueObservation,
+            // so reload on every tab-appear to pick up items inserted while
+            // the inbox tab was inactive.
+            vm?.refresh()
+        }
         .onChange(of: appState.isDBAvailable) { initViewModel() }
         .sheet(item: $feedbackItem) { item in
             if let vm {
@@ -84,7 +92,12 @@ struct InboxFeedView: View {
                         InboxCardView(
                             item: item,
                             size: .pinned,
-                            onOpen: { openItem(item, vm: vm) },
+                            senderName: vm.senderName(for: item),
+                            userNames: vm.senderNames,
+                            isExpanded: expandedItemID == item.id,
+                            conversation: conversationCache[item.id] ?? [],
+                            conversationLoaded: conversationCache[item.id] != nil,
+                            onToggle: { toggleExpansion(item, vm: vm) },
                             onSnooze: { option in snoozeItem(item, option: option, vm: vm) },
                             onDismiss: { vm.dismiss(item) },
                             onCreateTask: { vm.createTask(from: item) },
@@ -117,7 +130,12 @@ struct InboxFeedView: View {
                         InboxCardView(
                             item: item,
                             size: cardSize(for: item),
-                            onOpen: { openItem(item, vm: vm) },
+                            senderName: vm.senderName(for: item),
+                            userNames: vm.senderNames,
+                            isExpanded: expandedItemID == item.id,
+                            conversation: conversationCache[item.id] ?? [],
+                            conversationLoaded: conversationCache[item.id] != nil,
+                            onToggle: { toggleExpansion(item, vm: vm) },
                             onSnooze: { option in snoozeItem(item, option: option, vm: vm) },
                             onDismiss: { vm.dismiss(item) },
                             onCreateTask: { vm.createTask(from: item) },
@@ -150,10 +168,20 @@ struct InboxFeedView: View {
         item.itemClass == .ambient ? .compact : .medium
     }
 
-    private func openItem(_ item: InboxItem, vm: InboxViewModel) {
-        if let url = vm.slackMessageURL(for: item) {
-            NSWorkspace.shared.open(url)
+    private func toggleExpansion(_ item: InboxItem, vm: InboxViewModel) {
+        if expandedItemID == item.id {
+            expandedItemID = nil
+            return
         }
+        // Lazy-load the live conversation on first expand; cache so collapsing and
+        // re-expanding doesn't re-hit the DB. Cross-process daemon writes won't
+        // refresh this cache — that's fine; the snippet/context fallback covers
+        // the gap until the user expands again after a sync.
+        if conversationCache[item.id] == nil {
+            conversationCache[item.id] = vm.loadConversation(for: item)
+        }
+        vm.markSeen(item)
+        expandedItemID = item.id
     }
 
     private func snoozeItem(_ item: InboxItem, option: InboxCardView.SnoozeOption, vm: InboxViewModel) {

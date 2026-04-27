@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -52,6 +53,26 @@ var (
 	targetsFlagExtractText      string
 	targetsFlagExtractSourceRef string
 	targetsFlagExtractFromInbox int
+	targetsFlagExtractJSON      bool
+
+	// suggest-links subcommand flags
+	targetsFlagSuggestLinksJSON bool
+
+	// delete subcommand flags
+	targetsFlagDeleteJSON bool
+
+	// promote-subitem subcommand flags (dedicated, NOT shared with create/update,
+	// to avoid cross-subcommand state leaks between command invocations and tests).
+	targetsFlagPromoteJSON        bool
+	targetsFlagPromoteText        string
+	targetsFlagPromoteIntent      string
+	targetsFlagPromoteLevel       string
+	targetsFlagPromotePriority    string
+	targetsFlagPromoteOwnership   string
+	targetsFlagPromoteDue         string
+	targetsFlagPromotePeriodStart string
+	targetsFlagPromotePeriodEnd   string
+	targetsFlagPromoteTags        string
 )
 
 var targetsCmd = &cobra.Command{
@@ -115,6 +136,14 @@ var targetsDismissCmd = &cobra.Command{
 	RunE:  runTargetsDismiss,
 }
 
+var targetsDeleteCmd = &cobra.Command{
+	Use:   "delete <id>",
+	Short: "Delete a target permanently",
+	Long:  "Removes a target by ID. Children orphan to the root; linked rows cascade. This cannot be undone.",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTargetsDelete,
+}
+
 var targetsSnoozeCmd = &cobra.Command{
 	Use:   "snooze <id> <date>",
 	Short: "Snooze a target until a date",
@@ -163,6 +192,20 @@ var targetsAIUpdateCmd = &cobra.Command{
 	RunE:  runTargetsAIUpdate,
 }
 
+var targetsPromoteSubItemCmd = &cobra.Command{
+	Use:   "promote-subitem <target-id> <sub-item-index>",
+	Short: "Convert a sub-item into a standalone child target",
+	Long: "Promotes the sub-item at the given index of the target to a new child target with parent_id set. " +
+		"The sub-item is removed from the parent's checklist and parent.progress is recomputed. " +
+		"Field defaults: text and due_date come from the sub-item itself (due_date falls back to the parent " +
+		"when the sub-item has none); intent, level, priority, ownership, period and tags come from the parent. " +
+		"ball_on is inherited from the parent; blocking and snooze_until are cleared. " +
+		"Status mirrors the sub-item's done flag (done sub-item -> done child) so parent progress stays stable. " +
+		"Any flag overrides the corresponding default.",
+	Args: cobra.ExactArgs(2),
+	RunE: runTargetsPromoteSubItem,
+}
+
 func init() {
 	rootCmd.AddCommand(targetsCmd)
 	targetsCmd.AddCommand(
@@ -174,11 +217,13 @@ func init() {
 		targetsSuggestLinksCmd,
 		targetsDoneCmd,
 		targetsDismissCmd,
+		targetsDeleteCmd,
 		targetsSnoozeCmd,
 		targetsUpdateCmd,
 		targetsGenerateCmd,
 		targetsNoteCmd,
 		targetsAIUpdateCmd,
+		targetsPromoteSubItemCmd,
 	)
 	targetsNoteCmd.AddCommand(targetsNoteAddCmd, targetsNoteListCmd)
 
@@ -210,6 +255,13 @@ func init() {
 	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractText, "text", "", "raw text to extract targets from")
 	targetsExtractCmd.Flags().StringVar(&targetsFlagExtractSourceRef, "source-ref", "", "source reference (e.g. slack:C123:ts, inbox:42)")
 	targetsExtractCmd.Flags().IntVar(&targetsFlagExtractFromInbox, "from-inbox", 0, "load raw text from inbox item with this ID")
+	targetsExtractCmd.Flags().BoolVar(&targetsFlagExtractJSON, "json", false, "output extracted targets as JSON (non-interactive; caller is responsible for persistence)")
+
+	// suggest-links flags
+	targetsSuggestLinksCmd.Flags().BoolVar(&targetsFlagSuggestLinksJSON, "json", false, "output suggested links as JSON (non-interactive; caller is responsible for persistence)")
+
+	// delete flags
+	targetsDeleteCmd.Flags().BoolVar(&targetsFlagDeleteJSON, "json", false, "output result as JSON")
 
 	// link flags
 	targetsLinkCmd.Flags().IntVar(&targetsFlagLinkParent, "parent", 0, "set parent target ID")
@@ -240,6 +292,20 @@ func init() {
 	// ai-update flags
 	targetsAIUpdateCmd.Flags().StringVar(&targetsFlagInstruction, "instruction", "", "what to change (required)")
 	_ = targetsAIUpdateCmd.MarkFlagRequired("instruction")
+
+	// promote-subitem flags — every flag is optional; presence (Changed) toggles the override.
+	// Bound to dedicated targetsFlagPromote* vars so they never collide with
+	// create/update defaults (Conventional Commits scope: promote-subitem).
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteText, "text", "", "override the child target text (default: sub-item text)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteIntent, "intent", "", "override the child intent (default: parent intent)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteLevel, "level", "", "override the child level (quarter, month, week, day, custom)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromotePriority, "priority", "", "override the child priority (high, medium, low)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteOwnership, "ownership", "", "override the child ownership (mine, delegated, watching)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteDue, "due", "", "override the child due date (default: sub-item.due_date if set, else parent.due_date; YYYY-MM-DDTHH:MM)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromotePeriodStart, "period-start", "", "override the child period start (YYYY-MM-DD)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromotePeriodEnd, "period-end", "", "override the child period end (YYYY-MM-DD)")
+	targetsPromoteSubItemCmd.Flags().StringVar(&targetsFlagPromoteTags, "tags", "", "override comma-separated tags (default: parent tags; pass empty string to clear)")
+	targetsPromoteSubItemCmd.Flags().BoolVar(&targetsFlagPromoteJSON, "json", false, "output the new child target as JSON")
 }
 
 func runTargetsList(cmd *cobra.Command, _ []string) error {
@@ -573,6 +639,21 @@ func runTargetsExtract(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 
+	if targetsFlagExtractJSON {
+		jsonOut := struct {
+			Extracted    []jsonProposedTarget `json:"extracted"`
+			OmittedCount int                  `json:"omitted_count"`
+			Notes        string               `json:"notes"`
+		}{
+			Extracted:    toJSONProposedTargets(result.Extracted),
+			OmittedCount: result.OmittedCount,
+			Notes:        result.Notes,
+		}
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(jsonOut)
+	}
+
 	if len(result.Extracted) == 0 {
 		fmt.Fprintln(out, "No targets extracted.")
 		return nil
@@ -626,6 +707,78 @@ func runTargetsExtract(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintln(out)
 	return nil
+}
+
+// jsonProposedTarget is the JSON wire format for a proposed target (Swift Decodable).
+// It is a cmd-layer adapter — do NOT merge into internal/targets.
+type jsonProposedTarget struct {
+	Text              string                `json:"text"`
+	Intent            string                `json:"intent"`
+	Level             string                `json:"level"`
+	CustomLabel       string                `json:"custom_label"`
+	PeriodStart       string                `json:"period_start"`
+	PeriodEnd         string                `json:"period_end"`
+	Priority          string                `json:"priority"`
+	DueDate           string                `json:"due_date"`
+	ParentID          *int64                `json:"parent_id"`
+	AILevelConfidence *float64              `json:"ai_level_confidence"`
+	SecondaryLinks    []jsonProposedLink    `json:"secondary_links"`
+	SubItems          []jsonProposedSubItem `json:"sub_items"`
+}
+
+type jsonProposedLink struct {
+	TargetID    *int64   `json:"target_id"`
+	ExternalRef string   `json:"external_ref"`
+	Relation    string   `json:"relation"`
+	Confidence  *float64 `json:"confidence"`
+}
+
+type jsonProposedSubItem struct {
+	Text string `json:"text"`
+}
+
+func toJSONProposedTargets(items []targets.ProposedTarget) []jsonProposedTarget {
+	out := make([]jsonProposedTarget, 0, len(items))
+	for _, pt := range items {
+		j := jsonProposedTarget{
+			Text:        pt.Text,
+			Intent:      pt.Intent,
+			Level:       pt.Level,
+			CustomLabel: pt.CustomLabel,
+			PeriodStart: pt.PeriodStart,
+			PeriodEnd:   pt.PeriodEnd,
+			Priority:    pt.Priority,
+			DueDate:     pt.DueDate,
+		}
+		if pt.ParentID.Valid {
+			pid := pt.ParentID.Int64
+			j.ParentID = &pid
+		}
+		if pt.AILevelConfidence.Valid {
+			c := pt.AILevelConfidence.Float64
+			j.AILevelConfidence = &c
+		}
+		for _, l := range pt.SecondaryLinks {
+			jl := jsonProposedLink{
+				ExternalRef: l.ExternalRef,
+				Relation:    l.Relation,
+			}
+			if l.TargetID.Valid {
+				tid := l.TargetID.Int64
+				jl.TargetID = &tid
+			}
+			if l.Confidence.Valid {
+				c := l.Confidence.Float64
+				jl.Confidence = &c
+			}
+			j.SecondaryLinks = append(j.SecondaryLinks, jl)
+		}
+		for _, s := range pt.SubItems {
+			j.SubItems = append(j.SubItems, jsonProposedSubItem{Text: s.Text})
+		}
+		out = append(out, j)
+	}
+	return out
 }
 
 func runTargetsLink(cmd *cobra.Command, args []string) error {
@@ -742,6 +895,37 @@ func runTargetsSuggestLinks(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("suggest-links failed: %w", err)
 	}
 
+	if targetsFlagSuggestLinksJSON {
+		jsonOut := struct {
+			ParentID       *int64             `json:"parent_id"`
+			SecondaryLinks []jsonProposedLink `json:"secondary_links"`
+		}{
+			SecondaryLinks: make([]jsonProposedLink, 0, len(result.SecondaryLinks)),
+		}
+		if result.ParentID.Valid {
+			pid := result.ParentID.Int64
+			jsonOut.ParentID = &pid
+		}
+		for _, l := range result.SecondaryLinks {
+			jl := jsonProposedLink{
+				ExternalRef: l.ExternalRef,
+				Relation:    l.Relation,
+			}
+			if l.TargetID.Valid {
+				tid := l.TargetID.Int64
+				jl.TargetID = &tid
+			}
+			if l.Confidence.Valid {
+				c := l.Confidence.Float64
+				jl.Confidence = &c
+			}
+			jsonOut.SecondaryLinks = append(jsonOut.SecondaryLinks, jl)
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(jsonOut)
+	}
+
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Suggested links for target #%d:\n\n", id)
 
@@ -846,6 +1030,42 @@ func runTargetsDismiss(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d dismissed\n", id)
+	return nil
+}
+
+func runTargetsDelete(cmd *cobra.Command, args []string) error {
+	id, err := strconv.Atoi(args[0])
+	if err != nil || id <= 0 {
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
+	}
+
+	database, err := openDBFromConfig()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if _, err := database.GetTargetByID(id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("target #%d not found", id)
+		}
+		return fmt.Errorf("looking up target #%d: %w", id, err)
+	}
+
+	if err := database.DeleteTarget(id); err != nil {
+		return fmt.Errorf("deleting target #%d: %w", id, err)
+	}
+
+	if targetsFlagDeleteJSON {
+		payload := map[string]any{"id": id, "removed": true}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		if err := enc.Encode(payload); err != nil {
+			return fmt.Errorf("encoding JSON: %w", err)
+		}
+		return nil
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Target #%d removed\n", id)
 	return nil
 }
 
@@ -1224,5 +1444,106 @@ func runTargetsAIUpdate(cmd *cobra.Command, args []string) error {
 
 	jsonStr := extractJSON(result)
 	fmt.Fprintln(cmd.OutOrStdout(), jsonStr)
+	return nil
+}
+
+func runTargetsPromoteSubItem(cmd *cobra.Command, args []string) error {
+	parentID, err := strconv.Atoi(args[0])
+	if err != nil || parentID <= 0 {
+		return fmt.Errorf("invalid target ID %q: must be a positive integer", args[0])
+	}
+	idx, err := strconv.Atoi(args[1])
+	if err != nil || idx < 0 {
+		return fmt.Errorf("invalid sub-item index %q: must be a non-negative integer", args[1])
+	}
+
+	database, err := openDBFromConfig()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	overrides := db.PromoteOverrides{}
+	if cmd.Flags().Changed("text") {
+		v := targetsFlagPromoteText
+		overrides.Text = &v
+	}
+	if cmd.Flags().Changed("intent") {
+		v := targetsFlagPromoteIntent
+		overrides.Intent = &v
+	}
+	if cmd.Flags().Changed("level") {
+		v := targetsFlagPromoteLevel
+		overrides.Level = &v
+	}
+	if cmd.Flags().Changed("priority") {
+		v := targetsFlagPromotePriority
+		overrides.Priority = &v
+	}
+	if cmd.Flags().Changed("ownership") {
+		v := targetsFlagPromoteOwnership
+		overrides.Ownership = &v
+	}
+	if cmd.Flags().Changed("due") {
+		v := targetsFlagPromoteDue
+		overrides.DueDate = &v
+	}
+	if cmd.Flags().Changed("period-start") {
+		v := targetsFlagPromotePeriodStart
+		overrides.PeriodStart = &v
+	}
+	if cmd.Flags().Changed("period-end") {
+		v := targetsFlagPromotePeriodEnd
+		overrides.PeriodEnd = &v
+	}
+	if cmd.Flags().Changed("tags") {
+		// Comma-separated input → JSON array. Empty input → empty array (clears tags).
+		parts := []string{}
+		if trimmed := strings.TrimSpace(targetsFlagPromoteTags); trimmed != "" {
+			for _, p := range strings.Split(targetsFlagPromoteTags, ",") {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					parts = append(parts, p)
+				}
+			}
+		}
+		buf, err := json.Marshal(parts)
+		if err != nil {
+			return fmt.Errorf("encoding tags: %w", err)
+		}
+		s := string(buf)
+		overrides.Tags = &s
+	}
+
+	childID, err := database.PromoteSubItemToChild(int64(parentID), idx, overrides)
+	if err != nil {
+		return fmt.Errorf("promoting sub-item: %w", err)
+	}
+
+	if targetsFlagPromoteJSON {
+		child, err := database.GetTargetByID(int(childID))
+		if err != nil {
+			return fmt.Errorf("loading new child target: %w", err)
+		}
+		payload := map[string]any{
+			"id":           child.ID,
+			"text":         child.Text,
+			"level":        child.Level,
+			"priority":     child.Priority,
+			"status":       child.Status,
+			"due_date":     child.DueDate,
+			"period_start": child.PeriodStart,
+			"period_end":   child.PeriodEnd,
+			"parent_id":    parentID,
+			"source_type":  child.SourceType,
+			"source_id":    child.SourceID,
+		}
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(payload)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Promoted sub-item #%d of target #%d to new child target #%d\n",
+		idx, parentID, childID)
 	return nil
 }

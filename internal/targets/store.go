@@ -3,10 +3,18 @@ package targets
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"watchtower/internal/db"
 )
+
+// storedSubItem mirrors the JSON shape persisted in targets.sub_items.
+// The schema also allows a due_date string; the extractor does not set it.
+type storedSubItem struct {
+	Text string `json:"text"`
+	Done bool   `json:"done"`
+}
 
 // Store wraps db.DB for transactional batch operations on targets.
 type Store struct {
@@ -54,6 +62,15 @@ func (s *Store) CreateBatch(ctx context.Context, items []ProposedTarget, sourceT
 func insertTargetTx(ctx context.Context, tx *sql.Tx, pt ProposedTarget, sourceType, sourceRef string) (int64, error) {
 	tags := "[]"
 	subItems := "[]"
+	if len(pt.SubItems) > 0 {
+		converted := make([]storedSubItem, 0, len(pt.SubItems))
+		for _, s := range pt.SubItems {
+			converted = append(converted, storedSubItem{Text: s.Text, Done: false})
+		}
+		if b, err := json.Marshal(converted); err == nil {
+			subItems = string(b)
+		}
+	}
 	notes := "[]"
 	level := pt.Level
 	if level == "" {

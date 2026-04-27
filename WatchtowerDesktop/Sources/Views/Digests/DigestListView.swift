@@ -161,6 +161,8 @@ struct DigestListView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 120)
                 .id(activeTab)
+
+                sortMenu(vm)
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
@@ -659,6 +661,30 @@ struct DigestListView: View {
         case "weekly": .indigo
         default: .secondary
         }
+    }
+
+    private func sortMenu(_ vm: DigestViewModel) -> some View {
+        Menu {
+            ForEach(DigestViewModel.SortOrder.allCases, id: \.self) { order in
+                Button {
+                    vm.setSortOrder(order)
+                } label: {
+                    if vm.sortOrder == order {
+                        Label(order.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(order.rawValue)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort: \(vm.sortOrder.rawValue)")
     }
 
     private func tabLabel(_ tab: DigestTab, vm: DigestViewModel) -> String {

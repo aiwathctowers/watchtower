@@ -21,9 +21,15 @@ final class TargetsViewModel {
 
     private let dbManager: DatabaseManager
     private var observationTask: Task<Void, Never>?
+    /// Optional injected runner for tests; production uses ProcessCLIRunner.makeDefault().
+    private let cliRunner: CLIRunnerProtocol?
 
-    init(dbManager: DatabaseManager) {
+    init(
+        dbManager: DatabaseManager,
+        cliRunner: CLIRunnerProtocol? = nil
+    ) {
         self.dbManager = dbManager
+        self.cliRunner = cliRunner
     }
 
     func startObserving() {
@@ -367,6 +373,82 @@ final class TargetsViewModel {
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Promote sub-item to child target
+
+    /// Resolves a CLIRunner via the injected `cliRunner` or, in production, by
+    /// locating the bundled `watchtower` binary via `ProcessCLIRunner.makeDefault()`.
+    private func resolveCLIRunner() throws -> CLIRunnerProtocol {
+        if let runner = cliRunner {
+            return runner
+        }
+        if let runner = ProcessCLIRunner.makeDefault() {
+            return runner
+        }
+        throw PromoteSubItemError.cliNotFound
+    }
+
+    /// Converts the sub-item at `index` of `target` into a standalone child
+    /// target with `parent_id = target.id`. Returns the new child's ID.
+    ///
+    /// On failure: throws to the caller — the caller decides how to surface
+    /// the error (sheet typically displays it inline). `errorMessage` is *not*
+    /// also set here, to avoid double-channel signaling that would surface the
+    /// same error twice (banner + sheet alert).
+    @discardableResult
+    func promoteSubItem(
+        _ target: Target,
+        index: Int,
+        overrides: PromoteSubItemOverrides = PromoteSubItemOverrides()
+    ) async throws -> Int {
+        let runner = try resolveCLIRunner()
+        let svc = TargetPromoteSubItemService(runner: runner)
+        let result = try await svc.promote(
+            parentID: target.id,
+            index: index,
+            overrides: overrides
+        )
+        // CLI subprocess writes through its own SQLite connection, so GRDB's
+        // in-process ValueObservation never sees the change. Refresh manually
+        // so the parent's stripped sub_items and the new child show up.
+        load()
+        return result.id
+    }
+
+    /// Batch-promote sub-items of a freshly created parent. Iterates in
+    /// descending `index` order so removals from `sub_items` on the Go side
+    /// do not invalidate the indices that still need to be promoted.
+    func promoteSubItemsAfterCreate(
+        parentID: Int,
+        items: [(index: Int, overrides: PromoteSubItemOverrides)]
+    ) async throws {
+        guard !items.isEmpty else { return }
+        let runner = try resolveCLIRunner()
+        let svc = TargetPromoteSubItemService(runner: runner)
+        let sorted = items.sorted { $0.index > $1.index }
+        for item in sorted {
+            _ = try await svc.promote(
+                parentID: parentID,
+                index: item.index,
+                overrides: item.overrides
+            )
+        }
+        // Same rationale as promoteSubItem: cross-process CLI writes bypass our
+        // in-process ValueObservation, so refresh after the batch finishes.
+        load()
+    }
+}
+
+/// Errors emitted by promote-related ViewModel methods.
+enum PromoteSubItemError: LocalizedError {
+    case cliNotFound
+
+    var errorDescription: String? {
+        switch self {
+        case .cliNotFound:
+            return "watchtower CLI not found"
         }
     }
 }

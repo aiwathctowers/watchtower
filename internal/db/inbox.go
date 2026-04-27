@@ -62,11 +62,12 @@ func (db *DB) CreateInboxItem(it InboxItem) (int64, error) {
 	if it.ItemClass == "" {
 		it.ItemClass = "actionable"
 	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	res, err := db.Exec(`INSERT INTO inbox_items (channel_id, message_ts, thread_ts, sender_user_id,
-		trigger_type, snippet, context, raw_text, permalink, status, priority, ai_reason, waiting_user_ids, item_class)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		trigger_type, snippet, context, raw_text, permalink, status, priority, ai_reason, waiting_user_ids, item_class, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.ChannelID, it.MessageTS, it.ThreadTS, it.SenderUserID,
-		it.TriggerType, it.Snippet, it.Context, it.RawText, it.Permalink, it.Status, it.Priority, it.AIReason, it.WaitingUserIDs, it.ItemClass,
+		it.TriggerType, it.Snippet, it.Context, it.RawText, it.Permalink, it.Status, it.Priority, it.AIReason, it.WaitingUserIDs, it.ItemClass, now, now,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting inbox item: %w", err)
@@ -401,11 +402,14 @@ func (db *DB) SetInboxLastProcessedTS(ts float64) error {
 }
 
 // FindPendingMentions finds messages that mention the current user where the user hasn't replied.
+// Slack mentions appear in two forms: `<@USER>` (raw) and `<@USER|Display Name>` (resolved).
+// The boundary character (`>` or `|`) prevents false matches on user IDs that share a prefix.
 func (db *DB) FindPendingMentions(currentUserID string, sinceTS float64) ([]InboxCandidate, error) {
-	mentionPattern := "<@" + currentUserID + ">"
+	strictPattern := "%<@" + currentUserID + ">%"
+	pipePattern := "%<@" + currentUserID + "|%"
 	rows, err := db.Query(`SELECT m.channel_id, m.ts, COALESCE(m.thread_ts, ''), m.user_id, m.text, m.permalink, m.ts_unix
 		FROM messages m
-		WHERE m.text LIKE ?
+		WHERE (m.text LIKE ? OR m.text LIKE ?)
 		AND m.user_id != ?
 		AND m.user_id != ''
 		AND m.ts_unix > ?
@@ -415,7 +419,7 @@ func (db *DB) FindPendingMentions(currentUserID string, sinceTS float64) ([]Inbo
 			WHERE ii.channel_id = m.channel_id AND ii.message_ts = m.ts
 		)
 		ORDER BY m.ts_unix DESC`,
-		"%"+mentionPattern+"%", currentUserID, sinceTS)
+		strictPattern, pipePattern, currentUserID, sinceTS)
 	if err != nil {
 		return nil, fmt.Errorf("finding pending mentions: %w", err)
 	}

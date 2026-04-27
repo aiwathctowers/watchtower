@@ -81,7 +81,7 @@ func TestMigrationSetsUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 68, v)
+	assert.Equal(t, 70, v)
 }
 
 func TestMigrationIdempotent(t *testing.T) {
@@ -533,7 +533,7 @@ func TestMigrationV19ActionItemsToTracks(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 68, v)
+	assert.Equal(t, 70, v)
 
 	// v45 drops old tracks and recreates with hybrid v2 schema.
 	// Verify new tracks table exists with v2 columns.
@@ -783,7 +783,7 @@ func TestMigration_v67_Backfill(t *testing.T) {
 
 	var ver int
 	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&ver))
-	assert.Equal(t, 68, ver)
+	assert.Equal(t, 70, ver)
 
 	// Backfill: reaction → ambient, mention → actionable.
 	var classReaction, classMention string
@@ -794,4 +794,31 @@ func TestMigration_v67_Backfill(t *testing.T) {
 	require.NoError(t, db2.QueryRow(
 		"SELECT item_class FROM inbox_items WHERE trigger_type='mention'").Scan(&classMention))
 	assert.Equal(t, "actionable", classMention, "migration should backfill mention to actionable")
+}
+
+func TestMigrationV70CreatesMeetingRecaps(t *testing.T) {
+	tmp := t.TempDir() + "/test.db"
+	database, err := Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	var version int
+	if err := database.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("reading user_version: %v", err)
+	}
+	if version < 70 {
+		t.Errorf("expected user_version >= 70, got %d", version)
+	}
+
+	// Table exists
+	var name string
+	err = database.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='meeting_recaps'`).Scan(&name)
+	if err != nil {
+		t.Fatalf("meeting_recaps table missing: %v", err)
+	}
+	if name != "meeting_recaps" {
+		t.Errorf("expected table 'meeting_recaps', got %q", name)
+	}
 }

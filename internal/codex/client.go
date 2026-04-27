@@ -85,6 +85,10 @@ func (c *Client) Query(ctx context.Context, systemPrompt, userMessage, _ string)
 			return cmd.Process.Signal(os.Interrupt)
 		}
 		cmd.WaitDelay = 5 * time.Second
+		// Pin CWD to a TCC-neutral directory so the Node-based Codex CLI never
+		// inherits a parent CWD inside ~/Documents or ~/Desktop, which would
+		// trigger macOS Files & Folders prompts attributed to Watchtower.
+		cmd.Dir = os.TempDir()
 
 		// Build clean environment with enriched PATH.
 		var env []string
@@ -180,6 +184,8 @@ func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, _ str
 		return cmd.Process.Signal(os.Interrupt)
 	}
 	cmd.WaitDelay = 5 * time.Second
+	// See Query() for rationale on cmd.Dir.
+	cmd.Dir = os.TempDir()
 
 	// Build clean environment with enriched PATH.
 	var env []string

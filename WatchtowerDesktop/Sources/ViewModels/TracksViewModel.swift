@@ -25,11 +25,26 @@ final class TracksViewModel {
     var jiraFilter: JiraFilter = .all
     var showRead: Bool = false
     var showDismissed: Bool = false
+    var sortOrder: SortOrder = .updatedNewest
 
     enum JiraFilter: String, CaseIterable {
         case all = "All"
         case withJira = "With Jira"
         case withoutJira = "Without Jira"
+    }
+
+    enum SortOrder: String, CaseIterable {
+        case updatedNewest = "Newest first"
+        case updatedOldest = "Oldest first"
+        case createdNewest = "Created — newest"
+        case createdOldest = "Created — oldest"
+
+        var systemImage: String {
+            switch self {
+            case .updatedNewest, .createdNewest: return "arrow.down"
+            case .updatedOldest, .createdOldest: return "arrow.up"
+            }
+        }
     }
 
     private(set) var workspaceDomain: String?
@@ -123,6 +138,7 @@ final class TracksViewModel {
                 tracks = tracks.filter { trackJiraIssues[$0.id]?.isEmpty ?? true }
             }
 
+            tracks = applySort(tracks)
             updatedTracks = tracks.filter { $0.hasUpdates }
             let rest = tracks.filter { !$0.hasUpdates }
             // Hide read tracks unless showRead is enabled
@@ -141,6 +157,19 @@ final class TracksViewModel {
 
     func taskCount(for trackID: Int) -> Int {
         trackTaskCounts[trackID] ?? 0
+    }
+
+    private func applySort(_ tracks: [Track]) -> [Track] {
+        switch sortOrder {
+        case .updatedNewest:
+            return tracks.sorted { $0.updatedDate > $1.updatedDate }
+        case .updatedOldest:
+            return tracks.sorted { $0.updatedDate < $1.updatedDate }
+        case .createdNewest:
+            return tracks.sorted { $0.createdDate > $1.createdDate }
+        case .createdOldest:
+            return tracks.sorted { $0.createdDate < $1.createdDate }
+        }
     }
 
     func markRead(_ track: Track) {

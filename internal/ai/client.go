@@ -157,6 +157,10 @@ func (c *Client) Query(ctx context.Context, systemPrompt, userMessage, sessionID
 			return cmd.Process.Signal(os.Interrupt)
 		}
 		cmd.WaitDelay = 5 * time.Second
+		// Pin CWD to a TCC-neutral directory so the Node-based Claude CLI never
+		// inherits a parent CWD inside ~/Documents or ~/Desktop, which would
+		// trigger macOS Files & Folders prompts attributed to Watchtower.
+		cmd.Dir = os.TempDir()
 		cmd.Env = append(os.Environ(), "PATH="+claude.RichPATH())
 
 		stdout, err := cmd.StdoutPipe()
@@ -233,6 +237,8 @@ func (c *Client) QuerySync(ctx context.Context, systemPrompt, userMessage, sessi
 		return cmd.Process.Signal(os.Interrupt)
 	}
 	cmd.WaitDelay = 5 * time.Second
+	// See Query() for rationale on cmd.Dir.
+	cmd.Dir = os.TempDir()
 	cmd.Env = append(os.Environ(), "PATH="+claude.RichPATH())
 
 	var stderrBuf strings.Builder

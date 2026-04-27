@@ -101,6 +101,29 @@ struct TracksListView: View {
                     ownershipButton(vm, label: "Watching", value: "watching")
                     Spacer()
 
+                    Menu {
+                        ForEach(TracksViewModel.SortOrder.allCases, id: \.self) { order in
+                            Button {
+                                vm.sortOrder = order
+                                vm.load()
+                            } label: {
+                                if vm.sortOrder == order {
+                                    Label(order.rawValue, systemImage: "checkmark")
+                                } else {
+                                    Text(order.rawValue)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Sort: \(vm.sortOrder.rawValue)")
+
                     Button {
                         vm.showRead.toggle()
                         vm.load()

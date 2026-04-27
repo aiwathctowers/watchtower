@@ -97,6 +97,30 @@ final class DaemonManager {
         isDaemonRunning()
     }
 
+    /// Synchronously stop the daemon via `watchtower sync stop`, with a 2s hard timeout.
+    /// Safe to call from NSApplication.willTerminateNotification handler.
+    nonisolated static func stopDaemonSync() {
+        guard let path = Constants.findCLIPath() else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.currentDirectoryURL = Constants.processWorkingDirectory()
+        process.arguments = ["sync", "stop"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return
+        }
+        let deadline = Date().addingTimeInterval(2.0)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+        }
+    }
+
     nonisolated private static func isDaemonRunning() -> Bool {
         let dataPath = Constants.databasePath
         let fm = FileManager.default

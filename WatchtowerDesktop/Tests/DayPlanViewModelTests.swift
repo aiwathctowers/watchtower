@@ -2,19 +2,6 @@ import XCTest
 import GRDB
 @testable import WatchtowerDesktop
 
-// MARK: - FakeCLIRunner
-
-final class FakeCLIRunner: CLIRunnerProtocol {
-    var invocations: [[String]] = []
-    var shouldThrow: Error? = nil
-
-    func run(args: [String]) async throws -> Data {
-        invocations.append(args)
-        if let err = shouldThrow { throw err }
-        return Data()
-    }
-}
-
 // MARK: - DayPlanViewModelTests
 
 @MainActor
