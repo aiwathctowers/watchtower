@@ -26,6 +26,21 @@
 
 **Locked since:** 2026-04-27
 
+## INBOX-02 — Inbox understands what I've already answered
+
+**Status:** Enforced
+
+**Observable:** I reply in Slack/DM/thread, comment on a Jira issue, or RSVP a calendar invite — the corresponding inbox item disappears **without my click**. Inbox follows the conversation; I never close the same thing twice.
+
+**Why locked:** This is the basic promise that makes Inbox lower-friction than native Slack/Jira/Calendar notifications. Break it and users stop trusting the feed and revert to the original sources.
+
+**Test guards:**
+- `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveSlackOnUserReply`
+- `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveJiraOnUserComment`
+- `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveCalendarOnUserRSVP`
+
+**Locked since:** 2026-04-27
+
 <!-- Contracts will be inserted here in subsequent commits. -->
 
 ## Changelog
