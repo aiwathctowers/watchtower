@@ -12,6 +12,33 @@
 **Module:** `internal/tracks/` + `internal/db/tracks.go` + `WatchtowerDesktop/Sources/Views/Tracks/`
 **Last full audit:** 2026-04-28
 
+## What a track is and what it's built from
+
+**What it is.** A track is a single narrative row representing one ongoing situation the user should keep an eye on — a decision being formed, a thread waiting on a reply, a slow-burn incident, a piece of work spanning multiple channels. It is **not** a task: there is no `done` / `resolved` / `archived` state, no checkbox, no due date. A track stays "active" until the user explicitly dismisses it (TRACKS-07); the pipeline's job is to keep the track's `text`, `current_status`, `participants`, `priority`, and `category` current as the situation evolves — not to push it through a workflow. One row per situation, regardless of how many channels, threads, or days it spans.
+
+**What it's built from.** Tracks are not derived from raw messages. They sit downstream of the channel-digest pipeline and consume already-summarised signals:
+
+- `digests.situations` (per-channel MAP output) — participants with roles (driver / reviewer / blocker), dynamics, outcomes, red flags, action items.
+- `digests.topics` — topic-level summaries with `key_messages` and timestamps; these are the primary unit the LLM is asked to convert into tracks.
+- `digests.running_summary` — the channel's compact rolling memory (active topics, recent decisions, open questions). Injected as `=== CHANNEL CONTEXT ===` so the model can recognise threads the channel has already exposed and avoid re-proposing them as fresh tracks.
+- `tracks` + each track's narrative fields — passed back to the AI as `existing_tracks` via `formatExistingTracks`. This is what makes the model's first move "should this fold into something I already track?" rather than "should I create a new one?". This is the merge-over-split bias.
+- `user_profile`: starred channels, declared reports/peers, role. Drives `scoreChannel` (TRACKS-02) and the watching-lane filter (TRACKS-03) — i.e. _which_ channels and _which_ flavours of topic are even allowed to surface.
+- Cross-cycle dedup marker: digest topics already linked to a track via `source_refs` (`digest_id`+`topic_id`) are stripped from the prompt before extraction, so the model cannot re-propose them (TRACKS-01).
+
+The pipeline issues **one AI call per `Run()`** that receives all of the above and returns `{new_tracks: [...], updated_tracks: [...]}`. New tracks then run through fingerprint + Jaccard text dedup before they are persisted; updates are gated by the cross-user owner check (TRACKS-05).
+
+**Why this is the design (the point).** The default Slack surface is N channels of noise the user has to scroll through. Tracks invert that surface by compressing everything to "the K things that need your eye right now". That compression is only worth anything if the user trusts the count — and trust is exactly what every contract below is protecting:
+
+- the count must _mean_ something — re-extraction must not inflate it (TRACKS-01, TRACKS-06 channel/digest part);
+- silence must be possible — a chatty channel the user doesn't engage with must produce zero tracks (TRACKS-02);
+- the manager use case must not collapse back into noise — "watching" stays narrow (TRACKS-03);
+- read state must be honest — once a thing is seen it stays seen until something genuinely new lands (TRACKS-04);
+- an AI hallucination must not be able to rewrite the wrong user's track (TRACKS-05);
+- history must not be silently destroyed by a re-extraction cycle (TRACKS-06 state-history part);
+- dismiss must actually mean dismiss (TRACKS-07).
+
+If any one of these breaks, the user stops trusting the count — and a track surface they don't trust is functionally identical to no track surface at all. That is why the contracts below are load-bearing rather than nice-to-have.
+
 ## TRACKS-01 — One situation, one track
 
 **Status:** Enforced
@@ -112,15 +139,19 @@ When the AI re-extracts a track I've already read and there's actually new conte
 
 ## TRACKS-06 — Re-extraction never narrows history
 
-**Status:** Enforced
+**Status:** Partial
 
-**Observable:** When a track is updated by extraction, its `channel_ids` and `related_digest_ids` arrays grow — they're merged with the new values placed first, deduped against existing values. A track that originally surfaced in `#backend` and later resurfaces in `#frontend` ends up with both channels recorded; the UI's "Open in Slack" picks the freshest channel (index 0 of merged), but the historical channel is still there for context. Same for digest IDs — the chain back to source content is never trimmed.
+**Observable — channel/digest origins (Enforced):** When a track is updated by extraction, its `channel_ids` and `related_digest_ids` arrays grow — they're merged with the new values placed first, deduped against existing values. A track that originally surfaced in `#backend` and later resurfaces in `#frontend` ends up with both channels recorded; the UI's "Open in Slack" picks the freshest channel (index 0 of merged), but the historical channel is still there for context. Same for digest IDs — the chain back to source content is never trimmed.
 
-**Why locked:** When a thread spans multiple channels (e.g. an incident discussed in `#incidents`, then post-mortemed in `#postmortems`), losing earlier channels on re-extraction would orphan the user from where the conversation actually started. The "Open in Slack" deep-link must remain accurate even when extraction re-runs. Replacing the array (instead of merging) would also retroactively rewrite history, which is hostile in a forensic tool.
+**Observable — track state history (Aspirational):** A track also preserves a record of its **own** past states — what its `text`, `context`, `priority`, `ownership`, and `category` looked like before the latest re-extraction overwrote them. The user can scroll back through how the AI's reading of the same situation evolved (the original "Review API PR" → later refined to "Review API PR + reconcile with auth team"); a bad re-extraction is recoverable instead of silently destructive; the LLM can be given the prior state on the next cycle so its updates feel continuous rather than amnesic.
 
-**Test guards:**
+**Why locked:** When a thread spans multiple channels (e.g. an incident discussed in `#incidents`, then post-mortemed in `#postmortems`), losing earlier channels on re-extraction would orphan the user from where the conversation actually started. The "Open in Slack" deep-link must remain accurate even when extraction re-runs. Replacing the array (instead of merging) would also retroactively rewrite history, which is hostile in a forensic tool. The same "no destructive rewrites" principle applies to the track's own fields: an LLM cycle should never silently obliterate the prior text the user may have already read or acted on. Without a state log the user has no way to answer "did this track always say that, or did the AI just rewrite it?", which collapses trust in the surface.
+
+**Test guards (Enforced part):**
 - `internal/db/tracks_test.go::TestUpdateTrackFromExtraction`
 - `internal/db/tracks_test.go::TestMergeJSONArrays`
+
+**Tracked gap (Aspirational part):** A `track_history` table existed pre-v43 and was dropped during the chains→tracks v3 refactor (`internal/db/db.go:1905`); it was never reinstated. Today `internal/db/tracks.go::UpdateTrackFromExtraction` overwrites `text`, `context`, `priority`, `ownership`, `category`, `decision_summary`, `participants`, `tags`, `sub_items`, etc. in place, and the prior values are unrecoverable. Closing this gap requires: (1) a new `track_states` (or revived `track_history`) table keyed by `track_id`, recording a snapshot of all narrative fields at each `UpdateTrackFromExtraction` call along with the `prompt_version` and `model` of the run that produced it; (2) `TrackDetailView` UI to expose the timeline of past states; (3) optionally, prior-state injection into the next extraction prompt so updates compose instead of replace; (4) a retention rule (e.g. last N states or N days) so the table doesn't grow unbounded. Until this lands, treat any non-trivial change to `UpdateTrackFromExtraction` as also rewriting an unobservable history — and ask the owner before doing so.
 
 **Locked since:** 2026-04-28
 
@@ -144,4 +175,6 @@ When the AI re-extracts a track I've already read and there's actually new conte
 
 ## Changelog
 
-- 2026-04-28: file created with 7 contracts (TRACKS-01..07). Four are Enforced (01, 02, 04, 06), three are Partial with explicit tracked gaps (03 watching-lane filter has no unit test, 05 cross-user gate has no unit test, 07 dismissed-exclusion has only implicit tests). Existing tests are referenced under their current names; renaming to `TestTracks0N_…` convention is a follow-up so the four soft-protection layers all engage.
+- 2026-04-28: file created with 7 contracts (TRACKS-01..07). Three are Enforced (01, 02, 04), four are Partial with explicit tracked gaps (03 watching-lane filter has no unit test, 05 cross-user gate has no unit test, 06 channel/digest part Enforced but per-track state history Aspirational, 07 dismissed-exclusion has only implicit tests). Existing tests are referenced under their current names; renaming to `TestTracks0N_…` convention is a follow-up so the four soft-protection layers all engage.
+- 2026-04-28: TRACKS-06 expanded — added "track state history" as Aspirational sub-contract. The pre-v43 `track_history` table was dropped during chains→tracks v3 refactor; `UpdateTrackFromExtraction` currently overwrites narrative fields in place. Status demoted Enforced → Partial; channel/digest merge guarantees remain fully Enforced under the same ID.
+- 2026-04-28: added preamble section "What a track is and what it's built from" — defines the narrative-row-not-task surface, lists the upstream signals the pipeline consumes (`digests.situations`, `digests.topics`, channel `running_summary`, existing tracks, `user_profile`, cross-cycle `source_refs` marker), and frames the seven contracts as a single trust property: the count must mean something or the surface collapses.
