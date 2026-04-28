@@ -133,4 +133,4 @@
 
 ## Changelog
 
-- 2026-04-27: file created.
+- 2026-04-27: file created with 8 contracts (INBOX-01..08). Five are Enforced (01, 02, 05, 06, 07), two are Partial (03, 04), one is Aspirational (08). Tracked gaps recorded inline on Partial/Aspirational entries.
