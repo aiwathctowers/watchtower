@@ -234,31 +234,7 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 
 	// Phase 1: Detection — Slack + external sources (all non-fatal).
 	stepStart := time.Now()
-	createdSlack, err := p.detectSlackTriggers(ctx, currentUserID, lastTS)
-	if err != nil {
-		p.logger.Printf("inbox: slack detect error: %v", err)
-	}
-
-	var createdJira, createdCalendar, createdWatchtower int
-	if n, err := DetectJira(ctx, p.db, currentUserID, sinceTime); err != nil {
-		p.logger.Printf("inbox: jira detect error: %v", err)
-	} else {
-		createdJira = n
-	}
-
-	currentUserEmail := p.currentUserEmail
-	if n, err := DetectCalendar(ctx, p.db, currentUserEmail, sinceTime); err != nil {
-		p.logger.Printf("inbox: calendar detect error: %v", err)
-	} else {
-		createdCalendar = n
-	}
-
-	if n, err := DetectWatchtowerInternal(ctx, p.db, sinceTime); err != nil {
-		p.logger.Printf("inbox: watchtower detect error: %v", err)
-	} else {
-		createdWatchtower = n
-	}
-
+	createdSlack, createdJira, createdCalendar, createdWatchtower := p.detectAll(ctx, currentUserID, lastTS, sinceTime, true)
 	created := createdSlack + createdJira + createdCalendar + createdWatchtower
 
 	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
@@ -361,6 +337,96 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 		pinned, resolved, archived, learnedRuleUpdates)
 
 	return created, resolved, nil
+}
+
+// RunFastDetection runs a lightweight subset of the pipeline: dedup, Slack/Jira/
+// Calendar detection, classification and rule-based auto-resolve. It skips the
+// digest-dependent decision_made/briefing_ready detector, the implicit learner,
+// AI prioritization, the pinned selector, archival, and the watermark advance —
+// all of which the full Run still performs afterwards.
+//
+// This lets the daemon surface DMs/mentions in the UI immediately after a Slack
+// sync, instead of waiting for the LLM-heavy digest+tracks phases to finish.
+func (p *Pipeline) RunFastDetection(ctx context.Context) error {
+	if p.cfg != nil && !p.cfg.Inbox.Enabled {
+		return nil
+	}
+
+	currentUserID := p.currentUserID
+	if currentUserID == "" {
+		var err error
+		currentUserID, err = p.db.GetCurrentUserID()
+		if err != nil {
+			return fmt.Errorf("getting current user: %w", err)
+		}
+	}
+	if currentUserID == "" {
+		return nil
+	}
+
+	lastTS, err := p.db.GetInboxLastProcessedTS()
+	if err != nil {
+		p.logger.Printf("inbox fast: error getting last processed ts, using default: %v", err)
+		lastTS = 0
+	}
+	lookbackDays := DefaultLookbackDays
+	if p.cfg != nil && p.cfg.Inbox.InitialLookbackDays > 0 {
+		lookbackDays = p.cfg.Inbox.InitialLookbackDays
+	}
+	if lastTS == 0 {
+		lastTS = float64(time.Now().AddDate(0, 0, -lookbackDays).Unix())
+	}
+	sinceTime := time.Unix(int64(lastTS), 0)
+
+	if deduped, err := p.db.DeduplicateThreadInboxItems(); err != nil {
+		p.logger.Printf("inbox fast: dedup error: %v", err)
+	} else if deduped > 0 {
+		p.logger.Printf("inbox fast: merged %d duplicate thread items", deduped)
+	}
+
+	createdSlack, createdJira, createdCalendar, _ := p.detectAll(ctx, currentUserID, lastTS, sinceTime, false)
+	created := createdSlack + createdJira + createdCalendar
+
+	if err := p.classifyNewItems(ctx); err != nil {
+		p.logger.Printf("inbox fast: classify error: %v", err)
+	}
+
+	resolved := p.autoResolveByRules(ctx, currentUserID)
+
+	p.logger.Printf("inbox fast: +%d new (S%d J%d C%d), %d auto-resolved",
+		created, createdSlack, createdJira, createdCalendar, resolved)
+
+	return nil
+}
+
+// detectAll runs the per-source detectors and returns counts. When
+// includeWatchtower is false, the watchtower-internal detector
+// (decision_made / briefing_ready, depends on digests + briefings) is skipped —
+// used by RunFastDetection so it can run before the digest pipeline.
+func (p *Pipeline) detectAll(ctx context.Context, currentUserID string, lastTS float64, sinceTime time.Time, includeWatchtower bool) (slack, jira, cal, wt int) {
+	if n, err := p.detectSlackTriggers(ctx, currentUserID, lastTS); err != nil {
+		p.logger.Printf("inbox: slack detect error: %v", err)
+	} else {
+		slack = n
+	}
+	if n, err := DetectJira(ctx, p.db, currentUserID, sinceTime); err != nil {
+		p.logger.Printf("inbox: jira detect error: %v", err)
+	} else {
+		jira = n
+	}
+	if n, err := DetectCalendar(ctx, p.db, p.currentUserEmail, sinceTime); err != nil {
+		p.logger.Printf("inbox: calendar detect error: %v", err)
+	} else {
+		cal = n
+	}
+	if includeWatchtower {
+		if n, err := DetectWatchtowerInternal(ctx, p.db, sinceTime); err != nil {
+			p.logger.Printf("inbox: watchtower detect error: %v", err)
+		} else {
+			wt = n
+		}
+	}
+	return
 }
 
 // detectSlackTriggers detects @mentions, DMs, thread replies and reactions from Slack messages.

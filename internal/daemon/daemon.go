@@ -261,6 +261,25 @@ func (d *Daemon) runSync(ctx context.Context) {
 		d.logger.Printf("sync had errors, but running pipelines on existing data")
 	}
 
+	// Phase 0.7: Fast inbox detection — surface Slack/Jira/Calendar items in the
+	// UI immediately, before the LLM-heavy digest pipeline. The full inbox phase
+	// below (Phase 5) still runs to detect decision_made/briefing_ready from fresh
+	// digests, AI-prioritize, pick pinned, and advance the watermark.
+	if d.inboxPipe != nil {
+		if d.db != nil {
+			if uid, err := d.db.GetCurrentUserID(); err == nil && uid != "" {
+				email := ""
+				if u, uerr := d.db.GetUserByID(uid); uerr == nil && u != nil {
+					email = u.Email
+				}
+				d.inboxPipe.SetCurrentUser(uid, email)
+			}
+		}
+		if err := d.inboxPipe.RunFastDetection(ctx); err != nil {
+			d.logger.Printf("inbox fast detect error: %v", err)
+		}
+	}
+
 	// Phase 1: Channel digests (generates people_signals in MAP phase).
 	if d.digestPipe != nil {
 		var runID int64
