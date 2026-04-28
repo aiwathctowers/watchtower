@@ -182,7 +182,8 @@ enum TargetQueries {
         progress: Double = 0.0,
         sourceType: String = "manual",
         sourceID: String = "",
-        aiLevelConfidence: Double? = nil
+        aiLevelConfidence: Double? = nil,
+        secondaryLinks: [TargetPrefillLink] = []
     ) throws -> Int {
         try db.execute(sql: """
             INSERT INTO targets (text, intent, level, custom_label, period_start, period_end,
@@ -192,7 +193,23 @@ enum TargetQueries {
             """, arguments: [text, intent, level, customLabel, periodStart, periodEnd,
                              parentId, status, priority, ownership, ballOn, dueDate, snoozeUntil,
                              blocking, tags, subItems, notes, progress, sourceType, sourceID, aiLevelConfidence])
-        return Int(db.lastInsertedRowID)
+        let newID = Int(db.lastInsertedRowID)
+
+        for link in secondaryLinks {
+            let ref = link.externalRef
+            // Mirrors the Go-side allow-list `IsValidExternalRef`
+            // (internal/targets/extractor.go:146): only "jira:" and "slack:" pass.
+            guard ref.hasPrefix("jira:") || ref.hasPrefix("slack:") else { continue }
+            try db.execute(
+                sql: """
+                    INSERT INTO target_links (source_target_id, target_target_id, external_ref, relation, created_by)
+                    VALUES (?, NULL, ?, ?, 'user')
+                    """,
+                arguments: [newID, ref, link.relation]
+            )
+        }
+
+        return newID
     }
 
     // MARK: - Update
