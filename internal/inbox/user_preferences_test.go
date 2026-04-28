@@ -7,7 +7,10 @@ import (
 	"watchtower/internal/db"
 )
 
-func TestBuildUserPrefs_TopByRelevance(t *testing.T) {
+func TestInbox03_UserPrefsRankedByRelevance(t *testing.T) {
+	// KILLER FEATURE INBOX-03 — see docs/inventory/inbox-pulse.md
+	// USER PREFERENCES block reaching AI prioritizes relevant rules.
+	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
 	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "sender:U1", Weight: -0.9, Source: "user_rule"})
 	_ = d.UpsertLearnedRule(db.InboxLearnedRule{RuleType: "source_mute", ScopeKey: "channel:C9", Weight: -0.5, Source: "implicit"})
