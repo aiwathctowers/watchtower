@@ -12,6 +12,8 @@ struct DigestDetailView: View {
     @State private var digestTopics: [DigestTopic] = []
     @State private var showCreateTask = false
     @State private var targetPrefill: TargetPrefill?
+    @State private var targetPrefillError: String?
+    @State private var isBuildingPrefill = false
     @State private var jiraIssues: [String: JiraIssue] = [:]
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
@@ -22,6 +24,13 @@ struct DigestDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if let msg = targetPrefillError {
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal)
+                }
+
                 // Header
                 header
 
@@ -255,14 +264,14 @@ struct DigestDetailView: View {
                             .font(.headline)
                         Spacer()
                         Button {
-                            targetPrefill = nil
-                            showCreateTask = true
+                            openCreateTarget()
                         } label: {
                             Image(systemName: "plus.circle")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
                         .buttonStyle(.plain)
+                        .disabled(isBuildingPrefill)
                         .help("Create task from topic")
                     }
                     if !topic.summary.isEmpty {
@@ -433,13 +442,13 @@ struct DigestDetailView: View {
                             HStack {
                                 Spacer()
                                 Button {
-                                    targetPrefill = nil
-                                    showCreateTask = true
+                                    openCreateTarget()
                                 } label: {
                                     Label("Create task", systemImage: "plus.circle")
                                         .font(.caption)
                                 }
                                 .buttonStyle(.plain)
+                                .disabled(isBuildingPrefill)
                                 .foregroundStyle(.secondary)
                             }
                             .padding(.trailing, 4)
@@ -545,6 +554,25 @@ struct DigestDetailView: View {
             : digest.channelID
         guard !channelID.isEmpty else { return nil }
         return viewModel.slackMessageURL(channelID: channelID, messageTS: ts)
+    }
+
+    private func openCreateTarget() {
+        guard let db = appState.databaseManager else {
+            targetPrefillError = "Database not available"
+            return
+        }
+        Task { @MainActor in
+            isBuildingPrefill = true
+            defer { isBuildingPrefill = false }
+            do {
+                let pf = try await TargetPrefillBuilder.fromDigest(digest, topic: nil, db: db)
+                targetPrefill = pf
+                targetPrefillError = nil
+                showCreateTask = true
+            } catch {
+                targetPrefillError = "Failed to prepare prefill: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func markChannelRead() {
