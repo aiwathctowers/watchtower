@@ -131,6 +131,40 @@ enum TargetPrefillBuilder {
         )
     }
 
+    // MARK: - fromInbox
+
+    static func fromInbox(_ item: InboxItem, db: DatabaseManager) async throws -> TargetPrefill {
+        let (senderName, channelName) = try await db.dbPool.read { dbConn -> (String, String) in
+            let display = try UserQueries.fetchDisplayName(dbConn, forID: item.senderUserID)
+            let chName = try ChannelQueries.fetchByID(dbConn, id: item.channelID)?.name ?? item.channelID
+            return (display, chName)
+        }
+
+        var lines: [String] = []
+        lines.append("From @\(senderName) in #\(channelName) (\(item.triggerType)):")
+        let snippetTrimmed = item.snippet.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !snippetTrimmed.isEmpty {
+            lines.append("\"\(snippetTrimmed)\"")
+        }
+        let aiReason = item.aiReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !aiReason.isEmpty {
+            lines.append("Why it matters: \(aiReason)")
+        }
+
+        let links: [TargetPrefillLink] = item.permalink.isEmpty
+            ? []
+            : [TargetPrefillLink(externalRef: "slack:\(item.permalink)", relation: "related")]
+
+        return TargetPrefill(
+            text: item.snippet,
+            intent: lines.joined(separator: "\n"),
+            sourceType: "inbox",
+            sourceID: String(item.id),
+            secondaryLinks: links,
+            parentID: nil
+        )
+    }
+
     // MARK: - Helpers
 
     private static func firstLine(_ s: String) -> String {

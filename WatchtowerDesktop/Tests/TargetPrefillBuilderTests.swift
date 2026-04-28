@@ -161,6 +161,59 @@ final class TargetPrefillBuilderTests: XCTestCase {
         XCTAssertTrue(prefill.intent.contains("From digest in #C404"))
     }
 
+    // MARK: - fromInbox
+
+    func testFromInbox_HappyPath() async throws {
+        let mgr = try Self.makeManagerSeededWith { db in
+            try TestDatabase.insertUser(db, id: "U010", name: "vlad", displayName: "Vlad", realName: "Vlad K.")
+            try TestDatabase.insertChannel(db, id: "C300", name: "team")
+            try TestDatabase.insertInboxItem(
+                db,
+                channelID: "C300",
+                senderUserID: "U010",
+                triggerType: "mention",
+                snippet: "Need your call on the API contract",
+                permalink: "https://slack.com/archives/C300/p123",
+                aiReason: "Direct ask, blocking external commitment"
+            )
+        }
+        let item = try await mgr.dbPool.read { db in
+            try XCTUnwrap(try InboxItem.fetchOne(db, sql: "SELECT * FROM inbox_items LIMIT 1"))
+        }
+
+        let prefill = try await TargetPrefillBuilder.fromInbox(item, db: mgr)
+        XCTAssertEqual(prefill.text, "Need your call on the API contract")
+        XCTAssertEqual(prefill.sourceType, "inbox")
+        XCTAssertEqual(prefill.sourceID, String(item.id))
+        XCTAssertTrue(prefill.intent.contains("From @Vlad in #team (mention):"))
+        XCTAssertTrue(prefill.intent.contains("\"Need your call on the API contract\""))
+        XCTAssertTrue(prefill.intent.contains("Why it matters: Direct ask, blocking external commitment"))
+        XCTAssertEqual(prefill.secondaryLinks, [
+            TargetPrefillLink(externalRef: "slack:https://slack.com/archives/C300/p123", relation: "related")
+        ])
+    }
+
+    func testFromInbox_NoPermalink_NoAIReason() async throws {
+        let mgr = try Self.makeManagerSeededWith { db in
+            try TestDatabase.insertUser(db, id: "U011", name: "jane", displayName: "")
+            try TestDatabase.insertChannel(db, id: "C301", name: "design")
+            try TestDatabase.insertInboxItem(
+                db,
+                channelID: "C301",
+                senderUserID: "U011",
+                triggerType: "dm",
+                snippet: "ping",
+                permalink: ""
+            )
+        }
+        let item = try await mgr.dbPool.read { db in
+            try XCTUnwrap(try InboxItem.fetchOne(db, sql: "SELECT * FROM inbox_items LIMIT 1"))
+        }
+        let prefill = try await TargetPrefillBuilder.fromInbox(item, db: mgr)
+        XCTAssertTrue(prefill.secondaryLinks.isEmpty)
+        XCTAssertFalse(prefill.intent.contains("Why it matters:"))
+    }
+
     // MARK: - Helpers
 
     /// Creates a file-backed `DatabaseManager` (DatabasePool requires a path),
