@@ -116,7 +116,20 @@
 
 **Locked since:** 2026-04-27
 
-<!-- Contracts will be inserted here in subsequent commits. -->
+## INBOX-08 — Inbox does not re-spam the same item
+
+**Status:** Aspirational
+
+**Observable:** When an item was shown and I did not engage (no click, no feedback, no resolve), it does not climb back to the top of the feed each cycle. Once it has had its chance, it backs off — visibility decays even if the underlying signal repeats.
+
+**Why locked:** Without this, repeated high-priority items I am intentionally ignoring train me to stop looking at the feed at all (the iOS-Notifications-fatigue effect).
+
+**Test guards:** none yet — see Tracked gap.
+
+**Tracked gap:** Today's pinned-selector rewrites the set from scratch each cycle with no penalty for previously-shown-and-ignored items. Closing this gap requires (a) tracking a "last surfaced and ignored" timestamp on `inbox_items`, (b) feeding it to the pinned-selector AI prompt as a signal, and (c) a Go-side post-filter or weight decay. Implementation is a separate feature plan; for now this contract is documented intent.
+
+**Locked since:** 2026-04-27 (intent recorded; enforcement pending)
+
 
 ## Changelog
 
