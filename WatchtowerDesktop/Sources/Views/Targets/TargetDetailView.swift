@@ -127,11 +127,17 @@ struct TargetDetailView: View {
             }
         }
         .sheet(item: $promotingSubItem) { ctx in
+            let prefill = TargetPrefillBuilder.fromSubItem(
+                parent: target,
+                subItem: ctx.item,
+                index: ctx.index
+            )
             PromoteSubItemSheet(
                 parent: target,
                 subItem: ctx.item,
                 subItemIndex: ctx.index,
-                viewModel: viewModel
+                viewModel: viewModel,
+                prefilledIntent: prefill.intent
             )
         }
         .confirmationDialog(
@@ -204,26 +210,15 @@ struct TargetDetailView: View {
                 Spacer()
             }
 
-            ZStack(alignment: .topLeading) {
-                if editingText.isEmpty {
-                    Text("Target description")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 10)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $editingText)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .frame(minHeight: 44, maxHeight: 160)
-                    .focused($focusedField, equals: .text)
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            TextField("Target description", text: $editingText, axis: .vertical)
+                .font(.title3)
+                .fontWeight(.semibold)
+                .textFieldStyle(.plain)
+                .lineLimit(1...10)
+                .padding(10)
+                .focused($focusedField, equals: .text)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 12) {
                 statusLabel
