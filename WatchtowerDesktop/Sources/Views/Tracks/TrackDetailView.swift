@@ -495,12 +495,7 @@ struct TrackDetailView: View {
             }
             .buttonStyle(.bordered)
             .sheet(isPresented: $showCreateTarget) {
-                CreateTargetSheet(
-                    prefillText: track.text,
-                    prefillIntent: track.context,
-                    prefillSourceType: "track",
-                    prefillSourceID: String(track.id)
-                )
+                CreateTargetSheet(prefill: nil)
             }
 
             if track.isDismissed {

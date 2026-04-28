@@ -4,8 +4,7 @@ struct BriefingDetailView: View {
     let briefing: Briefing
     @Environment(AppState.self) private var appState
     @State private var showCreateTarget = false
-    @State private var targetPrefillText = ""
-    @State private var targetPrefillIntent = ""
+    @State private var targetPrefill: TargetPrefill?
     @State private var calendarEvents: [CalendarEvent] = []
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
@@ -25,12 +24,7 @@ struct BriefingDetailView: View {
             .padding()
         }
         .sheet(isPresented: $showCreateTarget) {
-            CreateTargetSheet(
-                prefillText: targetPrefillText,
-                prefillIntent: targetPrefillIntent,
-                prefillSourceType: "briefing",
-                prefillSourceID: String(briefing.id)
-            )
+            CreateTargetSheet(prefill: targetPrefill)
         }
         .onAppear {
             jiraConnected = JiraQueries.isConnected()
@@ -186,8 +180,7 @@ struct BriefingDetailView: View {
             HStack {
                 Spacer()
                 Button {
-                    targetPrefillText = item.text
-                    targetPrefillIntent = item.reason ?? ""
+                    targetPrefill = nil
                     showCreateTarget = true
                 } label: {
                     Label("Create target", systemImage: "plus.circle")
@@ -457,8 +450,7 @@ struct BriefingDetailView: View {
                         Spacer()
 
                         Button {
-                            targetPrefillText = item.text
-                            targetPrefillIntent = item.category ?? ""
+                            targetPrefill = nil
                             showCreateTarget = true
                         } label: {
                             Image(systemName: "plus.circle")

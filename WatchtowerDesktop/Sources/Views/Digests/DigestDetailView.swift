@@ -11,8 +11,7 @@ struct DigestDetailView: View {
     @State private var markReadError: String?
     @State private var digestTopics: [DigestTopic] = []
     @State private var showCreateTask = false
-    @State private var taskPrefillText = ""
-    @State private var taskPrefillSourceType = "digest"
+    @State private var targetPrefill: TargetPrefill?
     @State private var jiraIssues: [String: JiraIssue] = [:]
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
@@ -66,11 +65,7 @@ struct DigestDetailView: View {
             .padding()
         }
         .sheet(isPresented: $showCreateTask) {
-            CreateTargetSheet(
-                prefillText: taskPrefillText,
-                prefillSourceType: taskPrefillSourceType,
-                prefillSourceID: String(digest.id)
-            )
+            CreateTargetSheet(prefill: targetPrefill)
         }
         .navigationTitle(channelName.map { "#\($0)" } ?? "Digest")
         .task {
@@ -260,8 +255,7 @@ struct DigestDetailView: View {
                             .font(.headline)
                         Spacer()
                         Button {
-                            taskPrefillText = topic.title + (topic.summary.isEmpty ? "" : ": \(topic.summary)")
-                            taskPrefillSourceType = "digest"
+                            targetPrefill = nil
                             showCreateTask = true
                         } label: {
                             Image(systemName: "plus.circle")
@@ -439,8 +433,7 @@ struct DigestDetailView: View {
                             HStack {
                                 Spacer()
                                 Button {
-                                    taskPrefillText = decision.text
-                                    taskPrefillSourceType = "digest"
+                                    targetPrefill = nil
                                     showCreateTask = true
                                 } label: {
                                     Label("Create task", systemImage: "plus.circle")
