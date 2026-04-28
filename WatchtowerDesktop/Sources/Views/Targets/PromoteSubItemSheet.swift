@@ -36,7 +36,8 @@ struct PromoteSubItemSheet: View {
         subItem: TargetSubItem,
         subItemIndex: Int,
         viewModel: TargetsViewModel,
-        cliRunner: CLIRunnerProtocol? = nil
+        cliRunner: CLIRunnerProtocol? = nil,
+        prefilledIntent: String? = nil
     ) {
         self.parent = parent
         self.subItem = subItem
@@ -44,7 +45,8 @@ struct PromoteSubItemSheet: View {
         self.viewModel = viewModel
         self.cliRunner = cliRunner
         _text = State(initialValue: subItem.text)
-        _intent = State(initialValue: parent.intent)
+        let initialIntent = prefilledIntent ?? parent.intent
+        _intent = State(initialValue: initialIntent)
         _level = State(initialValue: parent.level)
         _priority = State(initialValue: parent.priority)
         _ownership = State(initialValue: parent.ownership)
@@ -52,7 +54,7 @@ struct PromoteSubItemSheet: View {
         let inheritedDueRaw = subItem.dueDate?.isEmpty == false ? subItem.dueDate : (parent.dueDate.isEmpty ? nil : parent.dueDate)
         _hasDueDate = State(initialValue: inheritedDueRaw != nil)
         _dueDate = State(initialValue: Target.parseDueDate(inheritedDueRaw ?? "") ?? Date())
-        _showIntent = State(initialValue: !parent.intent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        _showIntent = State(initialValue: !initialIntent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     var body: some View {
