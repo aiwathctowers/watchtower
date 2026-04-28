@@ -243,7 +243,7 @@ struct SidebarView: View {
                     recommendationCount: recCount,
                     activeTaskCount: taskCounts.active,
                     overdueTaskCount: taskCounts.overdue,
-                    inboxPendingCount: inboxCounts.pending,
+                    inboxPendingCount: inboxCounts.unread,
                     inboxHighPriorityCount: inboxCounts.highPriority
                 )
             }
