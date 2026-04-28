@@ -26,7 +26,10 @@ func seedInboxItem(t *testing.T, database *db.DB, senderUserID, channelID, trigg
 	return id
 }
 
-func TestLearner_MuteOnHighDismissRate(t *testing.T) {
+func TestInbox04_GradualMuteFromAccumulatedDismissals(t *testing.T) {
+	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// Implicit mute requires accumulated dismiss evidence, not a single click.
+	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
 	sender := "U1"
 	for i := 0; i < 10; i++ {
@@ -50,7 +53,10 @@ func TestLearner_MuteOnHighDismissRate(t *testing.T) {
 	}
 }
 
-func TestLearner_BelowThresholdNoRule(t *testing.T) {
+func TestInbox04_NoRuleBelowEvidenceThreshold(t *testing.T) {
+	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// Below the evidence threshold no rule is created — preserves gradual
+	// learning. Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
 	for i := 0; i < 4; i++ {
 		id := seedInboxItem(t, d, "U2", "C1", "mention")

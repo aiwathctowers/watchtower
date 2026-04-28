@@ -57,6 +57,22 @@
 
 **Locked since:** 2026-04-27
 
+## INBOX-04 — Inbox learns gradually, not by single click
+
+**Status:** Partial
+
+**Observable:** A single 👎 does not silence a source forever — it is one signal in a pool. Muting / boosting decisions emerge from accumulated evidence (explicit feedback **plus** implicit dismissals, response times, recency). Behavior shifts smoothly over time, like Spotify recommendations, not like a toggle.
+
+**Why locked:** A single-click kill switch makes users either afraid to give feedback ("I might over-mute") or distrustful when feedback doesn't bite ("I clicked once and nothing changed"). Gradual accumulation is the only model that earns trust at both ends.
+
+**Test guards (partial — implicit side):**
+- `internal/inbox/learner_test.go::TestInbox04_GradualMuteFromAccumulatedDismissals`
+- `internal/inbox/learner_test.go::TestInbox04_NoRuleBelowEvidenceThreshold`
+
+**Tracked gap:** Explicit feedback (`internal/inbox/feedback.go`) currently maps `(-1, never_show)` to weight `-1.0` instantly — a single-click kill switch contradicting this contract. Closing this gap requires reworking `SubmitFeedback` so explicit votes accumulate as evidence rather than setting final weight directly. Follow-up design doc to be authored.
+
+**Locked since:** 2026-04-27
+
 <!-- Contracts will be inserted here in subsequent commits. -->
 
 ## Changelog
