@@ -56,7 +56,10 @@ func TestPinnedSelector_MaxFive(t *testing.T) {
 	}
 }
 
-func TestPinnedSelector_AIFailureKeepsState(t *testing.T) {
+func TestInbox07_PinnedKeepsStateOnAIError(t *testing.T) {
+	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// AI error during pinned selection preserves the previous pinned set.
+	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
 	existing := seedInboxItem(t, d, "U1", "C1", "mention")
 	d.Exec(`UPDATE inbox_items SET item_class='actionable' WHERE id=?`, existing) //nolint:errcheck
@@ -75,7 +78,10 @@ func TestPinnedSelector_AIFailureKeepsState(t *testing.T) {
 	}
 }
 
-func TestPinnedSelector_InvalidJSONFallback(t *testing.T) {
+func TestInbox07_PinnedKeepsStateOnInvalidJSON(t *testing.T) {
+	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// Invalid JSON from AI preserves the previous pinned set.
+	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
 	id := seedInboxItem(t, d, "U1", "C1", "mention")
 	d.Exec(`UPDATE inbox_items SET item_class='actionable' WHERE id=?`, id) //nolint:errcheck

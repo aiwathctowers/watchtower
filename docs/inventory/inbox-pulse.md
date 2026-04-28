@@ -102,6 +102,20 @@
 
 **Locked since:** 2026-04-27
 
+## INBOX-07 — AI failure does not lose state
+
+**Status:** Enforced
+
+**Observable:** When the pinned-selection AI call errors out or returns unparseable JSON, the existing pinned items are preserved untouched until a future cycle succeeds. The feed does not blank out, items do not reshuffle, the user can keep working on whatever they were focused on.
+
+**Why locked:** Inbox is a "pulse" surface. A flapping AI call that periodically blanks pinned would teach the user to distrust the screen. Stability beats freshness when the alternative is chaos.
+
+**Test guards:**
+- `internal/inbox/pinned_selector_test.go::TestInbox07_PinnedKeepsStateOnAIError`
+- `internal/inbox/pinned_selector_test.go::TestInbox07_PinnedKeepsStateOnInvalidJSON`
+
+**Locked since:** 2026-04-27
+
 <!-- Contracts will be inserted here in subsequent commits. -->
 
 ## Changelog
