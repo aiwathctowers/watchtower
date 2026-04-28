@@ -59,19 +59,27 @@
 
 ## INBOX-04 — Inbox learns gradually, not by single click
 
-**Status:** Partial
+**Status:** Enforced
 
-**Observable:** A single 👎 does not silence a source forever — it is one signal in a pool. Muting / boosting decisions emerge from accumulated evidence (explicit feedback **plus** implicit dismissals, response times, recency). Behavior shifts smoothly over time, like Spotify recommendations, not like a toggle.
+**Observable:** A single 👎 does not silence a source forever — it is one signal in a pool. Muting / boosting decisions emerge from accumulated evidence (explicit feedback **plus** implicit dismissals, response times, recency). Behavior shifts smoothly over time, like Spotify recommendations, not like a toggle. The exception is the explicit "Never show me this" action, which is a deliberate one-click escape hatch and writes a `source='user_rule'` immediately.
 
-**Why locked:** A single-click kill switch makes users either afraid to give feedback ("I might over-mute") or distrustful when feedback doesn't bite ("I clicked once and nothing changed"). Gradual accumulation is the only model that earns trust at both ends.
+**Why locked:** A single-click kill switch makes users either afraid to give feedback ("I might over-mute") or distrustful when feedback doesn't bite ("I clicked once and nothing changed"). Gradual accumulation is the only model that earns trust at both ends. The escape hatch is an exception kept for cases where the user *really* means it — and is visible in the Learned tab as a manual rule.
 
-**Test guards (partial — implicit side):**
+**Test guards:**
 - `internal/inbox/learner_test.go::TestInbox04_GradualMuteFromAccumulatedDismissals`
 - `internal/inbox/learner_test.go::TestInbox04_NoRuleBelowEvidenceThreshold`
+- `internal/inbox/learner_test.go::TestInbox04_LearnerAggregatesExplicitWithImplicit`
+- `internal/inbox/learner_test.go::TestInbox04_LearnerNoRuleBelowCombinedThreshold`
+- `internal/inbox/learner_test.go::TestInbox04_LearnerPositiveBoostFromExplicit`
+- `internal/inbox/learner_test.go::TestInbox04_LearnerNeverShowExcludedFromPool`
+- `internal/inbox/feedback_test.go::TestInbox04_NeverShowStillInstantHardMute`
+- `internal/inbox/feedback_test.go::TestInbox04_SourceNoiseDoesNotCreateRule`
+- `internal/inbox/feedback_test.go::TestInbox04_WrongClassChangesItemButNotRule`
+- `internal/inbox/feedback_test.go::TestInbox04_WrongPriorityDoesNotCreateRule`
+- `internal/inbox/feedback_test.go::TestInbox04_PositiveFeedbackDoesNotCreateRule`
+- `internal/db/migration_test.go::TestMigrationV72_DropsLegacyExplicitFeedback`
 
-**Tracked gap:** Explicit feedback (`internal/inbox/feedback.go`) currently maps `(-1, never_show)` to weight `-1.0` instantly — a single-click kill switch contradicting this contract. Closing this gap requires reworking `SubmitFeedback` so explicit votes accumulate as evidence rather than setting final weight directly. Follow-up design doc to be authored.
-
-**Locked since:** 2026-04-27
+**Locked since:** 2026-04-28
 
 ## INBOX-05 — I can see and edit what Inbox has learned about me
 
@@ -134,3 +142,4 @@
 ## Changelog
 
 - 2026-04-27: file created with 8 contracts (INBOX-01..08). Five are Enforced (01, 02, 05, 06, 07), two are Partial (03, 04), one is Aspirational (08). Tracked gaps recorded inline on Partial/Aspirational entries.
+- 2026-04-28: INBOX-04 closed gap — explicit feedback now feeds into evidence pool via learner; never_show stays as one-click escape hatch (source='user_rule'). Migration v72 drops legacy source='explicit_feedback' rules.
