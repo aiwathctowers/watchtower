@@ -7,6 +7,9 @@ struct TrackDetailView: View {
     @Environment(AppState.self) private var appState
     @State private var chatVM: TrackChatViewModel?
     @State private var showCreateTarget = false
+    @State private var targetPrefill: TargetPrefill?
+    @State private var targetPrefillError: String?
+    @State private var isBuildingPrefill = false
     @State private var linkedTargets: [Target] = []
     @State private var jiraIssues: [JiraIssue] = []
 
@@ -488,14 +491,21 @@ struct TrackDetailView: View {
                 .buttonStyle(.borderedProminent)
             }
 
+            if let msg = targetPrefillError {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
             Button {
-                showCreateTarget = true
+                openCreateTarget()
             } label: {
                 Label("Create Target", systemImage: "scope")
             }
             .buttonStyle(.bordered)
+            .disabled(isBuildingPrefill)
             .sheet(isPresented: $showCreateTarget) {
-                CreateTargetSheet(prefill: nil)
+                CreateTargetSheet(prefill: targetPrefill)
             }
 
             if track.isDismissed {
@@ -821,6 +831,25 @@ struct TrackDetailView: View {
         case "reviewer": .purple
         case "neutral": .secondary
         default: .secondary
+        }
+    }
+
+    private func openCreateTarget() {
+        guard let db = appState.databaseManager else {
+            targetPrefillError = "Database not available"
+            return
+        }
+        Task { @MainActor in
+            isBuildingPrefill = true
+            defer { isBuildingPrefill = false }
+            do {
+                let pf = try await TargetPrefillBuilder.fromTrack(track, db: db)
+                targetPrefill = pf
+                targetPrefillError = nil
+                showCreateTarget = true
+            } catch {
+                targetPrefillError = "Failed to prepare prefill: \(error.localizedDescription)"
+            }
         }
     }
 }
