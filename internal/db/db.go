@@ -3634,6 +3634,7 @@ func backfillTrackChannelOrder(tx *sql.Tx) error {
 	if err != nil {
 		return fmt.Errorf("querying tracks: %w", err)
 	}
+	defer rows.Close()
 
 	type trackRow struct {
 		id               int
@@ -3644,12 +3645,10 @@ func backfillTrackChannelOrder(tx *sql.Tx) error {
 	for rows.Next() {
 		var tr trackRow
 		if err := rows.Scan(&tr.id, &tr.channelIDs, &tr.relatedDigestIDs); err != nil {
-			rows.Close()
 			return fmt.Errorf("scanning track: %w", err)
 		}
 		pending = append(pending, tr)
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating tracks: %w", err)
 	}
