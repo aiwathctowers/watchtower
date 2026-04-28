@@ -29,17 +29,17 @@ Today the five "create target from source" entry points pre-fill only `text` (an
   - `WatchtowerDesktop/Sources/Views/Briefings/BriefingDetailView.swift:27-34, 191-193`
   - `WatchtowerDesktop/Sources/Views/Digests/DigestDetailView.swift:69-74`
   - `WatchtowerDesktop/Sources/Views/Tracks/TrackDetailView.swift:492-506`
-  - `WatchtowerDesktop/Sources/Database/Queries/InboxQueries.swift:149-150` (Inbox-card → CreateTargetSheet path)
+  - `WatchtowerDesktop/Sources/Database/Queries/InboxQueries.swift:140-154` — `createTask(_:from:)` and `WatchtowerDesktop/Sources/ViewModels/InboxViewModel.swift:285-289` — `createTask(from:)`. Today inbox is a **one-click bypass**: clicking Create Task on an `InboxFeedView` row goes directly through `vm.createTask(from:)` → `InboxQueries.createTask(_:from:)`, which calls `TargetQueries.create(...)` itself with `text = item.snippet` and defaults for everything else, then runs `linkTarget(_:inboxID:targetID:)` to backfill `inbox_items.target_id`. **No `CreateTargetSheet` is ever opened.** This spec replaces that bypass with the same `CreateTargetSheet` flow used by briefing/digest/track.
   - `TargetDetailView` → `PromoteSubItemSheet` (sub-item promotion)
 
 ## Scope
 
 In scope:
 - Introduce a single `TargetPrefillBuilder` that consumes the DB and returns a `TargetPrefill` per source. Five builders, one structure, owned tests.
-- Replace `CreateTargetSheet`'s sprawl of `prefill*` parameters with `prefill: TargetPrefill?`.
+- Replace `CreateTargetSheet`'s sprawl of `prefill*` parameters with `prefill: TargetPrefill?`. Add an optional `onCreated: ((Int) -> Void)?` callback fired after a successful insert (the inbox callsite uses it to run `linkTarget(...)`).
 - Extend `PromoteSubItemSheet` to receive a precomputed `prefilledIntent` (so its intent is content-rich, not just `parent.intent`).
 - Extend `TargetQueries.create(...)` to accept `secondaryLinks: [TargetPrefillLink]` and write them in the same transaction as the target itself.
-- Update all five callsites to invoke the builder before opening the sheet.
+- Update all five callsites to invoke the builder before opening the sheet. Inbox is migrated from the current one-click bypass (`InboxQueries.createTask` + `InboxViewModel.createTask`) to the standard sheet flow; the old direct-create path is removed.
 
 Out of scope:
 - Any LLM call at form-open time. The existing "Extract with AI" button stays as is.
@@ -170,9 +170,14 @@ Current sprawl is replaced by a single optional prefill:
 ```swift
 struct CreateTargetSheet: View {
     var prefill: TargetPrefill? = nil
+    /// Fires after a successful insert (called with the new target id).
+    /// Used by inbox to backfill `inbox_items.target_id` via `InboxQueries.linkTarget`.
+    var onCreated: ((Int) -> Void)? = nil
     // ... rest of @State and body unchanged
 }
 ```
+
+`onCreated` is invoked at the end of `createTargetAndPromote()` (`CreateTargetSheet.swift:351`) right before `dismiss()`, with the value returned by `TargetQueries.create(...)`. It runs on `MainActor` because the sheet itself is. Existing callsites (briefing/digest/track/promote) pass `nil` and behave unchanged. Only the inbox callsite supplies a closure.
 
 `onAppear` body becomes:
 
@@ -225,7 +230,7 @@ Pattern across all five sites: existing direct prefill assignment is replaced by
 | `BriefingDetailView.swift:191-193` | `fromBriefingItem(item, briefing:, db:)` | Existing `targetPrefillText / targetPrefillIntent` `@State` is replaced by a single `targetPrefill: TargetPrefill?`. |
 | `DigestDetailView.swift:69-74` | `fromDigest(digest, topic: nil, db:)` | If/when the view supports per-topic create, pass the topic; not in this spec. |
 | `TrackDetailView.swift:492-506` | `fromTrack(track, db:)` | |
-| `InboxQueries.swift:149-150` (Inbox-card flow) | `fromInbox(item, db:)` | The actual sheet trigger lives in `InboxCardView` / `InboxFeedView`; the query helper just supplies data. The async builder call belongs in the view, not in the query helper. |
+| `InboxFeedView.swift:191` (the `onCreateTask` row callback) | `fromInbox(item, db:)` | The current `vm.createTask(from: item)` path is removed. The row callback now sets a `pendingInboxPrefill` `@State` on `InboxFeedView` after building the prefill, which triggers the `CreateTargetSheet`. The sheet's `onCreated` callback runs `try InboxQueries.linkTarget(_:inboxID:targetID:)` so `inbox_items.target_id` is still backfilled (single source of truth lives in InboxQueries.linkTarget; nothing else changes about it). `InboxQueries.createTask(_:from:)` and `InboxViewModel.createTask(from:)` are deleted along with their tests, since the only caller is gone. |
 | `TargetDetailView` → `PromoteSubItemSheet` | `fromSubItem(parent:, subItem:, index:)` (sync) | Pass the resulting `intent` as `prefilledIntent:` to the sheet. |
 
 ### 7. Error handling
@@ -248,6 +253,7 @@ Cases:
 8. `fromInbox` with empty `permalink` — `secondaryLinks` is empty.
 9. `fromSubItem` with parent that has 3 open siblings — sibling list is rendered; `parentID` is set.
 10. `TargetQueries.create(... secondaryLinks: [...])` — round-trip: assert exactly N rows inserted into `target_links`, and that an invalid `externalRef` (e.g. `"http://..."` ) is dropped, not persisted.
+11. The existing inbox-flow test in `WatchtowerDesktop/Tests/InboxTests.swift` (covers today's `InboxQueries.createTask`) is updated: the assertions move to a new test that verifies `TargetPrefillBuilder.fromInbox(...)` produces the expected prefill and that the linkage step works — i.e. given a target was inserted through the regular `TargetQueries.create` path, calling `InboxQueries.linkTarget(_:inboxID:targetID:)` correctly sets `inbox_items.target_id`. The old direct-create tests are deleted along with the function they were exercising.
 
 UI tests are not added in this spec. The change is mechanical at the callsites and the form itself does not change layout. Existing `CreateTargetSheet` smoke / build tests cover the rename of the sheet's parameter list.
 
@@ -258,3 +264,5 @@ UI tests are not added in this spec. The change is mechanical at the callsites a
 - **AttentionItem upstream type extension.** Today `AttentionItem.sourceType` is mapped to track / digest / inbox. If the briefing prompt ever emits a new upstream type (e.g., `meeting`), the `fromBriefingItem` switch will need a new branch. We log-and-fall-back to the briefing path on unknown types so the form keeps working.
 - **No localization yet.** All strings produced by the builder are hard-coded English. Consistent with the rest of the desktop UI; revisit when a String Catalog lands.
 - **The "Extract with AI" button is now slightly redundant for the source-prefilled case.** It still has value when the user pastes additional free-form text on top of the prefill, but expect product / UX feedback once this ships.
+- **`TestDatabase.swift` schema is hand-maintained and lags the production schema.** Its current `targets.source_type` CHECK omits `'track'`, `'digest'`, `'promoted_subitem'`. Builder unit tests do not insert into `targets` (they only build `TargetPrefill` structs), but the test for `TargetQueries.create(... secondaryLinks: ...)` does — it uses `source_type = 'inbox'` (which is in the CHECK list) to stay schema-clean. A separate sync of `TestDatabase.schema` to the production CHECK is desirable but out of scope here.
+- **Inbox UX shift.** Migrating inbox from one-click create to a sheet-based flow adds one click and one extra confirmation per item. This is a deliberate consistency choice; product to monitor whether it slows down high-volume users.
