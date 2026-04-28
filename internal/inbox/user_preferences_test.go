@@ -8,7 +8,7 @@ import (
 )
 
 func TestInbox03_UserPrefsRankedByRelevance(t *testing.T) {
-	// KILLER FEATURE INBOX-03 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-03 — see docs/inventory/inbox-pulse.md
 	// USER PREFERENCES block reaching AI prioritizes relevant rules.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)

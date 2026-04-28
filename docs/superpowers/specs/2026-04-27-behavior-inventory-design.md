@@ -1,4 +1,4 @@
-# Killer Features Inventory — Design
+# Behavior Inventory — Design
 
 **Date:** 2026-04-27
 **Status:** Design approved, ready for implementation plan
@@ -25,7 +25,7 @@ The owner needs an explicit, auditable list of these contracts per module, with 
 - Not a CI / governance enforcement system. The barrier is intentionally soft; rigor comes from visibility and the AI session protocol.
 - Not a comprehensive test plan. Inventory tests are guards, not coverage.
 - Not a replacement for `CLAUDE.md` project instructions. Inventory is referenced from `CLAUDE.md` but lives separately.
-- No automatic generation of inventory entries from code. Curation is a human (and assisted-by-AI) judgement call about what is killer vs incidental.
+- No automatic generation of inventory entries from code. Curation is a human (and assisted-by-AI) judgement call about what is essential vs incidental.
 
 ## Concept
 
@@ -59,7 +59,7 @@ Each `<module>.md` has three parts: header preamble, feature list, changelog.
 ### Header preamble
 
 ```markdown
-# Killer Features — Inbox Pulse
+# Behavior Inventory — Inbox Pulse
 
 > Each item below is a **behavioral contract** that must be preserved.
 > Modifying or weakening the protecting test requires explicit approval
@@ -100,7 +100,7 @@ feed and the "no inbox-zero pressure" promise dies.
 Fields:
 
 - **Observable** — what the user (or calling code) sees. 1–3 sentences in product language, not implementation.
-- **Why locked** — one sentence on why this is killer. Helps future reviewers judge whether the contract is still load-bearing.
+- **Why locked** — one sentence on why this contract matters. Helps future reviewers judge whether the contract is still load-bearing.
 - **Test guards** — file path + test function name. At least one. The test must fail if the behavior breaks.
 - **Locked since** — date the contract was added or last reformulated.
 
@@ -135,7 +135,7 @@ func TestInbox04_GradualLearningNotInstantMute(t *testing.T) { ... }
 func TestInbox05_LearnedTabExposesAllRules(t *testing.T) { ... }
 ```
 
-The `Inbox01_` prefix makes the killer-feature anchor greppable across the codebase:
+The `Inbox01_` prefix makes the behavior anchor greppable across the codebase:
 
 ```bash
 grep -rn "TestInbox0" internal/inbox/
@@ -149,7 +149,7 @@ The first lines inside each guard test:
 
 ```go
 func TestInbox01_DefaultClassByTrigger(t *testing.T) {
-    // KILLER FEATURE INBOX-01 — see docs/inventory/inbox-pulse.md
+    // BEHAVIOR INBOX-01 — see docs/inventory/inbox-pulse.md
     // Do not weaken or remove without explicit owner approval.
     ...
 }
@@ -163,7 +163,7 @@ For Desktop-side guards, the same pattern applies:
 
 ```swift
 func test_INBOX_01_two_tones_distinguished_in_feed() {
-    // KILLER FEATURE INBOX-01 — see docs/inventory/inbox-pulse.md
+    // BEHAVIOR INBOX-01 — see docs/inventory/inbox-pulse.md
     ...
 }
 ```
@@ -177,7 +177,7 @@ Three layered pointers ensure the AI assistant reaches the inventory regardless 
 A new top-level section in `CLAUDE.md`:
 
 ```markdown
-## Killer Features Inventory
+## Behavior Inventory
 
 Behavioral contracts that must not be modified without explicit owner
 approval are catalogued in `docs/inventory/`. Before touching code in
@@ -199,7 +199,7 @@ This section is loaded into every session via the `claudeMd` context block.
 Acts as the lookup table:
 
 ```markdown
-# Killer Features Inventory
+# Behavior Inventory
 
 This directory catalogs the behavioral contracts of each business module.
 Each entry is a guard against silent regression. Modifying any contract
@@ -284,14 +284,14 @@ Each module gets its own micro-design exercise (~30 min): owner + AI walk throug
 ## Open Questions
 
 - **Should `CLAUDE.md` reference the inventory pointer be at the top or bundled with other project notes?** Prefer top-level visibility, but defer to where the existing `CLAUDE.md` structure puts it most naturally during implementation.
-- **Should Swift killer-feature tests live in a separate target or alongside existing tests?** Default: alongside, with the comment marker. Revisit if Swift test counts grow disproportionately.
+- **Should Swift behavior tests live in a separate target or alongside existing tests?** Default: alongside, with the comment marker. Revisit if Swift test counts grow disproportionately.
 - **Targets module** — currently WIP on `feature/targets-ai-ui`. Inventory is added only after the feature stabilizes; otherwise the contracts churn.
 
 ## File / Module Touchpoints
 
 - `docs/inventory/README.md` — new
 - `docs/inventory/inbox-pulse.md` — new (pilot)
-- `CLAUDE.md` — extended with "Killer Features Inventory" section
+- `CLAUDE.md` — extended with "Behavior Inventory" section
 - `internal/inbox/*_test.go` — selective renames + comment markers; new tests for INBOX-03 (noise filtering) and INBOX-08 (anti-spam)
 - `WatchtowerDesktop/Sources/.../InboxTests/` — new tests for INBOX-01 and INBOX-05 if not already covered
 
@@ -300,6 +300,6 @@ Each module gets its own micro-design exercise (~30 min): owner + AI walk throug
 - `docs/inventory/README.md` exists with the protocol blurb and the module table (initially with one row: Inbox Pulse).
 - `docs/inventory/inbox-pulse.md` exists with all 8 contracts in the schema, each pointing to at least one passing guard test.
 - Every guard test follows the `Test<Module>NN_` naming convention and contains the comment-block marker.
-- `CLAUDE.md` contains the "Killer Features Inventory" section.
+- `CLAUDE.md` contains the "Behavior Inventory" section.
 - `make test` passes; renamed tests still cover their original assertions.
-- A grep for `KILLER FEATURE INBOX-` returns one match per active contract.
+- A grep for `BEHAVIOR INBOX-` returns one match per active contract.

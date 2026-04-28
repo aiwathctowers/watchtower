@@ -242,7 +242,7 @@ Tracked gap line is removed entirely. Changelog entry added: `2026-04-28: INBOX-
 - `feedback.go::SubmitFeedback` calls `UpsertLearnedRule` only in the `never_show` branch.
 - `docs/inventory/inbox-pulse.md` INBOX-04 entry has Status `Enforced`, no `Tracked gap` section, and a Changelog entry for the closure.
 - `make test` clean.
-- `git grep -n 'KILLER FEATURE INBOX-04'` returns at least 5 matches (one per new + existing guard test).
+- `git grep -n 'BEHAVIOR INBOX-04'` returns at least 5 matches (one per new + existing guard test).
 
 ## Open Questions
 

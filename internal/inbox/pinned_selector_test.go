@@ -57,7 +57,7 @@ func TestPinnedSelector_MaxFive(t *testing.T) {
 }
 
 func TestInbox07_PinnedKeepsStateOnAIError(t *testing.T) {
-	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-07 — see docs/inventory/inbox-pulse.md
 	// AI error during pinned selection preserves the previous pinned set.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -79,7 +79,7 @@ func TestInbox07_PinnedKeepsStateOnAIError(t *testing.T) {
 }
 
 func TestInbox07_PinnedKeepsStateOnInvalidJSON(t *testing.T) {
-	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-07 — see docs/inventory/inbox-pulse.md
 	// Invalid JSON from AI preserves the previous pinned set.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -93,7 +93,7 @@ func TestInbox07_PinnedKeepsStateOnInvalidJSON(t *testing.T) {
 }
 
 func TestInbox03_MutedSourcesNotPinned(t *testing.T) {
-	// KILLER FEATURE INBOX-03 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-03 — see docs/inventory/inbox-pulse.md
 	// Muted sources are filtered from pinned regardless of AI suggestion.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)

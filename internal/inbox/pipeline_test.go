@@ -118,7 +118,7 @@ func TestPipeline_Run_DetectDMs(t *testing.T) {
 }
 
 func TestInbox02_AutoResolveSlackOnUserReply(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User replies in Slack → mention/dm/thread_reply auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 	database := testDB(t)
@@ -489,7 +489,7 @@ func seedJiraComment(t *testing.T, d *db.DB, issueKey, authorID, body string, cr
 }
 
 func TestInbox02_AutoResolveJiraOnUserComment(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User comments on a Jira issue → jira_comment_mention auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -511,7 +511,7 @@ func TestInbox02_AutoResolveJiraOnUserComment(t *testing.T) {
 }
 
 func TestInbox02_AutoResolveCalendarOnUserRSVP(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User responds to a calendar invite → calendar_invite auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)

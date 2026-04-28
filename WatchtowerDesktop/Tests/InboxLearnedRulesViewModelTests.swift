@@ -48,7 +48,7 @@ final class InboxLearnedRulesViewModelTests: XCTestCase {
 
     @MainActor
     func test_INBOX_05_add_manual_rule() async throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab adds a manual rule that surfaces immediately.
         // Do not weaken or remove without explicit owner approval.
         let vm = InboxLearnedRulesViewModel(db: pool)
@@ -73,7 +73,7 @@ final class InboxLearnedRulesViewModelTests: XCTestCase {
 
     @MainActor
     func test_INBOX_05_remove_rule() async throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab removes a rule, persisted to DB.
         // Do not weaken or remove without explicit owner approval.
         try await pool.write { db in

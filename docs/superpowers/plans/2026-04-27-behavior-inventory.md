@@ -1,14 +1,14 @@
-# Killer Features Inventory — Implementation Plan
+# Behavior Inventory — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Establish the killer-features inventory infrastructure (`docs/inventory/`, AI session protocol in `CLAUDE.md`) and pilot it on Inbox Pulse with 8 contracts (INBOX-01..08), each with guard tests following the `TestInbox<NN>_*` naming convention and inline `// KILLER FEATURE INBOX-<NN>` comment markers.
+**Goal:** Establish the behavior inventory infrastructure (`docs/inventory/`, AI session protocol in `CLAUDE.md`) and pilot it on Inbox Pulse with 8 contracts (INBOX-01..08), each with guard tests following the `TestInbox<NN>_*` naming convention and inline `// BEHAVIOR INBOX-<NN>` comment markers.
 
 **Architecture:** Pure documentation + selective test renames + comment markers. No new tooling, no hooks, no CI gates. Each contract gets one entry in `docs/inventory/inbox-pulse.md` with a status field (`Enforced`, `Partial`, or `Aspirational`). Existing tests are renamed to fit the convention; gaps are documented as `Tracked gap:` lines for follow-up plans.
 
 **Tech Stack:** Markdown, Go `testing`, Swift XCTest. Standard `git` for atomic commits.
 
-**Spec reference:** `docs/superpowers/specs/2026-04-27-killer-features-inventory-design.md`.
+**Spec reference:** `docs/superpowers/specs/2026-04-27-behavior-inventory-design.md`.
 
 ---
 
@@ -18,7 +18,7 @@ Files created or modified by this plan:
 
 - **Create:** `docs/inventory/README.md` — index + protocol blurb.
 - **Create:** `docs/inventory/inbox-pulse.md` — 8 contracts + changelog.
-- **Modify:** `CLAUDE.md` — append `## Killer Features Inventory` section.
+- **Modify:** `CLAUDE.md` — append `## Behavior Inventory` section.
 - **Modify (rename + add comment marker):**
   - `internal/inbox/classifier_test.go` — rename 2 tests for INBOX-01.
   - `internal/inbox/pipeline_test.go` — rename 3 tests for INBOX-02.
@@ -43,7 +43,7 @@ The renames preserve original test bodies — only function names and a 2-line c
 - [ ] **Step 1: Create `docs/inventory/README.md` with the protocol blurb**
 
 ```markdown
-# Killer Features Inventory
+# Behavior Inventory
 
 This directory catalogs the **behavioral contracts** of each business module — the user-observable invariants that must not change without explicit owner approval.
 
@@ -68,14 +68,14 @@ There are no pre-commit hooks, CI gates, or codeowner enforcement. Protection re
 
 - Guard tests fail at `make test`.
 - Test name prefix (`TestInbox01_…`, `TestDigest03_…`) is greppable.
-- `// KILLER FEATURE …` comment markers show up in diff.
+- `// BEHAVIOR …` comment markers show up in diff.
 - AI assistant reads inventory before touching covered code.
 ```
 
 - [ ] **Step 2: Create `docs/inventory/inbox-pulse.md` skeleton**
 
 ```markdown
-# Killer Features — Inbox Pulse
+# Behavior Inventory — Inbox Pulse
 
 > Each item below is a **behavioral contract** that must be preserved.
 > Modifying or weakening the protecting test requires explicit approval
@@ -96,13 +96,13 @@ There are no pre-commit hooks, CI gates, or codeowner enforcement. Protection re
 - 2026-04-27: file created.
 ```
 
-- [ ] **Step 3: Append "Killer Features Inventory" section to `CLAUDE.md`**
+- [ ] **Step 3: Append "Behavior Inventory" section to `CLAUDE.md`**
 
 Read `CLAUDE.md` first to find the end. Append:
 
 ```markdown
 
-## Killer Features Inventory
+## Behavior Inventory
 
 Behavioral contracts that must not be modified without explicit owner approval are catalogued in `docs/inventory/`. Before touching code in any module covered by inventory, read the corresponding file and treat each entry as load-bearing.
 
@@ -121,7 +121,7 @@ Expected: success, no errors.
 ```bash
 git add docs/inventory/README.md docs/inventory/inbox-pulse.md CLAUDE.md
 git commit -m "$(cat <<'EOF'
-docs(inventory): scaffold killer features inventory + protocol
+docs(inventory): scaffold behavior inventory + protocol
 
 Adds docs/inventory/ with README protocol, empty inbox-pulse.md
 skeleton, and a CLAUDE.md pointer so AI sessions discover the
@@ -156,7 +156,7 @@ with:
 
 ```go
 func TestInbox01_DefaultClassByTrigger(t *testing.T) {
-	// KILLER FEATURE INBOX-01 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-01 — see docs/inventory/inbox-pulse.md
 	// Default class assignment per trigger_type. Do not weaken or remove
 	// without explicit owner approval.
 ```
@@ -173,7 +173,7 @@ with:
 
 ```go
 func TestInbox01_AINeverUpgrades(t *testing.T) {
-	// KILLER FEATURE INBOX-01 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-01 — see docs/inventory/inbox-pulse.md
 	// AI may downgrade actionable→ambient but never the reverse.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -212,7 +212,7 @@ git add internal/inbox/classifier_test.go docs/inventory/inbox-pulse.md
 git commit -m "$(cat <<'EOF'
 docs(inventory): INBOX-01 — two tones (actionable vs ambient)
 
-Renames 2 classifier tests to TestInbox01_* and adds KILLER FEATURE
+Renames 2 classifier tests to TestInbox01_* and adds BEHAVIOR
 markers. Adds INBOX-01 entry to inventory.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -241,7 +241,7 @@ Replace `func TestPipeline_Run_AutoResolveWithoutAI(t *testing.T) {` with:
 
 ```go
 func TestInbox02_AutoResolveSlackOnUserReply(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User replies in Slack → mention/dm/thread_reply auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -250,7 +250,7 @@ Replace `func TestAutoResolve_Jira_UserCommented(t *testing.T) {` with:
 
 ```go
 func TestInbox02_AutoResolveJiraOnUserComment(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User comments on a Jira issue → jira_comment_mention auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -259,7 +259,7 @@ Replace `func TestAutoResolve_Calendar_UserResponded(t *testing.T) {` with:
 
 ```go
 func TestInbox02_AutoResolveCalendarOnUserRSVP(t *testing.T) {
-	// KILLER FEATURE INBOX-02 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-02 — see docs/inventory/inbox-pulse.md
 	// User responds to a calendar invite → calendar_invite auto-resolves.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -299,7 +299,7 @@ git add internal/inbox/pipeline_test.go docs/inventory/inbox-pulse.md
 git commit -m "$(cat <<'EOF'
 docs(inventory): INBOX-02 — auto-resolve on user reply
 
-Renames 3 pipeline tests to TestInbox02_* and adds KILLER FEATURE
+Renames 3 pipeline tests to TestInbox02_* and adds BEHAVIOR
 markers. Slack/Jira/Calendar auto-resolve guards are now anchored
 to the inventory entry.
 
@@ -335,7 +335,7 @@ with:
 
 ```go
 func TestInbox03_MutedSourcesNotPinned(t *testing.T) {
-	// KILLER FEATURE INBOX-03 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-03 — see docs/inventory/inbox-pulse.md
 	// Muted sources are filtered from pinned regardless of AI suggestion.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -352,7 +352,7 @@ with:
 
 ```go
 func TestInbox03_UserPrefsRankedByRelevance(t *testing.T) {
-	// KILLER FEATURE INBOX-03 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-03 — see docs/inventory/inbox-pulse.md
 	// USER PREFERENCES block reaching AI prioritizes relevant rules.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -428,7 +428,7 @@ with:
 
 ```go
 func TestInbox04_GradualMuteFromAccumulatedDismissals(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Implicit mute requires accumulated dismiss evidence, not a single click.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -445,7 +445,7 @@ with:
 
 ```go
 func TestInbox04_NoRuleBelowEvidenceThreshold(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Below the evidence threshold no rule is created — preserves gradual
 	// learning. Do not weaken or remove without explicit owner approval.
 ```
@@ -523,7 +523,7 @@ with:
 
 ```swift
     func test_INBOX_05_add_manual_rule() async throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab adds a manual rule that surfaces immediately.
         // Do not weaken or remove without explicit owner approval.
 ```
@@ -540,7 +540,7 @@ with:
 
 ```swift
     func test_INBOX_05_remove_rule() async throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab removes a rule, persisted to DB.
         // Do not weaken or remove without explicit owner approval.
 ```
@@ -557,7 +557,7 @@ with:
 
 ```swift
     func test_INBOX_05_list_rules_ordered_by_weight() throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab lists rules ordered so the most impactful are visible first.
         // Do not weaken or remove without explicit owner approval.
 ```
@@ -598,7 +598,7 @@ git commit -m "$(cat <<'EOF'
 docs(inventory): INBOX-05 — Learned tab visibility & editability
 
 Renames 3 Swift tests covering the Learned tab's CRUD and ordering
-to test_INBOX_05_* with KILLER FEATURE markers.
+to test_INBOX_05_* with BEHAVIOR markers.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -630,7 +630,7 @@ with:
 
 ```go
 func TestInbox06_UserRuleProtectedFromImplicitOverwrite(t *testing.T) {
-	// KILLER FEATURE INBOX-06 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-06 — see docs/inventory/inbox-pulse.md
 	// source='user_rule' is never overwritten by the implicit learner.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -647,7 +647,7 @@ with:
 
 ```swift
     func test_INBOX_06_manual_rule_overrides_implicit() throws {
-        // KILLER FEATURE INBOX-06 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-06 — see docs/inventory/inbox-pulse.md
         // Manual rule upsert overrides an existing implicit rule on the same scope.
         // Do not weaken or remove without explicit owner approval.
 ```
@@ -721,7 +721,7 @@ with:
 
 ```go
 func TestInbox07_PinnedKeepsStateOnAIError(t *testing.T) {
-	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-07 — see docs/inventory/inbox-pulse.md
 	// AI error during pinned selection preserves the previous pinned set.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -738,7 +738,7 @@ with:
 
 ```go
 func TestInbox07_PinnedKeepsStateOnInvalidJSON(t *testing.T) {
-	// KILLER FEATURE INBOX-07 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-07 — see docs/inventory/inbox-pulse.md
 	// Invalid JSON from AI preserves the previous pinned set.
 	// Do not weaken or remove without explicit owner approval.
 ```
@@ -846,9 +846,9 @@ Expected: All `TestInbox<NN>_*` tests PASS (count should match: 2 + 3 + 2 + 2 + 
 Run: `cd WatchtowerDesktop && swift test --filter 'test_INBOX_'`
 Expected: 4 Swift tests PASS (3 for INBOX-05, 1 for INBOX-06).
 
-- [ ] **Step 3: Grep for KILLER FEATURE markers and verify count**
+- [ ] **Step 3: Grep for BEHAVIOR markers and verify count**
 
-Run: `grep -rn 'KILLER FEATURE INBOX-' internal/inbox/ WatchtowerDesktop/Tests/`
+Run: `grep -rn 'BEHAVIOR INBOX-' internal/inbox/ WatchtowerDesktop/Tests/`
 Expected: at least 16 marker lines (one per renamed test). Each `INBOX-NN` from 01..07 should appear at least once. INBOX-08 has no marker (aspirational).
 
 - [ ] **Step 4: Confirm `go build` and `go vet` clean**
@@ -895,7 +895,7 @@ EOF
 Print to the user:
 
 ```
-Inbox Pulse killer-feature inventory pilot complete.
+Inbox Pulse behavior inventory pilot complete.
 - File: docs/inventory/inbox-pulse.md
 - 8 contracts (5 Enforced, 2 Partial, 1 Aspirational)
 - 12 Go guard tests + 4 Swift guard tests renamed and marked

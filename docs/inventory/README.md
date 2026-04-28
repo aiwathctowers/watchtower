@@ -1,4 +1,4 @@
-# Killer Features Inventory
+# Behavior Inventory
 
 This directory catalogs the **behavioral contracts** of each business module — the user-observable invariants that must not change without explicit owner approval.
 
@@ -23,5 +23,5 @@ There are no pre-commit hooks, CI gates, or codeowner enforcement. Protection re
 
 - Guard tests fail at `make test`.
 - Test name prefix (`TestInbox01_…`, `TestDigest03_…`) is greppable.
-- `// KILLER FEATURE …` comment markers show up in diff.
+- `// BEHAVIOR …` comment markers show up in diff.
 - AI assistant reads inventory before touching covered code.

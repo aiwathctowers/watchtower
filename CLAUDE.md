@@ -19,7 +19,7 @@
 
 ---
 
-## Killer Features Inventory
+## Behavior Inventory
 
 Behavioral contracts that must not be modified without explicit owner approval are catalogued in `docs/inventory/`. Before touching code in any module covered by inventory, read the corresponding file and treat each entry as load-bearing.
 

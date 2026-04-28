@@ -6,7 +6,7 @@ import (
 )
 
 func TestInbox04_NeverShowStillInstantHardMute(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// never_show is the one-click escape hatch: creates source='user_rule'
 	// weight -1.0 instantly. Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -28,7 +28,7 @@ func TestInbox04_NeverShowStillInstantHardMute(t *testing.T) {
 }
 
 func TestInbox04_SourceNoiseDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, source_noise) writes only inbox_feedback; no learned-rule row.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -50,7 +50,7 @@ func TestInbox04_SourceNoiseDoesNotCreateRule(t *testing.T) {
 }
 
 func TestInbox04_WrongClassChangesItemButNotRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, wrong_class) flips THIS item to ambient (per-item correction)
 	// but does NOT create a learned rule. Do not weaken or remove without
 	// explicit owner approval.
@@ -76,7 +76,7 @@ func TestInbox04_WrongClassChangesItemButNotRule(t *testing.T) {
 }
 
 func TestInbox04_PositiveFeedbackDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (+1, "") writes only inbox_feedback; no boost rule until learner aggregates.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -112,7 +112,7 @@ func TestFeedback_FeedbackRowWritten(t *testing.T) {
 }
 
 func TestInbox04_WrongPriorityDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, wrong_priority) writes only inbox_feedback; no rule.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)

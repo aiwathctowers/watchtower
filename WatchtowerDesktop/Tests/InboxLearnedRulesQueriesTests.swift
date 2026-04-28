@@ -16,7 +16,7 @@ final class InboxLearnedRulesQueriesTests: XCTestCase {
     // MARK: - listAll
 
     func test_INBOX_05_list_rules_ordered_by_weight() throws {
-        // KILLER FEATURE INBOX-05 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-05 — see docs/inventory/inbox-pulse.md
         // Learned tab lists rules ordered so the most impactful are visible first.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -76,7 +76,7 @@ final class InboxLearnedRulesQueriesTests: XCTestCase {
     }
 
     func test_INBOX_06_manual_rule_overrides_implicit() throws {
-        // KILLER FEATURE INBOX-06 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-06 — see docs/inventory/inbox-pulse.md
         // Manual rule upsert overrides an existing implicit rule on the same scope.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -190,7 +190,7 @@ final class InboxFeedbackQueriesTests: XCTestCase {
     // MARK: - record — rule derivation: never_show
 
     func test_INBOX_04_record_never_show_creates_user_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, never_show) creates source='user_rule' weight=-1.0 instantly.
         // Do not weaken or remove without explicit owner approval.
         let (pool, item) = try makePool()
@@ -209,7 +209,7 @@ final class InboxFeedbackQueriesTests: XCTestCase {
     // MARK: - record — rule derivation: source_noise
 
     func test_INBOX_04_record_source_noise_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, source_noise) is audit-only; no immediate rule write.
         // Do not weaken or remove without explicit owner approval.
         let (pool, item) = try makePool()
@@ -224,7 +224,7 @@ final class InboxFeedbackQueriesTests: XCTestCase {
     // MARK: - record — rule derivation: wrong_class
 
     func test_INBOX_04_record_wrong_class_flips_item_no_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, wrong_class) flips item_class to ambient but writes no learned rule.
         // Do not weaken or remove without explicit owner approval.
         let (pool, item) = try makePool()
@@ -247,7 +247,7 @@ final class InboxFeedbackQueriesTests: XCTestCase {
     // MARK: - record — rule derivation: wrong_priority
 
     func test_INBOX_04_record_wrong_priority_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, wrong_priority) is audit-only; no immediate rule write.
         // Do not weaken or remove without explicit owner approval.
         let (pool, item) = try makePool()
@@ -262,7 +262,7 @@ final class InboxFeedbackQueriesTests: XCTestCase {
     // MARK: - record — rule derivation: positive rating
 
     func test_INBOX_04_record_positive_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (1, "") positive rating is audit-only; no immediate rule write.
         // Do not weaken or remove without explicit owner approval.
         let (pool, item) = try makePool()

@@ -1,4 +1,4 @@
-# Killer Features — Inbox Pulse
+# Behavior Inventory — Inbox Pulse
 
 > Each item below is a **behavioral contract** that must be preserved.
 > Modifying or weakening the protecting test requires explicit approval
@@ -128,4 +128,4 @@
 
 - 2026-04-27: file created with 8 contracts (INBOX-01..08). Five are Enforced (01, 02, 05, 06, 07), two are Partial (03, 04), one is Aspirational (08). Tracked gaps recorded inline on Partial/Aspirational entries.
 - 2026-04-28: INBOX-04 closed gap — explicit feedback now feeds into evidence pool via learner; never_show stays as one-click escape hatch (source='user_rule'). Migration v72 drops legacy source='explicit_feedback' rules.
-- 2026-04-28: INBOX-08 removed by owner — anti re-spam was Aspirational only, never implemented. Decision: not part of the product's killer-feature set. Re-introduce only if owner asks.
+- 2026-04-28: INBOX-08 removed by owner — anti re-spam was Aspirational only, never implemented. Decision: not part of the product's behavior set. Re-introduce only if owner asks.

@@ -823,10 +823,99 @@ func TestMigrationPreservesDataAcrossVersions(t *testing.T) {
 	assert.Len(t, tracks, 0)
 }
 
+// TestMigrationV71ReordersTrackChannelIDs verifies that the v71 backfill moves
+// the channel of the most recent related digest to channel_ids[0] for tracks
+// that accumulated multiple channels under the pre-v71 append-only merge.
+func TestMigrationV71ReordersTrackChannelIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "watchtower.db")
+
+	// Seed at the latest schema version, then roll user_version back to 70 so
+	// the v71 migration runs on the prepared data.
+	db1, err := Open(dbPath)
+	require.NoError(t, err)
+
+	require.NoError(t, db1.UpsertChannel(Channel{ID: "C_OLD", Name: "origin", Type: "public"}))
+	require.NoError(t, db1.UpsertChannel(Channel{ID: "C_NEW", Name: "current", Type: "public"}))
+
+	oldDigestID, err := db1.UpsertDigest(Digest{
+		ChannelID: "C_OLD", Type: "channel", PeriodFrom: 1000, PeriodTo: 2000,
+		Summary: "older", MessageCount: 1, Model: "test",
+	})
+	require.NoError(t, err)
+	newDigestID, err := db1.UpsertDigest(Digest{
+		ChannelID: "C_NEW", Type: "channel", PeriodFrom: 3000, PeriodTo: 4000,
+		Summary: "newer", MessageCount: 1, Model: "test",
+	})
+	require.NoError(t, err)
+
+	// Force created_at so newDigestID is unambiguously the freshest.
+	_, err = db1.Exec(
+		`UPDATE digests SET created_at = '2026-01-01T00:00:00Z' WHERE id = ?`, oldDigestID)
+	require.NoError(t, err)
+	_, err = db1.Exec(
+		`UPDATE digests SET created_at = '2026-04-01T00:00:00Z' WHERE id = ?`, newDigestID)
+	require.NoError(t, err)
+
+	relatedDigests := fmt.Sprintf("[%d,%d]", oldDigestID, newDigestID)
+	trackID, err := db1.UpsertTrack(Track{
+		Text:             "stale ordering",
+		Priority:         "medium",
+		ChannelIDs:       `["C_OLD","C_NEW"]`,
+		RelatedDigestIDs: relatedDigests,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db1.Close())
+
+	// Reset version to 70 so the v71 migration runs on reopen.
+	rawDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	rawDB.SetMaxOpenConns(1)
+	_, err = rawDB.Exec("PRAGMA user_version = 70")
+	require.NoError(t, err)
+	require.NoError(t, rawDB.Close())
+
+	db2, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db2.Close()
+
+	var version int
+	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&version))
+	assert.Equal(t, 72, version)
+
+	track, err := db2.GetTrackByID(int(trackID))
+	require.NoError(t, err)
+	assert.Equal(t, `["C_NEW","C_OLD"]`, track.ChannelIDs,
+		"v71 should move channel of most recent related digest to index 0")
+}
+
+// TestMigrationV71SkipsWhenNoTracksTable verifies that the v71 backfill is a
+// no-op when the tracks table is absent (minimal DBs created in early-version
+// migration tests).
+func TestMigrationV71SkipsWhenNoTracksTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "watchtower.db")
+
+	rawDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	rawDB.SetMaxOpenConns(1)
+	_, err = rawDB.Exec("PRAGMA user_version = 70")
+	require.NoError(t, err)
+	require.NoError(t, rawDB.Close())
+
+	db, err := Open(dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var version int
+	require.NoError(t, db.QueryRow("PRAGMA user_version").Scan(&version))
+	assert.Equal(t, 72, version)
+}
+
 // TestMigrationV72_DropsLegacyExplicitFeedback verifies migration v72 removes
 // any legacy inbox_learned_rules rows whose source is 'explicit_feedback'.
 //
-// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 // Migration v72 removes legacy source='explicit_feedback' rules.
 // Do not weaken or remove without explicit owner approval.
 func TestMigrationV72_DropsLegacyExplicitFeedback(t *testing.T) {

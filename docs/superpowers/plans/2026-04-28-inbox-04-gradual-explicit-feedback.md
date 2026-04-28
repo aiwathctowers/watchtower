@@ -38,7 +38,7 @@ Add at the end of `internal/db/migration_test.go`:
 
 ```go
 func TestMigrationV72_DropsLegacyExplicitFeedback(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Migration v72 removes legacy source='explicit_feedback' rules.
 	// Do not weaken or remove without explicit owner approval.
 	d, err := Open(":memory:")
@@ -205,7 +205,7 @@ with:
 
 ```go
 func TestInbox04_NeverShowStillInstantHardMute(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// never_show is the one-click escape hatch: creates source='user_rule'
 	// weight -1.0 instantly. Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -231,7 +231,7 @@ Replace `TestFeedback_SourceNoise_WeakerMute` with:
 
 ```go
 func TestInbox04_SourceNoiseDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, source_noise) writes only inbox_feedback; no learned-rule row.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -257,7 +257,7 @@ Replace `TestFeedback_WrongClass_DowngradesItem` with:
 
 ```go
 func TestInbox04_WrongClassChangesItemButNotRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, wrong_class) flips THIS item to ambient (per-item correction)
 	// but does NOT create a learned rule. Do not weaken or remove without
 	// explicit owner approval.
@@ -287,7 +287,7 @@ Replace `TestFeedback_PositiveBoost` with:
 
 ```go
 func TestInbox04_PositiveFeedbackDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (+1, "") writes only inbox_feedback; no boost rule until learner
 	// aggregates. Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -313,7 +313,7 @@ Add a new test for `wrong_priority`:
 
 ```go
 func TestInbox04_WrongPriorityDoesNotCreateRule(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// (-1, wrong_priority) writes only inbox_feedback; no rule.
 	// Do not weaken or remove without explicit owner approval.
 	d := newTestDB(t)
@@ -402,8 +402,8 @@ learner aggregates them. never_show keeps its instant effect but
 now writes source='user_rule' to align with the manual-rule path.
 wrong_class still flips the item's class (per-item correction).
 
-Renames feedback tests to TestInbox04_* convention with KILLER
-FEATURE markers.
+Renames feedback tests to TestInbox04_* convention with BEHAVIOR
+INBOX-04 markers.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -424,7 +424,7 @@ Append to `internal/inbox/learner_test.go` (after the existing `TestLearner_*` a
 
 ```go
 func TestInbox04_LearnerAggregatesExplicitWithImplicit(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Unified pool: implicit dismissals + explicit (-1, !never_show) feedback
 	// together drive source_mute creation at threshold.
 	// Do not weaken or remove without explicit owner approval.
@@ -458,7 +458,7 @@ func TestInbox04_LearnerAggregatesExplicitWithImplicit(t *testing.T) {
 }
 
 func TestInbox04_LearnerNoRuleBelowCombinedThreshold(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Pool below 5 events does not produce a rule even when 100% negative.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -478,7 +478,7 @@ func TestInbox04_LearnerNoRuleBelowCombinedThreshold(t *testing.T) {
 }
 
 func TestInbox04_LearnerPositiveBoostFromExplicit(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// 5 explicit (+1) feedback rows over 30d, no negatives → source_boost +0.7.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -504,7 +504,7 @@ func TestInbox04_LearnerPositiveBoostFromExplicit(t *testing.T) {
 }
 
 func TestInbox04_LearnerNeverShowExcludedFromPool(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// inbox_feedback rows with reason='never_show' are NOT counted in the
 	// learner's negative pool — never_show already produced a user_rule and
 	// must not double-count. Do not weaken or remove without explicit owner approval.
@@ -869,7 +869,7 @@ Replace `testRecordNeverShowCreatesMuteRuleWeight1` with:
 
 ```swift
     func test_INBOX_04_record_never_show_creates_user_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, never_show) creates source='user_rule' weight=-1.0 instantly.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -891,7 +891,7 @@ Replace `testRecordSourceNoiseCreatesMuteRuleWeight08` with:
 
 ```swift
     func test_INBOX_04_record_source_noise_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, source_noise) writes only audit row; no learned rule.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -908,7 +908,7 @@ Replace `testRecordWrongClassSetsAmbientAndCreatesDowngradeRule` with:
 
 ```swift
     func test_INBOX_04_record_wrong_class_flips_item_no_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, wrong_class) flips THIS item to ambient; no learned rule.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -930,7 +930,7 @@ Replace `testRecordWrongPriorityCreatesDowngradeRuleOnSender` with:
 
 ```swift
     func test_INBOX_04_record_wrong_priority_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (-1, wrong_priority) writes only audit row; no learned rule.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -947,7 +947,7 @@ Replace `testRecordPositiveRatingCreatesBoostRule` with:
 
 ```swift
     func test_INBOX_04_record_positive_does_not_create_rule() throws {
-        // KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+        // BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
         // (+1, "") writes only audit row; no boost rule until learner aggregates.
         // Do not weaken or remove without explicit owner approval.
         let pool = try makePool()
@@ -984,8 +984,8 @@ INBOX-04 — Swift InboxFeedbackQueries.record now matches Go: only
 (-1, never_show) writes a learned rule (source='user_rule'); other
 ratings only insert audit rows. wrong_class still flips item class.
 
-Renames Swift feedback tests to test_INBOX_04_record_* with KILLER
-FEATURE markers.
+Renames Swift feedback tests to test_INBOX_04_record_* with BEHAVIOR
+INBOX-04 markers.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1077,7 +1077,7 @@ Expected: full suite PASS.
 
 - [ ] **Step 4: Grep INBOX-04 markers**
 
-Run: `grep -rn 'KILLER FEATURE INBOX-04' internal/ WatchtowerDesktop/Tests/`
+Run: `grep -rn 'BEHAVIOR INBOX-04' internal/ WatchtowerDesktop/Tests/`
 Expected: ≥ 12 marker lines (one per renamed/added test).
 
 - [ ] **Step 5: Build & vet**
@@ -1096,7 +1096,7 @@ INBOX-04 gap closed.
 - Migration v72 drops legacy source='explicit_feedback' rules.
 - Swift mirror updated; 5 Swift guard tests renamed to test_INBOX_04_record_*.
 - Inventory: INBOX-04 promoted from Partial to Enforced. Tracked gap removed.
-- 12+ KILLER FEATURE INBOX-04 markers; all tests pass.
+- 12+ BEHAVIOR INBOX-04 markers; all tests pass.
 
 Next: optional INBOX-08 (anti re-spam, Aspirational) — separate plan.
 ```

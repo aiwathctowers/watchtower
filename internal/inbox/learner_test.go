@@ -27,7 +27,7 @@ func seedInboxItem(t *testing.T, database *db.DB, senderUserID, channelID, trigg
 }
 
 func TestInbox04_GradualMuteFromAccumulatedDismissals(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Implicit mute requires accumulated dismiss evidence, not a single click.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -54,7 +54,7 @@ func TestInbox04_GradualMuteFromAccumulatedDismissals(t *testing.T) {
 }
 
 func TestInbox04_NoRuleBelowEvidenceThreshold(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Below the evidence threshold no rule is created — preserves gradual
 	// learning. Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -70,7 +70,7 @@ func TestInbox04_NoRuleBelowEvidenceThreshold(t *testing.T) {
 }
 
 func TestInbox06_UserRuleProtectedFromImplicitOverwrite(t *testing.T) {
-	// KILLER FEATURE INBOX-06 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-06 — see docs/inventory/inbox-pulse.md
 	// source='user_rule' is never overwritten by the implicit learner.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -111,7 +111,7 @@ func TestLearner_ChannelMute(t *testing.T) {
 }
 
 func TestInbox04_LearnerAggregatesExplicitWithImplicit(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Unified pool: implicit dismissals + explicit (-1, !never_show) feedback
 	// together drive source_mute creation at threshold.
 	// Do not weaken or remove without explicit owner approval.
@@ -145,7 +145,7 @@ func TestInbox04_LearnerAggregatesExplicitWithImplicit(t *testing.T) {
 }
 
 func TestInbox04_LearnerNoRuleBelowCombinedThreshold(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// Pool below 5 events does not produce a rule even when 100% negative.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -165,7 +165,7 @@ func TestInbox04_LearnerNoRuleBelowCombinedThreshold(t *testing.T) {
 }
 
 func TestInbox04_LearnerPositiveBoostFromExplicit(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// 5 explicit (+1) feedback rows over 30d, no negatives → source_boost +0.7.
 	// Do not weaken or remove without explicit owner approval.
 	d := testDB(t)
@@ -191,7 +191,7 @@ func TestInbox04_LearnerPositiveBoostFromExplicit(t *testing.T) {
 }
 
 func TestInbox04_LearnerNeverShowExcludedFromPool(t *testing.T) {
-	// KILLER FEATURE INBOX-04 — see docs/inventory/inbox-pulse.md
+	// BEHAVIOR INBOX-04 — see docs/inventory/inbox-pulse.md
 	// inbox_feedback rows with reason='never_show' are NOT counted in the
 	// learner's negative pool — never_show already produced a user_rule and
 	// must not double-count. Do not weaken or remove without explicit owner approval.
