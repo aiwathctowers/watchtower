@@ -146,8 +146,9 @@ struct DayPlanTimelineView: View {
                     .padding(.leading, 20)
                 }
             }
-            if !event.description.isEmpty {
-                Text(event.description)
+            let plain = event.plainDescription
+            if !plain.isEmpty {
+                Text(plain)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(4)

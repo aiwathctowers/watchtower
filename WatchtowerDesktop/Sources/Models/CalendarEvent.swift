@@ -122,6 +122,37 @@ struct CalendarEvent: FetchableRecord, Identifiable, Equatable {
         return startDate > now && startDate <= now.addingTimeInterval(3600)
     }
 
+    // MARK: - Description
+
+    var plainDescription: String {
+        Self.stripHTML(description)
+    }
+
+    static func stripHTML(_ input: String) -> String {
+        guard !input.isEmpty else { return "" }
+        var s = input
+        s = s.replacingOccurrences(of: "(?i)<\\s*br\\s*/?\\s*>", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "(?i)</\\s*p\\s*>", with: "\n\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "(?i)</\\s*div\\s*>", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "(?i)</\\s*li\\s*>", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "(?i)<\\s*hr\\s*/?\\s*>", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let entities: [String: String] = [
+            "&nbsp;": " ",
+            "&amp;": "&",
+            "&lt;": "<",
+            "&gt;": ">",
+            "&quot;": "\"",
+            "&#39;": "'",
+            "&apos;": "'",
+        ]
+        for (k, v) in entities {
+            s = s.replacingOccurrences(of: k, with: v)
+        }
+        s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Display
 
     var formattedTimeRange: String {
