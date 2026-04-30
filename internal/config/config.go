@@ -147,8 +147,17 @@ type Config struct {
 	Analysis        AnalysisConfig              `mapstructure:"analysis"`
 	DayPlan         DayPlanConfig               `mapstructure:"day_plan"`
 	Targets         TargetsConfig               `mapstructure:"targets"`
+	DB              DBConfig                    `mapstructure:"db"`
 	ClaudePath      string                      `mapstructure:"claude_path"`
 	CodexPath       string                      `mapstructure:"codex_path"`
+}
+
+// DBConfig captures database-runtime state that the binary tracks across
+// installs. Currently only schema_format, bumped when the migration engine
+// is replaced (legacy PRAGMA → goose). The runtime triggers a one-shot
+// upgrade when the on-disk value is below db.CurrentSchemaFormat.
+type DBConfig struct {
+	SchemaFormat int `mapstructure:"schema_format"`
 }
 
 // Load reads config from the given path, binds env vars, and returns the config.
@@ -199,6 +208,11 @@ func Load(configPath string) (*Config, error) {
 	v.SetDefault("targets.resolver.jira_enabled", DefaultTargetsResolverJiraEnabled)
 	v.SetDefault("targets.resolver.mcp_timeout_seconds", DefaultTargetsResolverMCPTimeoutSeconds)
 	v.SetDefault("targets.resolver.active_snapshot_limit", DefaultTargetsResolverActiveSnapshotLimit)
+	// db.schema_format defaults to 1 (legacy PRAGMA-based) so that any
+	// existing install triggers the one-shot upgrade on first run of the
+	// goose-based binary. cmd/root.go bumps it to db.CurrentSchemaFormat
+	// after RunSchemaUpgrade succeeds.
+	v.SetDefault("db.schema_format", 1)
 	// Config file
 	v.SetConfigFile(configPath)
 
