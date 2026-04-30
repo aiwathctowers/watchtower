@@ -1,0 +1,82 @@
+# Watchtower architectural rules
+# Checked by `sentrux check .` (CI-friendly, exits 0/1).
+# Strategy: only constraints we can validate by hand. No multi-tier layers
+# (sentrux's layer_direction has inverted semantics for our use case).
+
+[constraints]
+max_cycles = 0       # no circular import deps (already true: acyclicity=10000)
+max_cc = 50          # tolerate today's hot spots; tighten as we refactor
+max_fn_lines = 400   # accommodates internal/db/db.go:migrate (huge SQL switch)
+no_god_files = false # 11 god-files exist today; revisit after refactor
+
+# ─────────────── Hard boundaries ───────────────
+# "You must never do this." Each rule should be obviously true.
+
+# Go: data layer must not reach upward
+[[boundaries]]
+from = "internal/db/*"
+to = "cmd/*"
+reason = "Data layer must not depend on CLI commands"
+
+[[boundaries]]
+from = "internal/db/*"
+to = "internal/daemon/*"
+reason = "Data layer must not depend on daemon/runtime"
+
+[[boundaries]]
+from = "internal/db/*"
+to = "internal/sync/*"
+reason = "Data layer must not depend on sync orchestration"
+
+# Go: domain modules must not depend on CLI
+[[boundaries]]
+from = "internal/ai/*"
+to = "cmd/*"
+reason = "Domain logic must not depend on CLI"
+
+[[boundaries]]
+from = "internal/slack/*"
+to = "cmd/*"
+reason = "Domain logic must not depend on CLI"
+
+[[boundaries]]
+from = "internal/digest/*"
+to = "cmd/*"
+reason = "Pipeline must not depend on CLI"
+
+[[boundaries]]
+from = "internal/tracks/*"
+to = "cmd/*"
+reason = "Pipeline must not depend on CLI"
+
+[[boundaries]]
+from = "internal/inbox/*"
+to = "cmd/*"
+reason = "Pipeline must not depend on CLI"
+
+[[boundaries]]
+from = "internal/briefing/*"
+to = "cmd/*"
+reason = "Pipeline must not depend on CLI"
+
+# Swift: Views go through ViewModels for DB access
+[[boundaries]]
+from = "WatchtowerDesktop/Sources/Views/*"
+to = "WatchtowerDesktop/Sources/Database/*"
+reason = "Views must access the database via ViewModels, not directly"
+
+# Swift: Models are pure data — no upward dependencies
+[[boundaries]]
+from = "WatchtowerDesktop/Sources/Models/*"
+to = "WatchtowerDesktop/Sources/ViewModels/*"
+reason = "Models must not depend on ViewModels"
+
+[[boundaries]]
+from = "WatchtowerDesktop/Sources/Models/*"
+to = "WatchtowerDesktop/Sources/Views/*"
+reason = "Models must not depend on Views"
+
+[[boundaries]]
+from = "WatchtowerDesktop/Sources/Models/*"
+to = "WatchtowerDesktop/Sources/Services/*"
+reason = "Models must not depend on Services"

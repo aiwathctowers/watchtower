@@ -42,6 +42,9 @@ cert
 # User config (contains tokens)
 config.yaml
 
+# Sentrux runtime artifacts (rules.toml is committed; baseline is local)
+.sentrux/baseline.json
+
 # Release artifacts
 dist/
 
