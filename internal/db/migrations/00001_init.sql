@@ -1009,6 +1009,12 @@ CREATE TABLE IF NOT EXISTS day_plan_items (
 CREATE INDEX IF NOT EXISTS idx_day_plan_items_plan ON day_plan_items(day_plan_id);
 CREATE INDEX IF NOT EXISTS idx_day_plan_items_source ON day_plan_items(source_type, source_id);
 
+
+-- Stamp PRAGMA user_version so the Swift Desktop schema-sanity check
+-- (requires >= 3) passes on fresh installs. Goose itself tracks state in
+-- goose_db_version; this PRAGMA is only a cross-binary signal.
+PRAGMA user_version = 73;
+
 -- +goose Down
 -- Baseline drop is rarely needed; reverses every CREATE in dependency-safe order.
 DROP TRIGGER IF EXISTS messages_au;

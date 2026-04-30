@@ -15,8 +15,11 @@ import (
 //   - returns nil immediately if the DB has already been transitioned
 //     (goose_db_version table exists) — fully idempotent
 //   - returns nil if PRAGMA user_version == 0 (fresh DB, goose handles it)
-//   - otherwise creates goose_db_version, marks the baseline as applied,
-//     and zeroes PRAGMA user_version (now unused)
+//   - otherwise creates goose_db_version and marks the baseline as applied
+//
+// PRAGMA user_version is preserved on the legacy value: the Swift Desktop
+// app uses it as a "is the schema usable" guard (requires >= 3) and
+// resetting it would lock the Desktop out of an otherwise-fine database.
 //
 // Caller is responsible for invoking this once per startup before any
 // db.Open() call when config.DB.SchemaFormat < CurrentSchemaFormat.
@@ -66,8 +69,8 @@ func RunSchemaUpgrade(dbPath string) error {
 	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (1, 1)`); err != nil {
 		return fmt.Errorf("marking baseline applied: %w", err)
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 0`); err != nil {
-		return fmt.Errorf("resetting user_version: %w", err)
-	}
+	// Note: PRAGMA user_version is NOT reset — Swift Desktop uses it as a
+	// schema-version sanity check (requires >= 3) and zeroing it locks
+	// the desktop out. Goose tracks state in goose_db_version instead.
 	return tx.Commit()
 }
