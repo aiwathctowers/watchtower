@@ -47,6 +47,13 @@ func TestUpsertTrack_Update(t *testing.T) {
 	assert.Equal(t, "New text", track.Text)
 	assert.Equal(t, "high", track.Priority)
 	assert.True(t, track.HasUpdates)
+
+	// BEHAVIOR TRACKS-06: manual upsert with ID snapshots prior state.
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "Old text", states[0].Text)
+	assert.Equal(t, "manual", states[0].Source)
 }
 
 func TestGetTracks_Filters(t *testing.T) {
@@ -227,6 +234,13 @@ func TestUpdateTrackFromExtraction(t *testing.T) {
 	// Digest IDs should be merged: 1 + 2
 	assert.Contains(t, track.RelatedDigestIDs, "1")
 	assert.Contains(t, track.RelatedDigestIDs, "2")
+
+	// BEHAVIOR TRACKS-06: extraction update snapshots prior narrative state.
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "Original task", states[0].Text)
+	assert.Equal(t, "extraction", states[0].Source)
 }
 
 func TestFindTracksByFingerprint(t *testing.T) {
@@ -345,4 +359,205 @@ func TestMarkTrackRead_CascadeDigests(t *testing.T) {
 	digest, err := db.GetDigestByID(int(digestID))
 	require.NoError(t, err)
 	assert.True(t, digest.ReadAt.Valid)
+}
+
+// --- TRACKS-06: track state history guards ---
+
+// BEHAVIOR TRACKS-06: snapshot is written before extraction overwrites narrative fields.
+func TestTracks06_StateSnapshotOnExtractionUpdate(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{
+		Text: "Original text", Context: "Original context",
+		Priority: "medium", Category: "task",
+	})
+	require.NoError(t, err)
+
+	// Freshly inserted tracks have no history.
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 0)
+
+	_, err = db.UpdateTrackFromExtraction(int(id), Track{
+		Text: "Updated text", Context: "Updated context",
+		Priority: "high", Category: "task",
+		Model: "haiku-4-5", PromptVersion: 7,
+	})
+	require.NoError(t, err)
+
+	states, err = db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "Original text", states[0].Text)
+	assert.Equal(t, "Original context", states[0].Context)
+	assert.Equal(t, "medium", states[0].Priority)
+	assert.Equal(t, "extraction", states[0].Source)
+}
+
+// BEHAVIOR TRACKS-06: identical narrative re-extraction does NOT write a snapshot.
+func TestTracks06_NoSnapshotWhenNarrativeUnchanged(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{
+		Text: "Same", Context: "Same",
+		Priority: "medium", Category: "task",
+	})
+	require.NoError(t, err)
+
+	// Re-extract identical narrative; only model + tokens differ.
+	_, err = db.UpdateTrackFromExtraction(int(id), Track{
+		Text: "Same", Context: "Same",
+		Priority: "medium", Category: "task",
+		Model: "different-model", InputTokens: 999,
+	})
+	require.NoError(t, err)
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 0, "no snapshot when narrative unchanged")
+}
+
+// BEHAVIOR TRACKS-06: manual priority change snapshots prior state with source='manual'.
+func TestTracks06_StateSnapshotOnManualPriorityChange(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{Text: "task", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateTrackPriority(int(id), "high"))
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "medium", states[0].Priority)
+	assert.Equal(t, "manual", states[0].Source)
+
+	// No-op repeat: setting the same priority should not snapshot.
+	require.NoError(t, db.UpdateTrackPriority(int(id), "high"))
+	states, err = db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 1, "no-op priority update should not snapshot")
+}
+
+// BEHAVIOR TRACKS-06: manual ownership change snapshots prior state with source='manual'.
+func TestTracks06_StateSnapshotOnManualOwnershipChange(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{
+		Text: "task", Ownership: "mine",
+		Priority: "medium", Category: "task",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateTrackOwnership(int(id), "delegated"))
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "mine", states[0].Ownership)
+	assert.Equal(t, "manual", states[0].Source)
+}
+
+// BEHAVIOR TRACKS-06: manual sub_items change snapshots prior state with source='manual'.
+func TestTracks06_StateSnapshotOnManualSubItemsChange(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{
+		Text: "task", SubItems: `[]`,
+		Priority: "medium", Category: "task",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateTrackSubItems(int(id), `[{"text":"step 1","done":false}]`))
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "[]", states[0].SubItems)
+	assert.Equal(t, "manual", states[0].Source)
+}
+
+// BEHAVIOR TRACKS-06: full update via UpsertTrack(ID>0) snapshots with source='manual'.
+func TestTracks06_StateSnapshotOnUpsertWithID(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{
+		Text: "Original", Context: "v1",
+		Priority: "low", Category: "task",
+	})
+	require.NoError(t, err)
+
+	_, err = db.UpsertTrack(Track{
+		ID: int(id), Text: "Rewritten", Context: "v2",
+		Priority: "high", Category: "task",
+	})
+	require.NoError(t, err)
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "Original", states[0].Text)
+	assert.Equal(t, "v1", states[0].Context)
+	assert.Equal(t, "low", states[0].Priority)
+	assert.Equal(t, "manual", states[0].Source)
+}
+
+// BEHAVIOR TRACKS-06: brand-new tracks (insert path) have no history row.
+func TestTracks06_NoSnapshotOnInsert(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{Text: "fresh", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 0)
+}
+
+// BEHAVIOR TRACKS-06: history is capped at 30 most recent rows per track.
+func TestTracks06_HistoryCapAt30(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{Text: "task", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+
+	// Alternate between two distinct values to guarantee a real change every step.
+	priorities := []string{"high", "low"}
+	for i := 0; i < 35; i++ {
+		require.NoError(t, db.UpdateTrackPriority(int(id), priorities[i%2]))
+	}
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 30, "history is capped at 30 most recent rows")
+}
+
+// BEHAVIOR TRACKS-06: GetTrackStates returns rows newest first.
+func TestTracks06_GetTrackStatesOrdersDescByCreatedAt(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{Text: "task", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateTrackPriority(int(id), "high"))   // snapshot of: medium
+	require.NoError(t, db.UpdateTrackPriority(int(id), "low"))    // snapshot of: high
+	require.NoError(t, db.UpdateTrackPriority(int(id), "medium")) // snapshot of: low
+
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 3)
+	// Newest first → low, high, medium.
+	assert.Equal(t, "low", states[0].Priority)
+	assert.Equal(t, "high", states[1].Priority)
+	assert.Equal(t, "medium", states[2].Priority)
+}
+
+// BEHAVIOR TRACKS-06: deleting a track cascades and removes its history rows.
+func TestTracks06_HistoryCascadesOnTrackDelete(t *testing.T) {
+	db := openTestDB(t)
+	id, err := db.UpsertTrack(Track{Text: "task", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+
+	require.NoError(t, db.UpdateTrackPriority(int(id), "high"))
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+
+	_, err = db.Exec("DELETE FROM tracks WHERE id = ?", id)
+	require.NoError(t, err)
+
+	states, err = db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	assert.Len(t, states, 0, "history cascades when parent track deleted")
 }

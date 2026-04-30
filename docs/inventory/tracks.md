@@ -139,19 +139,32 @@ When the AI re-extracts a track I've already read and there's actually new conte
 
 ## TRACKS-06 — Re-extraction never narrows history
 
-**Status:** Partial
+**Status:** Enforced
 
-**Observable — channel/digest origins (Enforced):** When a track is updated by extraction, its `channel_ids` and `related_digest_ids` arrays grow — they're merged with the new values placed first, deduped against existing values. A track that originally surfaced in `#backend` and later resurfaces in `#frontend` ends up with both channels recorded; the UI's "Open in Slack" picks the freshest channel (index 0 of merged), but the historical channel is still there for context. Same for digest IDs — the chain back to source content is never trimmed.
+**Observable — channel/digest origins:** When a track is updated by extraction, its `channel_ids` and `related_digest_ids` arrays grow — they're merged with the new values placed first, deduped against existing values. A track that originally surfaced in `#backend` and later resurfaces in `#frontend` ends up with both channels recorded; the UI's "Open in Slack" picks the freshest channel (index 0 of merged), but the historical channel is still there for context. Same for digest IDs — the chain back to source content is never trimmed.
 
-**Observable — track state history (Aspirational):** A track also preserves a record of its **own** past states — what its `text`, `context`, `priority`, `ownership`, and `category` looked like before the latest re-extraction overwrote them. The user can scroll back through how the AI's reading of the same situation evolved (the original "Review API PR" → later refined to "Review API PR + reconcile with auth team"); a bad re-extraction is recoverable instead of silently destructive; the LLM can be given the prior state on the next cycle so its updates feel continuous rather than amnesic.
+**Observable — track state history:** A track preserves a record of its **own** past states. Every change to a narrative field — text, context, priority, ownership, category, decision_summary, sub_items, participants, tags, due_date, blocking, etc. — writes a snapshot of the prior state into `track_states` (migration v73) with provenance: `source='extraction'|'manual'`, `model`, `prompt_version`, `created_at`. Both AI extraction (`UpdateTrackFromExtraction`) and manual edits (`UpdateTrackPriority`, `UpdateTrackOwnership`, `UpdateTrackSubItems`, `UpsertTrack(ID>0)`) snapshot before mutating. Identical re-extractions (no narrative change) skip the snapshot. The 30 most recent snapshots per track are retained; older ones are trimmed at insert time. `TrackDetailView` exposes the timeline as a read-only History section.
 
-**Why locked:** When a thread spans multiple channels (e.g. an incident discussed in `#incidents`, then post-mortemed in `#postmortems`), losing earlier channels on re-extraction would orphan the user from where the conversation actually started. The "Open in Slack" deep-link must remain accurate even when extraction re-runs. Replacing the array (instead of merging) would also retroactively rewrite history, which is hostile in a forensic tool. The same "no destructive rewrites" principle applies to the track's own fields: an LLM cycle should never silently obliterate the prior text the user may have already read or acted on. Without a state log the user has no way to answer "did this track always say that, or did the AI just rewrite it?", which collapses trust in the surface.
+**Why locked:** When a thread spans multiple channels (e.g. an incident discussed in `#incidents`, then post-mortemed in `#postmortems`), losing earlier channels on re-extraction would orphan the user from where the conversation actually started. The "Open in Slack" deep-link must remain accurate even when extraction re-runs. Replacing the array (instead of merging) would also retroactively rewrite history, which is hostile in a forensic tool. The same "no destructive rewrites" principle applies to the track's own fields: an LLM cycle should never silently obliterate the prior text the user may have already read or acted on. Without the state log the user has no way to answer "did this track always say that, or did the AI just rewrite it?" — which collapses trust in the surface.
 
-**Test guards (Enforced part):**
+**Test guards:**
 - `internal/db/tracks_test.go::TestUpdateTrackFromExtraction`
 - `internal/db/tracks_test.go::TestMergeJSONArrays`
-
-**Tracked gap (Aspirational part):** A `track_history` table existed pre-v43 and was dropped during the chains→tracks v3 refactor (`internal/db/db.go:1905`); it was never reinstated. Today `internal/db/tracks.go::UpdateTrackFromExtraction` overwrites `text`, `context`, `priority`, `ownership`, `category`, `decision_summary`, `participants`, `tags`, `sub_items`, etc. in place, and the prior values are unrecoverable. Closing this gap requires: (1) a new `track_states` (or revived `track_history`) table keyed by `track_id`, recording a snapshot of all narrative fields at each `UpdateTrackFromExtraction` call along with the `prompt_version` and `model` of the run that produced it; (2) `TrackDetailView` UI to expose the timeline of past states; (3) optionally, prior-state injection into the next extraction prompt so updates compose instead of replace; (4) a retention rule (e.g. last N states or N days) so the table doesn't grow unbounded. Until this lands, treat any non-trivial change to `UpdateTrackFromExtraction` as also rewriting an unobservable history — and ask the owner before doing so.
+- `internal/db/tracks_test.go::TestUpsertTrack_Update`
+- `internal/db/tracks_test.go::TestTracks06_StateSnapshotOnExtractionUpdate`
+- `internal/db/tracks_test.go::TestTracks06_NoSnapshotWhenNarrativeUnchanged`
+- `internal/db/tracks_test.go::TestTracks06_StateSnapshotOnManualPriorityChange`
+- `internal/db/tracks_test.go::TestTracks06_StateSnapshotOnManualOwnershipChange`
+- `internal/db/tracks_test.go::TestTracks06_StateSnapshotOnManualSubItemsChange`
+- `internal/db/tracks_test.go::TestTracks06_StateSnapshotOnUpsertWithID`
+- `internal/db/tracks_test.go::TestTracks06_NoSnapshotOnInsert`
+- `internal/db/tracks_test.go::TestTracks06_HistoryCapAt30`
+- `internal/db/tracks_test.go::TestTracks06_GetTrackStatesOrdersDescByCreatedAt`
+- `internal/db/tracks_test.go::TestTracks06_HistoryCascadesOnTrackDelete`
+- `internal/db/migration_test.go::TestMigrationV73_CreatesTrackStatesTable`
+- `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_returnsDescendingOrder`
+- `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_emptyForNewTrack`
+- `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_decodesAllFields`
 
 **Locked since:** 2026-04-28
 
@@ -177,4 +190,5 @@ When the AI re-extracts a track I've already read and there's actually new conte
 
 - 2026-04-28: file created with 7 contracts (TRACKS-01..07). Three are Enforced (01, 02, 04), four are Partial with explicit tracked gaps (03 watching-lane filter has no unit test, 05 cross-user gate has no unit test, 06 channel/digest part Enforced but per-track state history Aspirational, 07 dismissed-exclusion has only implicit tests). Existing tests are referenced under their current names; renaming to `TestTracks0N_…` convention is a follow-up so the four soft-protection layers all engage.
 - 2026-04-28: TRACKS-06 expanded — added "track state history" as Aspirational sub-contract. The pre-v43 `track_history` table was dropped during chains→tracks v3 refactor; `UpdateTrackFromExtraction` currently overwrites narrative fields in place. Status demoted Enforced → Partial; channel/digest merge guarantees remain fully Enforced under the same ID.
+- 2026-04-28: TRACKS-06 closed gap — `track_states` table introduced (migration v73). `snapshotTrackState` helper hooks into `UpdateTrackFromExtraction`, `UpsertTrack(ID>0)`, `UpdateTrackPriority`, `UpdateTrackOwnership`, `UpdateTrackSubItems` — captures the pre-update narrative state with `source='extraction'|'manual'`, model, and prompt_version. 30-row cap per track, FK CASCADE on delete. Desktop `TrackStateQueries` + `historySection` in `TrackDetailView` expose the timeline read-only. Status promoted Partial → Enforced. Now 4 Enforced (01, 02, 04, 06), 3 Partial (03, 05, 07).
 - 2026-04-28: added preamble section "What a track is and what it's built from" — defines the narrative-row-not-task surface, lists the upstream signals the pipeline consumes (`digests.situations`, `digests.topics`, channel `running_summary`, existing tracks, `user_profile`, cross-cycle `source_refs` marker), and frames the seven contracts as a single trust property: the count must mean something or the surface collapses.

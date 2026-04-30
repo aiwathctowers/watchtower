@@ -85,7 +85,7 @@ func (db *DB) migrate() error {
 		if _, err := tx.Exec(Schema); err != nil {
 			return fmt.Errorf("executing schema: %w", err)
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 72"); err != nil {
+		if _, err := tx.Exec("PRAGMA user_version = 73"); err != nil {
 			return fmt.Errorf("setting schema version: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -3605,6 +3605,56 @@ afterV48:
 			return fmt.Errorf("committing migration v72: %w", err)
 		}
 		version = 72
+	}
+
+	if version < 73 {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("beginning migration v73 tx: %w", err)
+		}
+		defer tx.Rollback()
+		// TRACKS-06 — track_states snapshots narrative-field history.
+		// Every change to a track's narrative fields (text, context,
+		// priority, ownership, category, decision_summary, sub_items,
+		// participants, tags, etc.) writes a snapshot of the prior
+		// state here before the new state is committed to tracks.
+		// Cap is enforced at write time (30 most recent per track).
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS track_states (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			track_id           INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+			text               TEXT NOT NULL,
+			context            TEXT NOT NULL DEFAULT '',
+			category           TEXT NOT NULL,
+			ownership          TEXT NOT NULL,
+			ball_on            TEXT NOT NULL DEFAULT '',
+			owner_user_id      TEXT NOT NULL DEFAULT '',
+			requester_name     TEXT NOT NULL DEFAULT '',
+			requester_user_id  TEXT NOT NULL DEFAULT '',
+			blocking           TEXT NOT NULL DEFAULT '',
+			decision_summary   TEXT NOT NULL DEFAULT '',
+			decision_options   TEXT NOT NULL DEFAULT '[]',
+			sub_items          TEXT NOT NULL DEFAULT '[]',
+			participants       TEXT NOT NULL DEFAULT '[]',
+			tags               TEXT NOT NULL DEFAULT '[]',
+			priority           TEXT NOT NULL,
+			due_date           REAL,
+			source             TEXT NOT NULL CHECK(source IN ('extraction','manual')),
+			model              TEXT NOT NULL DEFAULT '',
+			prompt_version     INTEGER NOT NULL DEFAULT 0,
+			created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)`); err != nil {
+			return fmt.Errorf("v73 create track_states: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_track_states_track ON track_states(track_id, created_at DESC)`); err != nil {
+			return fmt.Errorf("v73 index track_states: %w", err)
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 73"); err != nil {
+			return fmt.Errorf("setting schema version: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("committing migration v73: %w", err)
+		}
+		version = 73
 	}
 
 	_ = version // silence unused variable if this is the last migration

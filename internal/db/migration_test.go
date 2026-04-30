@@ -90,7 +90,7 @@ func TestMigrationFromV20_CreatesChains(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// Verify chains/chain_refs tables are DROPPED by v43
 	var n string
@@ -133,7 +133,7 @@ func TestMigrationFromV21_ChainsAndInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// After v43: chains/chain_refs dropped, user_interactions should exist
 	var n string
@@ -166,7 +166,7 @@ func TestMigrationFromV22_UserInteractions(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// Insert and query to verify table structure
 	err = db2.UpsertUserInteractions([]UserInteraction{
@@ -205,7 +205,7 @@ func TestMigrationIdempotent_V21HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// v45 creates new tracks table — should be usable
 	_, err = db2.UpsertTrack(Track{Text: "new track", Priority: "high"})
@@ -236,7 +236,7 @@ func TestMigrationIdempotent_V22HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// After v43: chains table should not exist
 	var n string
@@ -269,7 +269,7 @@ func TestMigrationIdempotent_V23HasColumn(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// Data should survive
 	interactions, err := db2.GetUserInteractions("U1", 1000, 2000)
@@ -284,7 +284,7 @@ func TestUserVersion(t *testing.T) {
 
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 }
 
 // TestMigrationV66_DayPlans verifies that migration v66 creates day_plans and
@@ -620,7 +620,7 @@ PRAGMA user_version = 1;
 	// Verify schema version is now at latest
 	v, err := db.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	// Verify data survived all migrations
 	var wsName string
@@ -881,7 +881,7 @@ func TestMigrationV71ReordersTrackChannelIDs(t *testing.T) {
 
 	var version int
 	require.NoError(t, db2.QueryRow("PRAGMA user_version").Scan(&version))
-	assert.Equal(t, 72, version)
+	assert.Equal(t, 73, version)
 
 	track, err := db2.GetTrackByID(int(trackID))
 	require.NoError(t, err)
@@ -909,7 +909,7 @@ func TestMigrationV71SkipsWhenNoTracksTable(t *testing.T) {
 
 	var version int
 	require.NoError(t, db.QueryRow("PRAGMA user_version").Scan(&version))
-	assert.Equal(t, 72, version)
+	assert.Equal(t, 73, version)
 }
 
 // TestMigrationV72_DropsLegacyExplicitFeedback verifies migration v72 removes
@@ -951,7 +951,7 @@ func TestMigrationV72_DropsLegacyExplicitFeedback(t *testing.T) {
 
 	v, err := db2.UserVersion()
 	require.NoError(t, err)
-	assert.Equal(t, 72, v)
+	assert.Equal(t, 73, v)
 
 	rows, err := db2.Query(`SELECT scope_key, source FROM inbox_learned_rules ORDER BY scope_key`)
 	require.NoError(t, err)
@@ -968,4 +968,48 @@ func TestMigrationV72_DropsLegacyExplicitFeedback(t *testing.T) {
 		{"sender:U_user", "user_rule"},
 	}
 	assert.Equal(t, want, got)
+}
+
+// TestMigrationV73_CreatesTrackStatesTable verifies migration v73 creates the
+// track_states table with the expected schema and index, and that the table
+// is functional end-to-end (snapshot writes + history reads).
+//
+// BEHAVIOR TRACKS-06 — see docs/inventory/tracks.md
+// Migration v73 introduces per-track narrative-state history.
+// Do not weaken or remove without explicit owner approval.
+func TestMigrationV73_CreatesTrackStatesTable(t *testing.T) {
+	db := openTestDB(t)
+
+	// Schema version is at the latest known.
+	v, err := db.UserVersion()
+	require.NoError(t, err)
+	assert.Equal(t, 73, v)
+
+	// Table and index exist.
+	var name string
+	require.NoError(t, db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='track_states'`,
+	).Scan(&name))
+	assert.Equal(t, "track_states", name)
+
+	require.NoError(t, db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_track_states_track'`,
+	).Scan(&name))
+	assert.Equal(t, "idx_track_states_track", name)
+
+	// CHECK constraint on source rejects unknown values.
+	id, err := db.UpsertTrack(Track{Text: "task", Priority: "medium", Category: "task"})
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO track_states
+		(track_id, text, category, ownership, priority, source)
+		VALUES (?, 'x', 'task', 'mine', 'medium', 'bogus')`, id)
+	assert.Error(t, err, "source CHECK constraint should reject unknown values")
+
+	// End-to-end: a manual edit produces a row readable via GetTrackStates.
+	require.NoError(t, db.UpdateTrackPriority(int(id), "high"))
+	states, err := db.GetTrackStates(int(id))
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	assert.Equal(t, "medium", states[0].Priority)
+	assert.Equal(t, "manual", states[0].Source)
 }
