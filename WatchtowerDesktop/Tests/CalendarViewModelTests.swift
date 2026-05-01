@@ -58,7 +58,7 @@ struct CalendarViewModelTests {
 
         // Two day-groups, today + tomorrow.
         #expect(vm.dailyEvents.count >= 1)
-        #expect(vm.todayEvents.contains(where: { $0.title == "Standup" }) || vm.tomorrowEvents.contains(where: { $0.title == "Standup" }))
+        #expect(vm.todayEvents.contains { $0.title == "Standup" } || vm.tomorrowEvents.contains { $0.title == "Standup" })
         #expect(vm.isConnected)
     }
 
