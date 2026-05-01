@@ -1,0 +1,8 @@
+project: ../WatchtowerDesktop
+schemes: []
+exclude_tests: false
+retain_public: false
+retain_objc_accessible: true
+retain_files:
+  - ".*\\.generated\\.swift"
+relative_results: true
