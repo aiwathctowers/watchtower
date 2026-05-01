@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	defaultRedirectPort     = 18511 // separate range from Calendar (18501-18510)
-	callbackPath            = "/callback"
-	loginTimeout            = 5 * time.Minute
+	defaultRedirectPort = 18511 // separate range from Calendar (18501-18510)
+	callbackPath        = "/callback"
+	loginTimeout        = 5 * time.Minute
+)
+
+// Atlassian OAuth endpoints — vars so tests can point at httptest.Server.
+var (
 	jiraAuthEndpoint        = "https://auth.atlassian.com/authorize"
 	jiraTokenEndpoint       = "https://auth.atlassian.com/oauth/token"
 	jiraAccessibleResources = "https://api.atlassian.com/oauth/token/accessible-resources"
