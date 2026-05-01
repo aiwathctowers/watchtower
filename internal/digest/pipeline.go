@@ -443,14 +443,46 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 		time.Unix(int64(sinceUnix), 0).Format("2006-01-02 15:04"),
 		time.Unix(int64(nowUnix), 0).Format("2006-01-02 15:04"))
 
-	channels, err := p.db.ChannelsWithNewMessages(sinceUnix)
+	channels, err := p.selectActiveChannels(sinceUnix)
 	if err != nil {
-		return 0, nil, fmt.Errorf("finding channels with new messages: %w", err)
+		return 0, nil, err
+	}
+	if len(channels) == 0 {
+		p.logger.Println("digest: no channels with new messages")
+		return 0, nil, nil
 	}
 
+	entries := p.buildBatchEntries(channels, sinceUnix, nowUnix)
+	entries = p.applyDigestCooldown(entries)
+	if len(entries) == 0 {
+		p.logger.Println("digest: no channels with visible messages")
+		return 0, nil, nil
+	}
+
+	batches := p.planChannelBatches(entries)
+
+	total := len(entries)
+	workers := p.cfg.AI.Workers
+	if workers <= 0 {
+		workers = config.DefaultAIWorkers
+	}
+	p.logger.Printf("digest: processing %d channels in %d batches with %d workers", total, len(batches), workers)
+	if p.OnProgress != nil {
+		p.OnProgress(0, total, fmt.Sprintf("Processing %d channels in %d batches...", total, len(batches)))
+	}
+
+	return p.dispatchChannelBatches(ctx, batches, total, workers, sinceUnix, nowUnix)
+}
+
+// selectActiveChannels returns channel IDs with new messages since sinceUnix,
+// after filtering muted channels and 1:1 DMs.
+func (p *Pipeline) selectActiveChannels(sinceUnix float64) ([]string, error) {
+	channels, err := p.db.ChannelsWithNewMessages(sinceUnix)
+	if err != nil {
+		return nil, fmt.Errorf("finding channels with new messages: %w", err)
+	}
 	p.logger.Printf("digest: found %d channels with new messages", len(channels))
 
-	// Filter out muted channels
 	mutedIDs, err := p.db.GetMutedChannelIDs()
 	if err != nil {
 		p.logger.Printf("digest: warning: failed to load muted channels: %v", err)
@@ -473,135 +505,152 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 
 	// Filter out 1:1 DMs — private conversations are not useful in digests.
 	// Group DMs are kept (they often contain team discussions).
-	{
-		var filtered []string
-		skippedDM := 0
-		for _, ch := range channels {
-			if p.channelTypes[ch] == "dm" {
-				skippedDM++
-				continue
-			}
-			filtered = append(filtered, ch)
+	var filtered []string
+	skippedDM := 0
+	for _, ch := range channels {
+		if p.channelTypes[ch] == "dm" {
+			skippedDM++
+			continue
 		}
-		if skippedDM > 0 {
-			p.logger.Printf("digest: skipped %d DM channel(s)", skippedDM)
-		}
-		channels = filtered
+		filtered = append(filtered, ch)
 	}
-
-	if len(channels) == 0 {
-		p.logger.Println("digest: no channels with new messages")
-		return 0, nil, nil
+	if skippedDM > 0 {
+		p.logger.Printf("digest: skipped %d DM channel(s)", skippedDM)
 	}
+	return filtered, nil
+}
 
-	// Collect all channels with visible messages into unified batch entries.
-	var allEntries []batchEntry
+// buildBatchEntries loads messages for each channel, classifies bots, and
+// returns entries with visible-message counts. Bot-heavy channels are
+// reduced to human-context-only messages; channels with no visible content
+// are dropped.
+func (p *Pipeline) buildBatchEntries(channels []string, sinceUnix, nowUnix float64) []batchEntry {
+	var entries []batchEntry
 	skippedNoVisible := 0
 	skippedBotOnly := 0
 	for _, channelID := range channels {
-		msgs, err := p.db.GetMessagesByTimeRange(channelID, sinceUnix, nowUnix)
-		if err != nil {
-			p.logger.Printf("digest: error getting messages for %s: %v", channelID, err)
-			continue
+		entry, status := p.buildBatchEntry(channelID, sinceUnix, nowUnix)
+		switch status {
+		case batchEntryAccepted:
+			entries = append(entries, entry)
+		case batchEntrySkipNoVisible:
+			skippedNoVisible++
+		case batchEntrySkipBotOnly:
+			skippedBotOnly++
+		case batchEntrySkipError:
+			// already logged in buildBatchEntry
 		}
-		if len(msgs) == db.DefaultTimeRangeLimit {
-			p.logger.Printf("digest: warning: #%s hit message limit (%d), digest may be based on partial data",
-				p.channelName(channelID), db.DefaultTimeRangeLimit)
+	}
+	p.logger.Printf("digest: %d channels with visible messages, %d skipped (no visible text), %d skipped (bot-only)",
+		len(entries), skippedNoVisible, skippedBotOnly)
+	return entries
+}
+
+type batchEntryStatus int
+
+const (
+	batchEntryAccepted batchEntryStatus = iota
+	batchEntrySkipNoVisible
+	batchEntrySkipBotOnly
+	batchEntrySkipError
+)
+
+func (p *Pipeline) buildBatchEntry(channelID string, sinceUnix, nowUnix float64) (batchEntry, batchEntryStatus) {
+	msgs, err := p.db.GetMessagesByTimeRange(channelID, sinceUnix, nowUnix)
+	if err != nil {
+		p.logger.Printf("digest: error getting messages for %s: %v", channelID, err)
+		return batchEntry{}, batchEntrySkipError
+	}
+	if len(msgs) == db.DefaultTimeRangeLimit {
+		p.logger.Printf("digest: warning: #%s hit message limit (%d), digest may be based on partial data",
+			p.channelName(channelID), db.DefaultTimeRangeLimit)
+	}
+
+	visible, botVisible := p.countVisibleMessages(msgs)
+	if visible == 0 {
+		if len(msgs) >= p.cfg.Digest.MinMessages {
+			return batchEntry{}, batchEntrySkipNoVisible
 		}
-		// Count visible messages and classify by author (bot vs human).
-		// Messages with empty user_id (webhooks/integrations) are counted as bot messages.
-		visible := 0
-		botVisible := 0
+		return batchEntry{}, batchEntrySkipError
+	}
+	humanVisible := visible - botVisible
+
+	// Bot-heavy channel: ≥90% visible messages from bots.
+	if float64(botVisible)/float64(visible) >= 0.9 {
+		if humanVisible == 0 {
+			return batchEntry{}, batchEntrySkipBotOnly
+		}
+		msgs = p.extractHumanContext(msgs)
+		visible = 0
 		for _, m := range msgs {
 			if m.Text != "" && !m.IsDeleted {
 				visible++
-				if m.UserID == "" || p.botUserIDs[m.UserID] {
-					botVisible++
-				}
 			}
 		}
 		if visible == 0 {
-			if len(msgs) >= p.cfg.Digest.MinMessages {
-				skippedNoVisible++
-			}
-			continue
+			return batchEntry{}, batchEntrySkipBotOnly
 		}
-		humanVisible := visible - botVisible
-
-		// Bot-heavy channel: ≥90% visible messages from bots.
-		if visible > 0 && float64(botVisible)/float64(visible) >= 0.9 {
-			if humanVisible == 0 {
-				// No human messages at all — skip entirely.
-				skippedBotOnly++
-				continue
-			}
-			// Extract only human messages + their thread/surrounding context.
-			msgs = p.extractHumanContext(msgs)
-			// Recount visible after filtering.
-			visible = 0
-			for _, m := range msgs {
-				if m.Text != "" && !m.IsDeleted {
-					visible++
-				}
-			}
-			if visible == 0 {
-				skippedBotOnly++
-				continue
-			}
-			p.logger.Printf("digest: #%s is bot-heavy, extracted %d context messages around human replies",
-				p.channelName(channelID), visible)
-		}
-
-		allEntries = append(allEntries, batchEntry{
-			channelID:    channelID,
-			channelName:  p.channelName(channelID),
-			msgs:         msgs,
-			visibleCount: visible,
-		})
+		p.logger.Printf("digest: #%s is bot-heavy, extracted %d context messages around human replies",
+			p.channelName(channelID), visible)
 	}
 
-	p.logger.Printf("digest: %d channels with visible messages, %d skipped (no visible text), %d skipped (bot-only)",
-		len(allEntries), skippedNoVisible, skippedBotOnly)
+	return batchEntry{
+		channelID:    channelID,
+		channelName:  p.channelName(channelID),
+		msgs:         msgs,
+		visibleCount: visible,
+	}, batchEntryAccepted
+}
 
-	// Cooldown filter: skip channels that were digested recently and have few new messages.
-	// This prevents frequent small AI calls for channels with a trickle of messages.
+// countVisibleMessages returns (visible, bot-authored visible). Messages with
+// empty user_id (webhooks/integrations) count as bots.
+func (p *Pipeline) countVisibleMessages(msgs []db.Message) (visible, botVisible int) {
+	for _, m := range msgs {
+		if m.Text == "" || m.IsDeleted {
+			continue
+		}
+		visible++
+		if m.UserID == "" || p.botUserIDs[m.UserID] {
+			botVisible++
+		}
+	}
+	return visible, botVisible
+}
+
+// applyDigestCooldown removes channels digested recently with low activity to
+// avoid frequent small AI calls for trickle channels.
+func (p *Pipeline) applyDigestCooldown(entries []batchEntry) []batchEntry {
 	cooldownMins := config.DefaultDigestCooldownMins
 	minMsgs := p.cfg.Digest.MinMessages
 	if minMsgs <= 0 {
 		minMsgs = config.DefaultDigestMinMsgs
 	}
-	skippedCooldown := 0
-	{
-		now := time.Now()
-		var filtered []batchEntry
-		for _, e := range allEntries {
-			// If channel was digested recently and message count is low, defer it.
-			latest, err := p.db.GetLatestDigest(e.channelID, "channel")
-			if err == nil && latest != nil {
-				if created, perr := time.Parse("2006-01-02T15:04:05Z", latest.CreatedAt); perr == nil {
-					digestAge := now.Sub(created)
-					if digestAge < time.Duration(cooldownMins)*time.Minute && e.visibleCount < minMsgs {
-						skippedCooldown++
-						continue
-					}
+
+	now := time.Now()
+	skipped := 0
+	var filtered []batchEntry
+	for _, e := range entries {
+		latest, err := p.db.GetLatestDigest(e.channelID, "channel")
+		if err == nil && latest != nil {
+			if created, perr := time.Parse("2006-01-02T15:04:05Z", latest.CreatedAt); perr == nil {
+				if now.Sub(created) < time.Duration(cooldownMins)*time.Minute && e.visibleCount < minMsgs {
+					skipped++
+					continue
 				}
 			}
-			filtered = append(filtered, e)
 		}
-		allEntries = filtered
+		filtered = append(filtered, e)
 	}
-	if skippedCooldown > 0 {
-		p.logger.Printf("digest: skipped %d channel(s) (cooldown: digested <%d min ago with <%d messages)", skippedCooldown, cooldownMins, minMsgs)
+	if skipped > 0 {
+		p.logger.Printf("digest: skipped %d channel(s) (cooldown: digested <%d min ago with <%d messages)", skipped, cooldownMins, minMsgs)
 	}
+	return filtered
+}
 
-	if len(allEntries) == 0 {
-		p.logger.Println("digest: no channels with visible messages")
-		return 0, nil, nil
-	}
-
-	// Tiered batching: split channels by activity level for optimal grouping.
-	// High-activity channels get individual prompts (better quality).
-	// Low-activity channels are grouped aggressively (fewer AI calls).
+// planChannelBatches groups entries into AI-call batches using tiered activity
+// (high → individual, medium → standard groups, low → aggressive groups), then
+// caps the total number of batches per run.
+func (p *Pipeline) planChannelBatches(entries []batchEntry) [][]batchEntry {
 	maxCh := p.cfg.Digest.BatchMaxChannels
 	if maxCh <= 0 {
 		maxCh = config.DefaultBatchMaxChannels
@@ -612,7 +661,7 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 	}
 
 	var highEntries, medEntries, lowEntries []batchEntry
-	for _, e := range allEntries {
+	for _, e := range entries {
 		switch {
 		case e.visibleCount > config.DefaultBatchHighActivityThreshold:
 			highEntries = append(highEntries, e)
@@ -623,23 +672,18 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 		}
 	}
 
-	// High activity (>50 msgs): individual batch per channel.
 	var batches [][]batchEntry
 	for _, e := range highEntries {
 		batches = append(batches, []batchEntry{e})
 	}
-	// Medium activity (10-50 msgs): standard limits.
 	batches = append(batches, groupIntoBatches(medEntries, maxCh, maxMsg)...)
-	// Low activity (<10 msgs): triple channel limit for aggressive grouping.
 	batches = append(batches, groupIntoBatches(lowEntries, maxCh*3, maxMsg)...)
 
 	p.logger.Printf("digest: tiered grouping: %d high, %d medium, %d low activity channels",
 		len(highEntries), len(medEntries), len(lowEntries))
 
-	// Budget cap: limit total number of AI calls per run.
 	maxBatches := config.DefaultMaxBatchesPerRun
 	if len(batches) > maxBatches {
-		// Sort batches by total message count descending (most active first).
 		sort.Slice(batches, func(i, j int) bool {
 			iMsgs, jMsgs := 0, 0
 			for _, e := range batches[i] {
@@ -650,43 +694,46 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 			}
 			return iMsgs > jMsgs
 		})
-		droppedChannels := 0
+		dropped := 0
 		for _, b := range batches[maxBatches:] {
-			droppedChannels += len(b)
+			dropped += len(b)
 		}
-		p.logger.Printf("digest: budget cap: keeping %d of %d batches (%d channels deferred)", maxBatches, len(batches), droppedChannels)
+		p.logger.Printf("digest: budget cap: keeping %d of %d batches (%d channels deferred)", maxBatches, len(batches), dropped)
 		batches = batches[:maxBatches]
 	}
+	return batches
+}
 
-	total := len(allEntries)
-	workers := p.cfg.AI.Workers
-	if workers <= 0 {
-		workers = config.DefaultAIWorkers
-	}
+// batchAggregator carries the per-window mutable accounting state shared
+// between worker goroutines in dispatchChannelBatches.
+type batchAggregator struct {
+	completed   atomic.Int32
+	generated   atomic.Int32
+	errCount    atomic.Int32
+	totalInput  atomic.Int64
+	totalOutput atomic.Int64
+	lastErrMu   sync.Mutex
+	lastErr     error
+}
 
-	p.logger.Printf("digest: processing %d channels in %d batches with %d workers", total, len(batches), workers)
+func (a *batchAggregator) recordError(err error) {
+	a.errCount.Add(1)
+	a.lastErrMu.Lock()
+	a.lastErr = err
+	a.lastErrMu.Unlock()
+}
 
-	if p.OnProgress != nil {
-		p.OnProgress(0, total, fmt.Sprintf("Processing %d channels in %d batches...", total, len(batches)))
-	}
-
+// dispatchChannelBatches runs worker goroutines over batches and aggregates
+// per-window results into a single Usage + count.
+func (p *Pipeline) dispatchChannelBatches(ctx context.Context, batches [][]batchEntry, total, workers int, sinceUnix, nowUnix float64) (int, *Usage, error) {
 	batchCh := make(chan []batchEntry, len(batches))
 	for _, b := range batches {
 		batchCh <- b
 	}
 	close(batchCh)
 
-	var (
-		completed   atomic.Int32
-		generated   atomic.Int32
-		errCount    atomic.Int32
-		totalInput  atomic.Int64
-		totalOutput atomic.Int64
-		lastErrMu   sync.Mutex
-		lastErr     error
-		wg          sync.WaitGroup
-	)
-
+	agg := &batchAggregator{}
+	var wg sync.WaitGroup
 	for range min(workers, len(batches)) {
 		wg.Add(1)
 		go func() {
@@ -695,216 +742,211 @@ func (p *Pipeline) runChannelDigestsForWindow(ctx context.Context, sinceUnix, no
 				if ctx.Err() != nil {
 					return
 				}
-
-				// Single-channel batch: use individual prompt for better quality.
 				if len(batch) == 1 {
-					e := batch[0]
-					c := int(completed.Load())
-					p.lastStepMu.Lock()
-					p.LastStepMessageCount = len(e.msgs)
-					p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
-					p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
-					p.LastStepDurationSeconds = 0
-					p.LastStepInputTokens = 0
-					p.LastStepOutputTokens = 0
-					if p.OnProgress != nil {
-						p.OnProgress(c, total, fmt.Sprintf("#%s (%d msgs)", e.channelName, len(e.msgs)))
-					}
-					p.lastStepMu.Unlock()
-
-					stepStart := time.Now()
-					result, usage, pv, err := p.generateChannelDigest(ctx, e.channelID, e.channelName, e.msgs, sinceUnix, nowUnix)
-					if err != nil {
-						p.logger.Printf("digest: error generating digest for #%s: %v", e.channelName, err)
-						errCount.Add(1)
-						lastErrMu.Lock()
-						lastErr = err
-						lastErrMu.Unlock()
-						done := int(completed.Add(1))
-						if p.OnProgress != nil {
-							p.OnProgress(done, total, fmt.Sprintf("#%s error: %v", e.channelName, err))
-						}
-						continue
-					}
-
-					lastMsgTS := sinceUnix
-					for _, m := range e.msgs {
-						if m.TSUnix > lastMsgTS {
-							lastMsgTS = m.TSUnix
-						}
-					}
-
-					if err := p.storeDigest(e.channelID, "channel", sinceUnix, lastMsgTS, result, len(e.msgs), usage, pv); err != nil {
-						p.logger.Printf("digest: error storing digest for #%s: %v", e.channelName, err)
-						errCount.Add(1)
-						lastErrMu.Lock()
-						lastErr = err
-						lastErrMu.Unlock()
-						done := int(completed.Add(1))
-						if p.OnProgress != nil {
-							p.OnProgress(done, total, fmt.Sprintf("#%s store error: %v", e.channelName, err))
-						}
-						continue
-					}
-
-					generated.Add(1)
-					p.totalMessageCount.Add(int64(len(e.msgs)))
-					p.updatePeriodBounds(sinceUnix, lastMsgTS)
-
-					p.lastStepMu.Lock()
-					p.LastStepMessageCount = len(e.msgs)
-					p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
-					p.LastStepPeriodTo = time.Unix(int64(lastMsgTS), 0)
-					p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
-					if usage != nil {
-						p.LastStepInputTokens = usage.InputTokens
-						p.LastStepOutputTokens = usage.OutputTokens
-						totalInput.Add(int64(usage.InputTokens))
-						totalOutput.Add(int64(usage.OutputTokens))
-						p.accumulateUsage(usage)
-					} else {
-						p.LastStepInputTokens = 0
-						p.LastStepOutputTokens = 0
-					}
-					done := int(completed.Add(1))
-					if p.OnProgress != nil {
-						p.OnProgress(done, total, fmt.Sprintf("#%s done", e.channelName))
-					}
-					p.lastStepMu.Unlock()
-					if usage != nil {
-						p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens)",
-							e.channelName, len(e.msgs), usage.InputTokens, usage.OutputTokens)
-					} else {
-						p.logger.Printf("digest: generated for #%s (%d messages)", e.channelName, len(e.msgs))
-					}
-					continue
+					p.processSingleEntry(ctx, batch[0], total, agg, sinceUnix, nowUnix)
+				} else {
+					p.processBatchEntry(ctx, batch, total, agg, sinceUnix, nowUnix)
 				}
-
-				// Multi-channel batch: use batch prompt.
-				batchMsgCount := 0
-				for _, e := range batch {
-					batchMsgCount += len(e.msgs)
-				}
-
-				p.lastStepMu.Lock()
-				p.LastStepMessageCount = batchMsgCount
-				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
-				p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
-				p.LastStepDurationSeconds = 0
-				p.LastStepInputTokens = 0
-				p.LastStepOutputTokens = 0
-				if p.OnProgress != nil {
-					c := int(completed.Load())
-					p.OnProgress(c, total, fmt.Sprintf("Batch (%d channels, %d msgs)...", len(batch), batchMsgCount))
-				}
-				p.lastStepMu.Unlock()
-
-				stepStart := time.Now()
-				results, usage, pv, err := p.generateBatchDigest(ctx, batch, sinceUnix, nowUnix)
-				if err != nil {
-					p.logger.Printf("digest: error generating batch (%d channels): %v", len(batch), err)
-					errCount.Add(1)
-					lastErrMu.Lock()
-					lastErr = err
-					lastErrMu.Unlock()
-					completed.Add(int32(len(batch)))
-					continue
-				}
-
-				entryMap := make(map[string]*batchEntry, len(batch))
-				for i := range batch {
-					entryMap[batch[i].channelID] = &batch[i]
-				}
-
-				saved := 0
-				for rIdx, r := range results {
-					entry, ok := entryMap[r.ChannelID]
-					if !ok {
-						p.logger.Printf("digest: batch result for unknown channel %s, skipping", r.ChannelID)
-						continue
-					}
-
-					dr := &DigestResult{
-						Summary:        r.Summary,
-						Topics:         r.Topics,
-						RunningSummary: r.RunningSummary,
-					}
-
-					lastMsgTS := sinceUnix
-					for _, m := range entry.msgs {
-						if m.TSUnix > lastMsgTS {
-							lastMsgTS = m.TSUnix
-						}
-					}
-
-					var resultUsage *Usage
-					if rIdx == 0 {
-						resultUsage = usage
-					}
-
-					if err := p.storeDigest(entry.channelID, "channel", sinceUnix, lastMsgTS, dr, len(entry.msgs), resultUsage, pv); err != nil {
-						p.logger.Printf("digest: error storing batch digest for #%s: %v", entry.channelName, err)
-						errCount.Add(1)
-						lastErrMu.Lock()
-						lastErr = err
-						lastErrMu.Unlock()
-						continue
-					}
-
-					saved++
-					generated.Add(1)
-					p.totalMessageCount.Add(int64(len(entry.msgs)))
-				}
-
-				if usage != nil {
-					totalInput.Add(int64(usage.InputTokens))
-					totalOutput.Add(int64(usage.OutputTokens))
-					p.accumulateUsage(usage)
-				}
-
-				completed.Add(int32(len(batch)))
-
-				p.lastStepMu.Lock()
-				p.LastStepMessageCount = batchMsgCount
-				p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
-				p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
-				p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
-				if usage != nil {
-					p.LastStepInputTokens = usage.InputTokens
-					p.LastStepOutputTokens = usage.OutputTokens
-				}
-				if p.OnProgress != nil {
-					done := int(completed.Load())
-					p.OnProgress(done, total, fmt.Sprintf("Batch done (%d channels, %d saved)", len(batch), saved))
-				}
-				p.lastStepMu.Unlock()
-
-				p.logger.Printf("digest: batch: %d channels, %d results from AI, %d saved",
-					len(batch), len(results), saved)
 			}
 		}()
 	}
-
 	wg.Wait()
 
 	_, _, _, accAPITokens := p.AccumulatedUsage()
 	totalUsage := &Usage{
-		InputTokens:    int(totalInput.Load()),
-		OutputTokens:   int(totalOutput.Load()),
+		InputTokens:    int(agg.totalInput.Load()),
+		OutputTokens:   int(agg.totalOutput.Load()),
 		CostUSD:        0,
 		TotalAPITokens: accAPITokens,
 	}
 
-	gen := int(generated.Load())
-	errs := int(errCount.Load())
-
+	gen := int(agg.generated.Load())
+	errs := int(agg.errCount.Load())
 	// If we found channels to process but ALL of them failed, report the error
 	// so the caller shows a meaningful message instead of "No new digests needed".
 	if gen == 0 && errs > 0 {
-		return 0, totalUsage, fmt.Errorf("all %d channel digest(s) failed, last error: %w", errs, lastErr)
+		return 0, totalUsage, fmt.Errorf("all %d channel digest(s) failed, last error: %w", errs, agg.lastErr)
+	}
+	return gen, totalUsage, nil
+}
+
+// processSingleEntry handles a 1-channel batch: individual prompt for better quality.
+func (p *Pipeline) processSingleEntry(ctx context.Context, e batchEntry, total int, agg *batchAggregator, sinceUnix, nowUnix float64) {
+	p.lastStepMu.Lock()
+	p.LastStepMessageCount = len(e.msgs)
+	p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+	p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
+	p.LastStepDurationSeconds = 0
+	p.LastStepInputTokens = 0
+	p.LastStepOutputTokens = 0
+	if p.OnProgress != nil {
+		p.OnProgress(int(agg.completed.Load()), total, fmt.Sprintf("#%s (%d msgs)", e.channelName, len(e.msgs)))
+	}
+	p.lastStepMu.Unlock()
+
+	stepStart := time.Now()
+	result, usage, pv, err := p.generateChannelDigest(ctx, e.channelID, e.channelName, e.msgs, sinceUnix, nowUnix)
+	if err != nil {
+		p.logger.Printf("digest: error generating digest for #%s: %v", e.channelName, err)
+		agg.recordError(err)
+		done := int(agg.completed.Add(1))
+		if p.OnProgress != nil {
+			p.OnProgress(done, total, fmt.Sprintf("#%s error: %v", e.channelName, err))
+		}
+		return
 	}
 
-	return gen, totalUsage, nil
+	lastMsgTS := sinceUnix
+	for _, m := range e.msgs {
+		if m.TSUnix > lastMsgTS {
+			lastMsgTS = m.TSUnix
+		}
+	}
+
+	if err := p.storeDigest(e.channelID, "channel", sinceUnix, lastMsgTS, result, len(e.msgs), usage, pv); err != nil {
+		p.logger.Printf("digest: error storing digest for #%s: %v", e.channelName, err)
+		agg.recordError(err)
+		done := int(agg.completed.Add(1))
+		if p.OnProgress != nil {
+			p.OnProgress(done, total, fmt.Sprintf("#%s store error: %v", e.channelName, err))
+		}
+		return
+	}
+
+	agg.generated.Add(1)
+	p.totalMessageCount.Add(int64(len(e.msgs)))
+	p.updatePeriodBounds(sinceUnix, lastMsgTS)
+
+	p.lastStepMu.Lock()
+	p.LastStepMessageCount = len(e.msgs)
+	p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+	p.LastStepPeriodTo = time.Unix(int64(lastMsgTS), 0)
+	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+	if usage != nil {
+		p.LastStepInputTokens = usage.InputTokens
+		p.LastStepOutputTokens = usage.OutputTokens
+		agg.totalInput.Add(int64(usage.InputTokens))
+		agg.totalOutput.Add(int64(usage.OutputTokens))
+		p.accumulateUsage(usage)
+	} else {
+		p.LastStepInputTokens = 0
+		p.LastStepOutputTokens = 0
+	}
+	done := int(agg.completed.Add(1))
+	if p.OnProgress != nil {
+		p.OnProgress(done, total, fmt.Sprintf("#%s done", e.channelName))
+	}
+	p.lastStepMu.Unlock()
+	if usage != nil {
+		p.logger.Printf("digest: generated for #%s (%d messages, %d+%d tokens)",
+			e.channelName, len(e.msgs), usage.InputTokens, usage.OutputTokens)
+	} else {
+		p.logger.Printf("digest: generated for #%s (%d messages)", e.channelName, len(e.msgs))
+	}
+}
+
+// processBatchEntry handles a multi-channel batch via the batch prompt.
+func (p *Pipeline) processBatchEntry(ctx context.Context, batch []batchEntry, total int, agg *batchAggregator, sinceUnix, nowUnix float64) {
+	batchMsgCount := 0
+	for _, e := range batch {
+		batchMsgCount += len(e.msgs)
+	}
+
+	p.lastStepMu.Lock()
+	p.LastStepMessageCount = batchMsgCount
+	p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+	p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
+	p.LastStepDurationSeconds = 0
+	p.LastStepInputTokens = 0
+	p.LastStepOutputTokens = 0
+	if p.OnProgress != nil {
+		p.OnProgress(int(agg.completed.Load()), total, fmt.Sprintf("Batch (%d channels, %d msgs)...", len(batch), batchMsgCount))
+	}
+	p.lastStepMu.Unlock()
+
+	stepStart := time.Now()
+	results, usage, pv, err := p.generateBatchDigest(ctx, batch, sinceUnix, nowUnix)
+	if err != nil {
+		p.logger.Printf("digest: error generating batch (%d channels): %v", len(batch), err)
+		agg.recordError(err)
+		agg.completed.Add(int32(len(batch)))
+		return
+	}
+
+	saved := p.persistBatchResults(batch, results, sinceUnix, usage, pv, agg)
+
+	if usage != nil {
+		agg.totalInput.Add(int64(usage.InputTokens))
+		agg.totalOutput.Add(int64(usage.OutputTokens))
+		p.accumulateUsage(usage)
+	}
+
+	agg.completed.Add(int32(len(batch)))
+
+	p.lastStepMu.Lock()
+	p.LastStepMessageCount = batchMsgCount
+	p.LastStepPeriodFrom = time.Unix(int64(sinceUnix), 0)
+	p.LastStepPeriodTo = time.Unix(int64(nowUnix), 0)
+	p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
+	if usage != nil {
+		p.LastStepInputTokens = usage.InputTokens
+		p.LastStepOutputTokens = usage.OutputTokens
+	}
+	if p.OnProgress != nil {
+		p.OnProgress(int(agg.completed.Load()), total, fmt.Sprintf("Batch done (%d channels, %d saved)", len(batch), saved))
+	}
+	p.lastStepMu.Unlock()
+
+	p.logger.Printf("digest: batch: %d channels, %d results from AI, %d saved",
+		len(batch), len(results), saved)
+}
+
+// persistBatchResults stores AI batch results back to the DB and returns the
+// number successfully saved. The first result carries the batch-level usage;
+// subsequent results pass nil to avoid double-counting tokens.
+func (p *Pipeline) persistBatchResults(batch []batchEntry, results []BatchChannelResult, sinceUnix float64, usage *Usage, promptVersion int, agg *batchAggregator) int {
+	entryMap := make(map[string]*batchEntry, len(batch))
+	for i := range batch {
+		entryMap[batch[i].channelID] = &batch[i]
+	}
+
+	saved := 0
+	for rIdx, r := range results {
+		entry, ok := entryMap[r.ChannelID]
+		if !ok {
+			p.logger.Printf("digest: batch result for unknown channel %s, skipping", r.ChannelID)
+			continue
+		}
+
+		dr := &DigestResult{
+			Summary:        r.Summary,
+			Topics:         r.Topics,
+			RunningSummary: r.RunningSummary,
+		}
+
+		lastMsgTS := sinceUnix
+		for _, m := range entry.msgs {
+			if m.TSUnix > lastMsgTS {
+				lastMsgTS = m.TSUnix
+			}
+		}
+
+		var resultUsage *Usage
+		if rIdx == 0 {
+			resultUsage = usage
+		}
+
+		if err := p.storeDigest(entry.channelID, "channel", sinceUnix, lastMsgTS, dr, len(entry.msgs), resultUsage, promptVersion); err != nil {
+			p.logger.Printf("digest: error storing batch digest for #%s: %v", entry.channelName, err)
+			agg.recordError(err)
+			continue
+		}
+
+		saved++
+		agg.generated.Add(1)
+		p.totalMessageCount.Add(int64(len(entry.msgs)))
+	}
+	return saved
 }
 
 // RunDailyRollup generates a cross-channel daily digest from today's channel digests.

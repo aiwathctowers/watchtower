@@ -13,7 +13,7 @@ JIRA_ID     ?= $(WATCHTOWER_JIRA_CLIENT_ID)
 JIRA_SECRET ?= $(WATCHTOWER_JIRA_CLIENT_SECRET)
 LDFLAGS     := -ldflags "-X watchtower/cmd.Version=$(VERSION) -X watchtower/cmd.Commit=$(COMMIT) -X watchtower/cmd.BuildDate=$(BUILD_DATE) -X watchtower/internal/auth.DefaultClientID=$(OAUTH_ID) -X watchtower/internal/auth.DefaultClientSecret=$(OAUTH_SECRET) -X watchtower/internal/calendar.DefaultGoogleClientID=$(GOOGLE_ID) -X watchtower/internal/calendar.DefaultGoogleClientSecret=$(GOOGLE_SECRET) -X watchtower/internal/jira.DefaultJiraClientID=$(JIRA_ID) -X watchtower/internal/jira.DefaultJiraClientSecret=$(JIRA_SECRET)"
 
-.PHONY: build test lint lint-swift lint-all install clean app app-dev dmg test-swift sentrux-check
+.PHONY: build test lint lint-swift lint-all install clean app app-dev dmg test-swift sentrux-check sentrux-gate sentrux-baseline quality
 
 build:
 	go build $(LDFLAGS) -o $(BINARY_NAME) .
@@ -45,8 +45,18 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -rf build/
 
-# Architectural rules check via sentrux. Not wired into `test` — it currently
-# reports CC/length debt (see .sentrux/rules.toml). Run manually or in PR review.
+# Architectural rules + structural regression via sentrux.
+# `make quality` runs both: check (rules in .sentrux/rules.toml) and gate
+# (regression vs .sentrux/baseline.json). `make sentrux-baseline` refreshes
+# the baseline after intentional structural changes.
 SENTRUX ?= $(shell command -v sentrux 2>/dev/null || echo /opt/homebrew/bin/sentrux)
 sentrux-check:
 	$(SENTRUX) check .
+
+sentrux-gate:
+	$(SENTRUX) gate .
+
+sentrux-baseline:
+	$(SENTRUX) gate --save .
+
+quality: sentrux-check sentrux-gate

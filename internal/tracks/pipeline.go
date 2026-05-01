@@ -248,55 +248,103 @@ func (p *Pipeline) Run(ctx context.Context) (int, int, error) {
 func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to float64, digestsSinceISO ...string) (int, error) {
 	p.loadCaches()
 
-	// Load user profile for ownership determination.
-	profile, err := p.db.GetUserProfile(userID)
-	if err != nil {
-		p.logger.Printf("tracks: failed to load user profile: %v (ownership defaults to 'mine')", err)
-	}
-	p.cacheMu.Lock()
-	p.profile = profile
-	p.cacheMu.Unlock()
-
+	profile, allActive := p.loadWindowContext(userID)
 	userName := p.userName(userID)
 
-	// Pre-load all active tracks once for cross-channel sections.
-	allActive, err := p.db.GetAllActiveTracks()
-	if err != nil {
-		p.logger.Printf("tracks: warning: failed to pre-load active tracks: %v", err)
-	}
-	p.cacheMu.Lock()
-	p.allActiveTracksRef = allActive
-	p.crossChannelCache = "" // reset; built lazily per-channel with exclusion
-	p.cacheMu.Unlock()
-
-	// Load digests: incremental (created_at-based) or overlap-based.
-	var digests []db.Digest
 	sinceISO := ""
 	if len(digestsSinceISO) > 0 {
 		sinceISO = digestsSinceISO[0]
 	}
-	if sinceISO != "" {
-		// Incremental: only process digests created since last tracks run.
-		digests, err = p.db.GetDigestsCreatedAfter("channel", sinceISO)
-		if err != nil {
-			return 0, fmt.Errorf("loading new digests: %w", err)
-		}
-		p.logger.Printf("tracks: found %d new digests (created after %s)", len(digests), sinceISO)
-	} else {
-		// First run or fallback: overlap-based query.
-		digests, err = p.db.GetDigestsOverlapping("channel", from, to)
-		if err != nil {
-			return 0, fmt.Errorf("loading digests: %w", err)
-		}
+	digests, err := p.fetchDigestsForWindow(sinceISO, from, to)
+	if err != nil {
+		return 0, err
 	}
-
 	if len(digests) == 0 {
 		p.progress(0, 0, "No new digests to process")
 		p.logger.Printf("tracks: no digests found")
 		return 0, nil
 	}
 
-	// Filter muted channels.
+	allEntries, err := p.buildDigestEntries(digests)
+	if err != nil {
+		return 0, err
+	}
+	if len(allEntries) == 0 {
+		return 0, nil
+	}
+
+	signals := buildRelevanceSignals(profile, allActive)
+	allEntries = p.filterEntriesByRelevance(allEntries, userID, signals)
+	if len(allEntries) == 0 {
+		p.progress(0, 0, "No relevant topics after filtering")
+		return 0, nil
+	}
+
+	sort.Slice(allEntries, func(i, j int) bool {
+		return allEntries[i].topicCount > allEntries[j].topicCount
+	})
+
+	totalTopicCount := 0
+	for _, e := range allEntries {
+		totalTopicCount += e.topicCount
+	}
+	batches := p.planTrackBatches(allEntries)
+
+	p.logger.Printf("tracks: found %d topics across %d channels → %d batch(es), budget %d tokens",
+		totalTopicCount, len(allEntries), len(batches), p.contextBudget())
+	p.progress(0, len(batches), fmt.Sprintf("Scanning %d channels (%d topics) for @%s in %d batch(es)...",
+		len(allEntries), totalTopicCount, userName, len(batches)))
+
+	totalStored := p.runTrackBatches(ctx, batches, userID, userName, from, to)
+
+	p.LastStepDurationSeconds = 0 // reset to avoid duplicate step recording on final progress
+	p.progress(len(batches), len(batches), fmt.Sprintf("Found %d tracks for @%s across %d channels", totalStored, userName, len(allEntries)))
+	p.logger.Printf("tracks: %d tracks for @%s from %d channels", totalStored, userName, len(allEntries))
+	return totalStored, nil //nolint:nilerr // partial results returned; per-batch errors logged above
+}
+
+// loadWindowContext caches the user profile + active-tracks reference and
+// resets the cross-channel cache so it rebuilds lazily for this run.
+func (p *Pipeline) loadWindowContext(userID string) (*db.UserProfile, []db.Track) {
+	profile, err := p.db.GetUserProfile(userID)
+	if err != nil {
+		p.logger.Printf("tracks: failed to load user profile: %v (ownership defaults to 'mine')", err)
+	}
+
+	allActive, err := p.db.GetAllActiveTracks()
+	if err != nil {
+		p.logger.Printf("tracks: warning: failed to pre-load active tracks: %v", err)
+	}
+
+	p.cacheMu.Lock()
+	p.profile = profile
+	p.allActiveTracksRef = allActive
+	p.crossChannelCache = ""
+	p.cacheMu.Unlock()
+	return profile, allActive
+}
+
+// fetchDigestsForWindow returns digests created after sinceISO when provided,
+// otherwise digests overlapping [from, to] (first-run / fallback path).
+func (p *Pipeline) fetchDigestsForWindow(sinceISO string, from, to float64) ([]db.Digest, error) {
+	if sinceISO != "" {
+		digests, err := p.db.GetDigestsCreatedAfter("channel", sinceISO)
+		if err != nil {
+			return nil, fmt.Errorf("loading new digests: %w", err)
+		}
+		p.logger.Printf("tracks: found %d new digests (created after %s)", len(digests), sinceISO)
+		return digests, nil
+	}
+	digests, err := p.db.GetDigestsOverlapping("channel", from, to)
+	if err != nil {
+		return nil, fmt.Errorf("loading digests: %w", err)
+	}
+	return digests, nil
+}
+
+// buildDigestEntries filters muted channels, loads topics for the kept digests,
+// and groups them per channel as digestEntry items.
+func (p *Pipeline) buildDigestEntries(digests []db.Digest) ([]digestEntry, error) {
 	mutedIDs, err := p.db.GetMutedChannelIDs()
 	if err != nil {
 		p.logger.Printf("tracks: warning: failed to load muted channels: %v", err)
@@ -306,7 +354,6 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 		muted[id] = true
 	}
 
-	// Collect digest IDs and group digests by channel.
 	var digestIDs []int
 	digestsByChannel := make(map[string][]db.Digest)
 	for _, d := range digests {
@@ -316,146 +363,148 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 		digestIDs = append(digestIDs, d.ID)
 		digestsByChannel[d.ChannelID] = append(digestsByChannel[d.ChannelID], d)
 	}
-
 	if len(digestIDs) == 0 {
 		p.progress(0, 0, "No digests after filtering muted channels")
-		return 0, nil
+		return nil, nil
 	}
 
-	// Load topics for all digests.
 	allTopics, err := p.db.GetDigestTopicsByDigestIDs(digestIDs)
 	if err != nil {
-		return 0, fmt.Errorf("loading digest topics: %w", err)
+		return nil, fmt.Errorf("loading digest topics: %w", err)
 	}
-
-	// Group topics by digest ID.
 	topicsByDigest := make(map[int][]db.DigestTopic)
 	for _, t := range allTopics {
 		topicsByDigest[t.DigestID] = append(topicsByDigest[t.DigestID], t)
 	}
 
-	// Build digest entries per channel.
-	var allEntries []digestEntry
-	totalTopicCount := 0
+	var entries []digestEntry
 	for chID, chDigests := range digestsByChannel {
 		var chTopics []db.DigestTopic
 		for _, d := range chDigests {
 			chTopics = append(chTopics, topicsByDigest[d.ID]...)
 		}
-		topicCount := len(chTopics)
-		if topicCount == 0 {
+		if len(chTopics) == 0 {
 			continue
 		}
-		totalTopicCount += topicCount
-		allEntries = append(allEntries, digestEntry{
+		entries = append(entries, digestEntry{
 			channelID:   chID,
 			channelName: p.channelName(chID),
 			digests:     chDigests,
 			topics:      chTopics,
-			topicCount:  topicCount,
+			topicCount:  len(chTopics),
 		})
 	}
-
-	if len(allEntries) == 0 {
+	if len(entries) == 0 {
 		p.progress(0, 0, "No topics in digests")
-		return 0, nil
+	}
+	return entries, nil
+}
+
+// trackTopicKey is a (digest, topic) tuple used to dedup topics across runs.
+type trackTopicKey struct {
+	DigestID int
+	TopicID  int
+}
+
+// relevanceSignals are pre-computed sets used by Level-1 channel scoring and
+// Level-2 topic dedup. Built once per run from the user profile + active tracks.
+type relevanceSignals struct {
+	existingTrackChannels map[string]bool
+	starredChannels       map[string]bool
+	relatedUsers          map[string]bool
+	processedTopics       map[trackTopicKey]bool
+}
+
+func buildRelevanceSignals(profile *db.UserProfile, allActive []db.Track) relevanceSignals {
+	s := relevanceSignals{
+		existingTrackChannels: make(map[string]bool),
+		starredChannels:       make(map[string]bool),
+		relatedUsers:          make(map[string]bool),
+		processedTopics:       make(map[trackTopicKey]bool),
 	}
 
-	// --- Level 1: Channel relevance scoring (pre-filter) ---
-	// Build set of channel IDs that have existing tracks.
-	existingTrackChannels := make(map[string]bool)
 	for _, t := range allActive {
-		// Parse channel_ids JSON array.
 		var chIDs []string
-		if err := json.Unmarshal([]byte(t.ChannelIDs), &chIDs); err == nil {
+		if json.Unmarshal([]byte(t.ChannelIDs), &chIDs) == nil {
 			for _, ch := range chIDs {
-				existingTrackChannels[ch] = true
+				s.existingTrackChannels[ch] = true
 			}
 		}
 	}
 
-	// Parse starred channels from profile.
-	starredChannels := make(map[string]bool)
 	if profile != nil && profile.StarredChannels != "" && profile.StarredChannels != "[]" {
 		var starred []string
-		if err := json.Unmarshal([]byte(profile.StarredChannels), &starred); err == nil {
+		if json.Unmarshal([]byte(profile.StarredChannels), &starred) == nil {
 			for _, ch := range starred {
-				starredChannels[ch] = true
+				s.starredChannels[ch] = true
 			}
 		}
 	}
 
-	// Parse reports/peers from profile for participant matching.
-	relatedUsers := make(map[string]bool)
 	if profile != nil {
 		for _, field := range []string{profile.Reports, profile.Peers} {
-			if field != "" && field != "[]" {
-				var ids []string
-				if err := json.Unmarshal([]byte(field), &ids); err == nil {
-					for _, id := range ids {
-						relatedUsers[id] = true
-					}
+			if field == "" || field == "[]" {
+				continue
+			}
+			var ids []string
+			if json.Unmarshal([]byte(field), &ids) == nil {
+				for _, id := range ids {
+					s.relatedUsers[id] = true
 				}
 			}
 		}
 	}
 
-	// --- Level 2: Topic dedup by source_refs ---
-	// Collect set of already-processed topic keys from existing tracks' source_refs.
-	type topicKey struct {
-		DigestID int
-		TopicID  int
-	}
-	processedTopics := make(map[topicKey]bool)
-	tracksWithUpdates := make(map[int]bool) // track IDs with has_updates=true
+	// Topics already linked to a track are skipped — unless the track is flagged
+	// has_updates, in which case we want to consider it for richer updates.
 	for _, t := range allActive {
-		if t.HasUpdates {
-			tracksWithUpdates[t.ID] = true
-		}
-		if t.SourceRefs == "" || t.SourceRefs == "[]" {
+		if t.HasUpdates || t.SourceRefs == "" || t.SourceRefs == "[]" {
 			continue
 		}
 		var refs []struct {
 			DigestID int `json:"digest_id"`
 			TopicID  int `json:"topic_id"`
 		}
-		if err := json.Unmarshal([]byte(t.SourceRefs), &refs); err == nil {
-			for _, ref := range refs {
-				if ref.DigestID > 0 && ref.TopicID > 0 && !tracksWithUpdates[t.ID] {
-					processedTopics[topicKey{ref.DigestID, ref.TopicID}] = true
-				}
+		if json.Unmarshal([]byte(t.SourceRefs), &refs) != nil {
+			continue
+		}
+		for _, ref := range refs {
+			if ref.DigestID > 0 && ref.TopicID > 0 {
+				s.processedTopics[trackTopicKey{ref.DigestID, ref.TopicID}] = true
 			}
 		}
 	}
 
-	// Filter entries by channel relevance score and dedup topics.
-	var filteredEntries []digestEntry
+	return s
+}
+
+// filterEntriesByRelevance dedups already-processed topics (Level 2) and drops
+// channels that score zero (Level 1).
+func (p *Pipeline) filterEntriesByRelevance(entries []digestEntry, userID string, s relevanceSignals) []digestEntry {
+	var filtered []digestEntry
 	skippedByScore := 0
 	dedupedTopics := 0
-	for _, entry := range allEntries {
-		// Level 2: filter already-processed topics.
-		var remainingTopics []db.DigestTopic
+	for _, entry := range entries {
+		var remaining []db.DigestTopic
 		for _, t := range entry.topics {
-			key := topicKey{t.DigestID, t.ID}
-			if processedTopics[key] {
+			if s.processedTopics[trackTopicKey{t.DigestID, t.ID}] {
 				dedupedTopics++
 				continue
 			}
-			remainingTopics = append(remainingTopics, t)
+			remaining = append(remaining, t)
 		}
-		if len(remainingTopics) == 0 {
+		if len(remaining) == 0 {
 			continue
 		}
-		entry.topics = remainingTopics
-		entry.topicCount = len(remainingTopics)
+		entry.topics = remaining
+		entry.topicCount = len(remaining)
 
-		// Level 1: score channel relevance.
-		score := scoreChannel(entry.channelID, entry.topics, userID, existingTrackChannels, starredChannels, relatedUsers)
+		score := scoreChannel(entry.channelID, entry.topics, userID, s.existingTrackChannels, s.starredChannels, s.relatedUsers)
 		if score == 0 {
 			skippedByScore++
 			continue
 		}
-		filteredEntries = append(filteredEntries, entry)
+		filtered = append(filtered, entry)
 	}
 
 	if skippedByScore > 0 {
@@ -464,51 +513,39 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 	if dedupedTopics > 0 {
 		p.logger.Printf("tracks: deduped %d topics already linked to existing tracks", dedupedTopics)
 	}
+	return filtered
+}
 
-	// Recalculate totals after filtering.
-	allEntries = filteredEntries
-	totalTopicCount = 0
-	for _, e := range allEntries {
-		totalTopicCount += e.topicCount
-	}
-
-	if len(allEntries) == 0 {
-		p.progress(0, 0, "No relevant topics after filtering")
-		return 0, nil
-	}
-
-	// Sort by topic count descending for better batch packing.
-	sort.Slice(allEntries, func(i, j int) bool {
-		return allEntries[i].topicCount > allEntries[j].topicCount
-	})
-
-	// Estimate max topics per batch from context budget.
-	// Each digest topic includes summary, decisions, action_items, situations, key_messages.
-	// Real cost ~700 tokens/topic (measured: 510K chars / 191 topics ≈ 670 tok in production).
+// contextBudget returns the configured AI context budget with the documented default.
+func (p *Pipeline) contextBudget() int {
 	budget := p.cfg.AI.ContextBudget
 	if budget <= 0 {
 		budget = config.DefaultAIContextBudget
 	}
+	return budget
+}
+
+// planTrackBatches groups channels into batches sized by the AI context budget.
+// Each digest topic includes summary, decisions, action_items, situations,
+// key_messages — measured at ~700 tokens/topic in production.
+func (p *Pipeline) planTrackBatches(entries []digestEntry) [][]digestEntry {
 	const tokensPerTopic = 700
 	const promptOverhead = 20000
-	maxTopicsPerBatch := (budget - promptOverhead) / tokensPerTopic
+	maxTopicsPerBatch := (p.contextBudget() - promptOverhead) / tokensPerTopic
 	if maxTopicsPerBatch < 20 {
 		maxTopicsPerBatch = 20
 	}
+	return groupDigestBatches(entries, 15, maxTopicsPerBatch)
+}
 
-	batches := groupDigestBatches(allEntries, 15, maxTopicsPerBatch)
-
-	p.logger.Printf("tracks: found %d topics across %d channels → %d batch(es), budget %d tokens",
-		totalTopicCount, len(allEntries), len(batches), budget)
-	p.progress(0, len(batches), fmt.Sprintf("Scanning %d channels (%d topics) for @%s in %d batch(es)...",
-		len(allEntries), totalTopicCount, userName, len(batches)))
-
+// runTrackBatches runs each AI batch sequentially (per-batch errors logged but
+// don't abort the run) and returns the total number of tracks stored.
+func (p *Pipeline) runTrackBatches(ctx context.Context, batches [][]digestEntry, userID, userName string, from, to float64) int {
 	totalStored := 0
 	for i, batch := range batches {
 		if ctx.Err() != nil {
 			break
 		}
-
 		batchTopics := 0
 		for _, e := range batch {
 			batchTopics += e.topicCount
@@ -532,11 +569,7 @@ func (p *Pipeline) RunForWindow(ctx context.Context, userID string, from, to flo
 		p.LastStepDurationSeconds = time.Since(stepStart).Seconds()
 		p.progress(i+1, len(batches), fmt.Sprintf("Batch %d/%d done (%d tracks)", i+1, len(batches), n))
 	}
-
-	p.LastStepDurationSeconds = 0 // reset to avoid duplicate step recording on final progress
-	p.progress(len(batches), len(batches), fmt.Sprintf("Found %d tracks for @%s across %d channels", totalStored, userName, len(allEntries)))
-	p.logger.Printf("tracks: %d tracks for @%s from %d channels", totalStored, userName, len(allEntries))
-	return totalStored, nil //nolint:nilerr // partial results returned; per-batch errors logged above
+	return totalStored
 }
 
 // digestEntry represents a channel's digest data for batch processing.

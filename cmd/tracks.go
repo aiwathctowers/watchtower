@@ -297,94 +297,111 @@ func runTracksShow(cmd *cobra.Command, args []string) error {
 	}
 
 	out := cmd.OutOrStdout()
+	printTrackHeader(out, track)
+	printTrackParticipants(out, track)
+	printTrackSourceRefs(out, database, track)
+	printTrackSubItems(out, track)
+	printTrackDecisions(out, track)
+	printTrackChannelsAndTags(out, database, track)
+	printTrackLinkedJiraIssues(out, database, cfg, track)
+	return nil
+}
+
+func printTrackHeader(out io.Writer, track *db.Track) {
 	fmt.Fprintf(out, "Track #%d: %s\n", track.ID, track.Text)
 	fmt.Fprintf(out, "Priority: %s | Category: %s | Ownership: %s | Updated: %s\n",
 		track.Priority, track.Category, track.Ownership, track.UpdatedAt)
-
 	if track.Context != "" {
 		fmt.Fprintf(out, "\nContext:\n%s\n", track.Context)
 	}
-
 	if track.RequesterName != "" {
 		fmt.Fprintf(out, "\nRequester: %s\n", track.RequesterName)
 	}
-
 	if track.Blocking != "" {
 		fmt.Fprintf(out, "Blocking: %s\n", track.Blocking)
 	}
-
 	if track.DueDate != 0 {
 		dueTime := time.Unix(int64(track.DueDate), 0)
 		fmt.Fprintf(out, "Due: %s\n", dueTime.Format("2006-01-02"))
 	}
+}
 
-	// Participants
-	if track.Participants != "" && track.Participants != "[]" {
-		type participant struct {
-			UserID string `json:"user_id"`
-			Name   string `json:"name"`
-			Stance string `json:"stance"`
-		}
-		var parts []participant
-		if json.Unmarshal([]byte(track.Participants), &parts) == nil && len(parts) > 0 {
-			fmt.Fprintf(out, "\nParticipants:\n")
-			for _, p := range parts {
-				if p.Stance != "" {
-					fmt.Fprintf(out, "  - %s (%s)\n", p.Name, p.Stance)
-				} else {
-					fmt.Fprintf(out, "  - %s\n", p.Name)
-				}
-			}
+func printTrackParticipants(out io.Writer, track *db.Track) {
+	if track.Participants == "" || track.Participants == "[]" {
+		return
+	}
+	type participant struct {
+		UserID string `json:"user_id"`
+		Name   string `json:"name"`
+		Stance string `json:"stance"`
+	}
+	var parts []participant
+	if json.Unmarshal([]byte(track.Participants), &parts) != nil || len(parts) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nParticipants:\n")
+	for _, p := range parts {
+		if p.Stance != "" {
+			fmt.Fprintf(out, "  - %s (%s)\n", p.Name, p.Stance)
+		} else {
+			fmt.Fprintf(out, "  - %s\n", p.Name)
 		}
 	}
+}
 
-	// Source refs (key message quotes)
-	if track.SourceRefs != "" && track.SourceRefs != "[]" {
-		type sourceRef struct {
-			TS        string `json:"ts"`
-			Author    string `json:"author"`
-			Text      string `json:"text"`
-			ChannelID string `json:"channel_id"`
-			DigestID  int    `json:"digest_id"`
-			TopicID   int    `json:"topic_id"`
-		}
-		var refs []sourceRef
-		if json.Unmarshal([]byte(track.SourceRefs), &refs) == nil && len(refs) > 0 {
-			fmt.Fprintf(out, "\nSource Refs:\n")
-			for _, r := range refs {
-				if r.Author != "" && r.Text != "" {
-					chName := r.ChannelID
-					if ch, chErr := database.GetChannelByID(r.ChannelID); chErr == nil && ch != nil && ch.Name != "" {
-						chName = "#" + ch.Name
-					}
-					fmt.Fprintf(out, "  [%s] %s: %s\n", chName, r.Author, r.Text)
-				} else if r.DigestID > 0 {
-					fmt.Fprintf(out, "  digest=%d topic=%d channel=%s\n", r.DigestID, r.TopicID, r.ChannelID)
-				}
+func printTrackSourceRefs(out io.Writer, database *db.DB, track *db.Track) {
+	if track.SourceRefs == "" || track.SourceRefs == "[]" {
+		return
+	}
+	type sourceRef struct {
+		TS        string `json:"ts"`
+		Author    string `json:"author"`
+		Text      string `json:"text"`
+		ChannelID string `json:"channel_id"`
+		DigestID  int    `json:"digest_id"`
+		TopicID   int    `json:"topic_id"`
+	}
+	var refs []sourceRef
+	if json.Unmarshal([]byte(track.SourceRefs), &refs) != nil || len(refs) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nSource Refs:\n")
+	for _, r := range refs {
+		if r.Author != "" && r.Text != "" {
+			chName := r.ChannelID
+			if ch, chErr := database.GetChannelByID(r.ChannelID); chErr == nil && ch != nil && ch.Name != "" {
+				chName = "#" + ch.Name
 			}
+			fmt.Fprintf(out, "  [%s] %s: %s\n", chName, r.Author, r.Text)
+		} else if r.DigestID > 0 {
+			fmt.Fprintf(out, "  digest=%d topic=%d channel=%s\n", r.DigestID, r.TopicID, r.ChannelID)
 		}
 	}
+}
 
-	// Sub-items
-	if track.SubItems != "" && track.SubItems != "[]" {
-		type subItem struct {
-			Text   string `json:"text"`
-			Status string `json:"status"`
-		}
-		var subs []subItem
-		if json.Unmarshal([]byte(track.SubItems), &subs) == nil && len(subs) > 0 {
-			fmt.Fprintf(out, "\nSub-items:\n")
-			for _, s := range subs {
-				marker := "[ ]"
-				if s.Status == "done" {
-					marker = "[x]"
-				}
-				fmt.Fprintf(out, "  %s %s\n", marker, s.Text)
-			}
-		}
+func printTrackSubItems(out io.Writer, track *db.Track) {
+	if track.SubItems == "" || track.SubItems == "[]" {
+		return
 	}
+	type subItem struct {
+		Text   string `json:"text"`
+		Status string `json:"status"`
+	}
+	var subs []subItem
+	if json.Unmarshal([]byte(track.SubItems), &subs) != nil || len(subs) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nSub-items:\n")
+	for _, s := range subs {
+		marker := "[ ]"
+		if s.Status == "done" {
+			marker = "[x]"
+		}
+		fmt.Fprintf(out, "  %s %s\n", marker, s.Text)
+	}
+}
 
-	// Decision options
+func printTrackDecisions(out io.Writer, track *db.Track) {
 	if track.DecisionOptions != "" && track.DecisionOptions != "[]" {
 		type decOption struct {
 			Option     string   `json:"option"`
@@ -409,12 +426,12 @@ func runTracksShow(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-
 	if track.DecisionSummary != "" {
 		fmt.Fprintf(out, "\nDecision Summary: %s\n", track.DecisionSummary)
 	}
+}
 
-	// Channels
+func printTrackChannelsAndTags(out io.Writer, database *db.DB, track *db.Track) {
 	var channelIDs []string
 	if json.Unmarshal([]byte(track.ChannelIDs), &channelIDs) == nil && len(channelIDs) > 0 {
 		var names []string
@@ -427,35 +444,33 @@ func runTracksShow(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Fprintf(out, "\nChannels: %s\n", strings.Join(names, ", "))
 	}
-
-	// Tags
 	var tags []string
 	if json.Unmarshal([]byte(track.Tags), &tags) == nil && len(tags) > 0 {
 		fmt.Fprintf(out, "Tags: %s\n", strings.Join(tags, ", "))
 	}
+}
 
-	// Linked Jira Issues
-	if jira.IsFeatureEnabled(cfg, "track_linking") {
-		issues, jiraErr := database.GetJiraIssuesForTrack(track.ID)
-		if jiraErr == nil && len(issues) > 0 {
-			fmt.Fprintf(out, "\nLinked Jira Issues:\n")
-			now := time.Now()
-			for _, issue := range issues {
-				overdue := ""
-				if issue.DueDate != "" && !strings.EqualFold(issue.StatusCategory, "done") {
-					if due, parseErr := time.Parse("2006-01-02", issue.DueDate); parseErr == nil {
-						if due.Before(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())) {
-							overdue = " *** OVERDUE ***"
-						}
-					}
-				}
-				line := jira.BuildIssueListForCLI([]db.JiraIssue{issue})
-				fmt.Fprintf(out, "  %s%s\n", line, overdue)
+func printTrackLinkedJiraIssues(out io.Writer, database *db.DB, cfg *config.Config, track *db.Track) {
+	if !jira.IsFeatureEnabled(cfg, "track_linking") {
+		return
+	}
+	issues, jiraErr := database.GetJiraIssuesForTrack(track.ID)
+	if jiraErr != nil || len(issues) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nLinked Jira Issues:\n")
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	for _, issue := range issues {
+		overdue := ""
+		if issue.DueDate != "" && !strings.EqualFold(issue.StatusCategory, "done") {
+			if due, parseErr := time.Parse("2006-01-02", issue.DueDate); parseErr == nil && due.Before(today) {
+				overdue = " *** OVERDUE ***"
 			}
 		}
+		line := jira.BuildIssueListForCLI([]db.JiraIssue{issue})
+		fmt.Fprintf(out, "  %s%s\n", line, overdue)
 	}
-
-	return nil
 }
 
 func runTracksRead(cmd *cobra.Command, args []string) error {
