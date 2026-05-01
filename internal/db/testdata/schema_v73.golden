@@ -200,6 +200,10 @@ CREATE INDEX idx_target_links_target ON target_links(target_target_id)
 index	idx_targets_due
 CREATE INDEX idx_targets_due ON targets(due_date)
 
+index	idx_targets_due_unfired
+CREATE INDEX idx_targets_due_unfired ON targets(due_date)
+WHERE notified_at = '' AND due_date != ''
+
 index	idx_targets_level
 CREATE INDEX idx_targets_level ON targets(level)
 
@@ -549,7 +553,7 @@ created_at TEXT NOT NULL
 )
 
 table	inbox_items
-CREATE TABLE inbox_items (
+CREATE TABLE "inbox_items" (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 channel_id TEXT NOT NULL,
 message_ts TEXT NOT NULL,
@@ -559,7 +563,8 @@ trigger_type TEXT NOT NULL CHECK(trigger_type IN (
 'mention','dm','thread_reply','reaction',
 'jira_assigned','jira_comment_mention','jira_comment_watching','jira_status_change','jira_priority_change',
 'calendar_invite','calendar_time_change','calendar_cancelled',
-'decision_made','briefing_ready'
+'decision_made','briefing_ready',
+'target_due'
 )),
 snippet TEXT NOT NULL DEFAULT '',
 context TEXT NOT NULL DEFAULT '',
@@ -975,7 +980,7 @@ source_id TEXT NOT NULL DEFAULT '',
 ai_level_confidence REAL DEFAULT NULL,
 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-)
+, notified_at TEXT NOT NULL DEFAULT '')
 
 table	track_states
 CREATE TABLE track_states (
@@ -1805,6 +1810,7 @@ END
 21	ai_level_confidence	REAL	notnull=0	dflt=NULL	pk=0
 22	created_at	TEXT	notnull=1	dflt=strftime('%Y-%m-%dT%H:%M:%SZ','now')	pk=0
 23	updated_at	TEXT	notnull=1	dflt=strftime('%Y-%m-%dT%H:%M:%SZ','now')	pk=0
+24	notified_at	TEXT	notnull=1	dflt=''	pk=0
 
 ## track_states
 0	id	INTEGER	notnull=0	dflt=NULL	pk=1

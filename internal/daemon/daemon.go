@@ -375,7 +375,8 @@ func (d *Daemon) phaseChannelDigests(ctx context.Context) {
 }
 
 // phaseUnsnooze releases snoozed targets and inbox items whose snooze_until
-// has passed.
+// has passed, then surfaces any newly-overdue targets to the inbox so they
+// reach the user through the same channel as Slack/Jira/Calendar reminders.
 func (d *Daemon) phaseUnsnooze() {
 	if d.db == nil {
 		return
@@ -389,6 +390,11 @@ func (d *Daemon) phaseUnsnooze() {
 		d.logger.Printf("unsnooze inbox error: %v", err)
 	} else if n > 0 {
 		d.logger.Printf("unsnoozed %d inbox item(s)", n)
+	}
+	if n, err := d.db.NotifyDueTargets(time.Now().UTC()); err != nil {
+		d.logger.Printf("notify due targets error: %v", err)
+	} else if n > 0 {
+		d.logger.Printf("surfaced %d due target(s) to inbox", n)
 	}
 }
 

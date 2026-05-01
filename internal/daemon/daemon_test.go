@@ -701,6 +701,61 @@ func TestDaemon_UnsnoozeExpiredTasks(t *testing.T) {
 	assert.Equal(t, "2099-12-31", task2.SnoozeUntil)
 }
 
+func TestDaemon_NotifiesDueTargets(t *testing.T) {
+	var syncCount atomic.Int32
+	orch, _ := newTestOrchestrator(t, &syncCount)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	wsDir := dir + "/.local/share/watchtower/test-ws"
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+
+	database, err := db.Open(wsDir + "/watchtower.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	id, err := database.CreateTarget(db.Target{
+		Text:       "Send reminder",
+		Status:     "todo",
+		Priority:   "high",
+		Ownership:  "mine",
+		DueDate:    "2020-01-01T12:00",
+		SourceType: "manual",
+	})
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		ActiveWorkspace: "test-ws",
+		Workspaces: map[string]*config.WorkspaceConfig{
+			"test-ws": {SlackToken: "xoxp-test"},
+		},
+		Sync: config.SyncConfig{
+			PollInterval: 10 * time.Second,
+			SyncOnWake:   false,
+		},
+	}
+
+	d := New(orch, cfg)
+	d.SetLogger(log.New(os.Stderr, "[test-daemon] ", 0))
+	d.SetDB(database)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	err = d.Run(ctx)
+	assert.NoError(t, err)
+
+	// Inbox should now contain a target_due row pointing back to the target.
+	var trigger string
+	var targetID int64
+	err = database.QueryRow(
+		`SELECT trigger_type, target_id FROM inbox_items WHERE target_id = ?`, id,
+	).Scan(&trigger, &targetID)
+	require.NoError(t, err)
+	assert.Equal(t, "target_due", trigger)
+	assert.Equal(t, id, targetID)
+}
+
 // fakeDayPlanRunner implements DayPlanRunner for testing. Run inserts a real
 // plan row into database so the dedup check in shouldRunDayPlan fires on the
 // second call.

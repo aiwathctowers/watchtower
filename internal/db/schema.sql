@@ -375,7 +375,8 @@ CREATE TABLE IF NOT EXISTS targets (
     source_id           TEXT NOT NULL DEFAULT '',
     ai_level_confidence REAL DEFAULT NULL,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    notified_at         TEXT NOT NULL DEFAULT ''  -- set once when an overdue target is surfaced to inbox
 );
 CREATE INDEX IF NOT EXISTS idx_targets_level       ON targets(level);
 CREATE INDEX IF NOT EXISTS idx_targets_parent      ON targets(parent_id);
@@ -385,6 +386,8 @@ CREATE INDEX IF NOT EXISTS idx_targets_priority    ON targets(priority);
 CREATE INDEX IF NOT EXISTS idx_targets_due         ON targets(due_date);
 CREATE INDEX IF NOT EXISTS idx_targets_source      ON targets(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_targets_updated     ON targets(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_targets_due_unfired ON targets(due_date)
+    WHERE notified_at = '' AND due_date != '';
 
 -- Links between targets or to external references
 CREATE TABLE IF NOT EXISTS target_links (
@@ -416,7 +419,8 @@ CREATE TABLE IF NOT EXISTS inbox_items (
         'mention','dm','thread_reply','reaction',
         'jira_assigned','jira_comment_mention','jira_comment_watching','jira_status_change','jira_priority_change',
         'calendar_invite','calendar_time_change','calendar_cancelled',
-        'decision_made','briefing_ready'
+        'decision_made','briefing_ready',
+        'target_due'
     )),
     snippet         TEXT NOT NULL DEFAULT '',
     context         TEXT NOT NULL DEFAULT '',

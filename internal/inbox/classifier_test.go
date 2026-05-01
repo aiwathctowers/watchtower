@@ -24,6 +24,7 @@ func TestInbox01_DefaultClassByTrigger(t *testing.T) {
 		{"calendar_cancelled", "ambient"},
 		{"decision_made", "ambient"},
 		{"briefing_ready", "ambient"},
+		{"target_due", "actionable"},
 		{"unknown_type", "ambient"}, // unknown → ambient fallback
 	}
 	for _, c := range cases {

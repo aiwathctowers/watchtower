@@ -225,6 +225,18 @@ func (db *DB) UpdateTargetStatus(id int, newStatus string) error {
 		NOT EXISTS (SELECT 1 FROM targets c WHERE c.parent_id = targets.id AND c.status != 'dismissed')`,
 		progress, id)
 
+	// BEHAVIOR INBOX-02 — closing a target resolves its target_due inbox item
+	// so the user never has to close the same thing twice (mirrors how
+	// auto-resolve works for slack/jira/calendar). See
+	// docs/inventory/inbox-pulse.md.
+	if newStatus == "done" || newStatus == "dismissed" {
+		_, _ = db.Exec(`UPDATE inbox_items
+			SET status = 'resolved',
+			    resolved_reason = 'target_closed',
+			    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+			WHERE target_id = ? AND trigger_type = 'target_due' AND status = 'pending'`, id)
+	}
+
 	if parentID.Valid {
 		_ = db.RecomputeParentProgress(parentID.Int64)
 	}

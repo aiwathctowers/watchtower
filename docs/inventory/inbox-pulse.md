@@ -38,8 +38,9 @@
 - `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveSlackOnUserReply`
 - `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveJiraOnUserComment`
 - `internal/inbox/pipeline_test.go::TestInbox02_AutoResolveCalendarOnUserRSVP`
+- `internal/db/targets_remind_test.go::TestInbox02_AutoResolveTargetOnClose`
 
-**Locked since:** 2026-04-27
+**Locked since:** 2026-04-27 (target_due family added 2026-05-01)
 
 ## INBOX-03 — Surfaces signals that would have been buried in noise
 
@@ -129,3 +130,4 @@
 - 2026-04-27: file created with 8 contracts (INBOX-01..08). Five are Enforced (01, 02, 05, 06, 07), two are Partial (03, 04), one is Aspirational (08). Tracked gaps recorded inline on Partial/Aspirational entries.
 - 2026-04-28: INBOX-04 closed gap — explicit feedback now feeds into evidence pool via learner; never_show stays as one-click escape hatch (source='user_rule'). Migration v72 drops legacy source='explicit_feedback' rules.
 - 2026-04-28: INBOX-08 removed by owner — anti re-spam was Aspirational only, never implemented. Decision: not part of the product's behavior set. Re-introduce only if owner asks.
+- 2026-05-01: INBOX-02 extended to cover the new `target_due` trigger — closing the underlying target (status → done/dismissed) auto-resolves the inbox item. Migration 00002 adds `target_due` to `inbox_items.trigger_type` and `targets.notified_at`.
