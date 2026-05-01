@@ -11,6 +11,7 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         // swift-markdown removed: MarkdownText uses Foundation's AttributedString(markdown:)
         .package(url: "https://github.com/jpsim/Yams", from: "5.0.0"),
+        .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.0"),
     ],
     targets: [
         .executableTarget(
@@ -29,6 +30,7 @@ let package = Package(
             dependencies: [
                 "WatchtowerDesktop",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "ViewInspector", package: "ViewInspector"),
             ],
             path: "Tests"
         ),
