@@ -271,3 +271,42 @@ func TestPrintDigestTopics_BadJSONIsSkipped(t *testing.T) {
 	assert.Contains(t, out, "### Glitchy")
 	assert.NotContains(t, out, "**Decision:**")
 }
+
+func TestPrintDigestLegacy_RendersTopicsDecisionsActions(t *testing.T) {
+	cfg := &config.Config{}
+	d := db.Digest{
+		Topics:      `["api","deploy"]`,
+		Decisions:   `[{"text":"Ship Friday","by":"alice"},{"text":"No breaking changes"}]`,
+		ActionItems: `[{"text":"Review PR","assignee":"bob","status":"pending"},{"text":"Notify ops"}]`,
+	}
+	var buf bytes.Buffer
+	printDigestLegacy(&buf, d, cfg, nil)
+
+	out := buf.String()
+	assert.Contains(t, out, "Topics:")
+	assert.Contains(t, out, "api, deploy")
+	assert.Contains(t, out, "Decisions:")
+	assert.Contains(t, out, "Ship Friday (by alice)")
+	assert.Contains(t, out, "No breaking changes")
+	assert.Contains(t, out, "Review PR")
+	assert.Contains(t, out, "Notify ops")
+}
+
+func TestPrintDigestLegacy_EmptySectionsOmitted(t *testing.T) {
+	cfg := &config.Config{}
+	d := db.Digest{Topics: "[]", Decisions: "[]", ActionItems: "[]"}
+	var buf bytes.Buffer
+	printDigestLegacy(&buf, d, cfg, nil)
+
+	assert.Empty(t, buf.String())
+}
+
+func TestPrintDigestLegacy_MalformedJSONIgnored(t *testing.T) {
+	cfg := &config.Config{}
+	d := db.Digest{Topics: "garbage", Decisions: "garbage", ActionItems: "garbage"}
+	var buf bytes.Buffer
+	printDigestLegacy(&buf, d, cfg, nil)
+
+	// Non-JSON inputs are silently skipped — no panic and no output.
+	assert.Empty(t, buf.String())
+}

@@ -232,3 +232,95 @@ func TestRunCalendarSelect_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+func TestRunJiraLogout_NoToken(t *testing.T) {
+	setupTempWorkspace(t)
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+
+	// Logout is idempotent — works even without a saved token.
+	require.NoError(t, runJiraLogout(c, nil))
+	assert.Contains(t, buf.String(), "disconnected")
+}
+
+func TestRunJiraLogout_RemovesTokenAndClearsData(t *testing.T) {
+	wsDir := setupTempWorkspace(t)
+
+	tokenPath := filepath.Join(wsDir, "jira_token.json")
+	require.NoError(t, os.WriteFile(tokenPath, []byte(`{"access_token":"x"}`), 0o600))
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+
+	require.NoError(t, runJiraLogout(c, nil))
+	assert.Contains(t, buf.String(), "disconnected")
+
+	_, err := os.Stat(tokenPath)
+	assert.True(t, os.IsNotExist(err), "token file should be removed")
+}
+
+func TestRunDigestResetContext_AllChannels(t *testing.T) {
+	setupTempWorkspace(t)
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+
+	require.NoError(t, runDigestResetContext(c, nil))
+	assert.Contains(t, buf.String(), "all channels")
+}
+
+func TestRunDigestResetContext_KnownChannel(t *testing.T) {
+	wsDir := setupTempWorkspace(t)
+
+	dbPath := filepath.Join(wsDir, "watchtower.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	defer database.Close()
+
+	require.NoError(t, database.UpsertChannel(db.Channel{ID: "C1", Name: "general", Type: "public"}))
+	database.Close()
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+
+	require.NoError(t, runDigestResetContext(c, []string{"#general"}))
+	assert.Contains(t, buf.String(), "general")
+}
+
+func TestRunDayPlanCheckConflicts_NoUser(t *testing.T) {
+	setupTempWorkspace(t)
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+	c.SetErr(&buf)
+
+	require.NoError(t, runDayPlanCheckConflicts(c, nil))
+	assert.Contains(t, buf.String(), "No current user")
+}
+
+func TestRunDayPlanCheckConflicts_NoPlan(t *testing.T) {
+	wsDir := setupTempWorkspace(t)
+
+	dbPath := filepath.Join(wsDir, "watchtower.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	defer database.Close()
+
+	_, err = database.Exec(`INSERT INTO workspace (id, name) VALUES ('T1', 'test')`)
+	require.NoError(t, err)
+	require.NoError(t, database.SetCurrentUserID("U123"))
+
+	c := &cobra.Command{}
+	var buf bytes.Buffer
+	c.SetOut(&buf)
+	c.SetErr(&buf)
+
+	require.NoError(t, runDayPlanCheckConflicts(c, nil))
+	assert.Contains(t, buf.String(), "No day plan")
+}
