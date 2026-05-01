@@ -57,20 +57,21 @@ enum InboxQueries {
     static func fetchCounts(_ db: Database) throws -> (pending: Int, unread: Int, highPriority: Int) {
         let pending = try Int.fetchOne(
             db,
-            sql: "SELECT COUNT(*) FROM inbox_items WHERE status = 'pending'"
+            sql: "SELECT COUNT(*) FROM inbox_items WHERE status = 'pending' AND archived_at IS NULL"
         ) ?? 0
         let unread = try Int.fetchOne(
             db,
             sql: """
                 SELECT COUNT(*) FROM inbox_items
-                WHERE status = 'pending' AND (read_at IS NULL OR read_at = '')
+                WHERE status = 'pending' AND archived_at IS NULL
+                  AND (read_at IS NULL OR read_at = '')
                 """
         ) ?? 0
         let highPriority = try Int.fetchOne(
             db,
             sql: """
                 SELECT COUNT(*) FROM inbox_items
-                WHERE status = 'pending' AND priority = 'high'
+                WHERE status = 'pending' AND archived_at IS NULL AND priority = 'high'
                 """
         ) ?? 0
         return (pending, unread, highPriority)
@@ -208,6 +209,7 @@ enum InboxQueries {
             WHERE pinned = 1
               AND priority = 'high'
               AND status = 'pending'
+              AND archived_at IS NULL
             """) ?? 0
         return count > 0
     }

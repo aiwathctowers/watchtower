@@ -1084,16 +1084,17 @@ enum TestDatabase {
         resolvedReason: String = "",
         snoozeUntil: String = "",
         taskID: Int? = nil,       // kept for call-site compat; maps to target_id column
-        readAt: String? = nil
+        readAt: String? = nil,
+        archivedAt: String? = nil
     ) throws {
         try db.execute(sql: """
             INSERT INTO inbox_items (channel_id, message_ts, thread_ts, sender_user_id,
                 trigger_type, snippet, permalink, status, priority, ai_reason,
-                resolved_reason, snooze_until, target_id, read_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                resolved_reason, snooze_until, target_id, read_at, archived_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: [channelID, messageTS, threadTS, senderUserID,
                              triggerType, snippet, permalink, status, priority, aiReason,
-                             resolvedReason, snoozeUntil, taskID, readAt])
+                             resolvedReason, snoozeUntil, taskID, readAt, archivedAt])
     }
 
     // MARK: - Inbox Learned Rules Fixtures

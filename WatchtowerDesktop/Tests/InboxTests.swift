@@ -280,6 +280,36 @@ final class InboxQueryTests: XCTestCase {
         XCTAssertEqual(counts.highPriority, 1)
     }
 
+    func testFetchCountsExcludesArchived() throws {
+        let db = try TestDatabase.create()
+        try db.write { db in
+            try TestDatabase.insertInboxItem(
+                db,
+                messageTS: "2.1",
+                status: "pending",
+                priority: "high"
+            )
+            try TestDatabase.insertInboxItem(
+                db,
+                messageTS: "2.2",
+                status: "pending",
+                priority: "high",
+                archivedAt: "2026-04-01T10:00:00Z"
+            )
+            try TestDatabase.insertInboxItem(
+                db,
+                messageTS: "2.3",
+                status: "pending",
+                priority: "medium",
+                archivedAt: "2026-04-01T10:00:00Z"
+            )
+        }
+        let counts = try db.read { try InboxQueries.fetchCounts($0) }
+        XCTAssertEqual(counts.pending, 1, "archived items must not count as pending")
+        XCTAssertEqual(counts.unread, 1, "archived items must not inflate the unread badge")
+        XCTAssertEqual(counts.highPriority, 1, "archived high-priority items must not count")
+    }
+
     // MARK: - resolve
 
     func testResolve() throws {
