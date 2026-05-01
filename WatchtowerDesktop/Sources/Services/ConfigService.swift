@@ -37,8 +37,13 @@ final class ConfigService {
     /// Raw YAML dictionary — preserved for round-trip editing
     private var rawYAML: [String: Any] = [:]
 
-    init() {
-        configPath = Constants.configPath
+    convenience init() {
+        self.init(configPath: Constants.configPath)
+    }
+
+    /// Test-friendly initializer accepting an explicit config file path.
+    init(configPath: String) {
+        self.configPath = configPath
         reload()
     }
 
