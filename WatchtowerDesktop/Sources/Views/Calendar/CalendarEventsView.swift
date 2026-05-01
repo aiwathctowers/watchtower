@@ -79,12 +79,12 @@ struct CalendarEventsView: View {
                 .font(.headline)
                 .foregroundStyle(isToday ? .primary : .secondary)
 
-            ForEach(timed) { event in
-                eventRow(event)
-            }
-
             if !allDay.isEmpty {
                 allDayChip(allDay, date: day.id)
+            }
+
+            ForEach(timed) { event in
+                eventRow(event)
             }
         }
     }
@@ -93,8 +93,11 @@ struct CalendarEventsView: View {
 
     private func allDayChip(_ events: [CalendarEvent], date: Date) -> some View {
         let isExpanded = expandedAllDayDates.contains(date)
+        let previewTitles = events.prefix(3).map(\.title).joined(separator: " · ")
+        let extra = events.count - min(3, events.count)
+        let preview = extra > 0 ? "\(previewTitles) · +\(extra)" : previewTitles
 
-        return VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if isExpanded {
@@ -104,42 +107,63 @@ struct CalendarEventsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                HStack(spacing: 6) {
+                    Image(systemName: "sun.horizon")
                         .font(.caption2)
+                        .foregroundStyle(.tertiary)
                     Text("\(events.count) all-day")
                         .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(preview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.08), in: Capsule())
             }
             .buttonStyle(.plain)
+            .help(events.map(\.title).joined(separator: "\n"))
 
             if isExpanded {
-                ForEach(events) { event in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(.secondary.opacity(0.3))
-                                .frame(width: 6, height: 6)
-                            Text(event.title)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .padding(.leading, 16)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                expandedEventID = expandedEventID == event.id ? nil : event.id
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(events) { event in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(.secondary.opacity(0.3))
+                                    .frame(width: 6, height: 6)
+                                Text(event.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
-                        }
+                            .padding(.leading, 12)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    expandedEventID = expandedEventID == event.id ? nil : event.id
+                                }
+                            }
 
-                        if expandedEventID == event.id {
-                            eventDetail(event)
-                                .padding(.leading, 28)
+                            if expandedEventID == event.id {
+                                eventDetail(event)
+                                    .padding(.leading, 24)
+                            }
                         }
                     }
                 }
+                .padding(.top, 2)
             }
         }
     }

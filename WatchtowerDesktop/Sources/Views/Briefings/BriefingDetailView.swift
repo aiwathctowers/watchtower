@@ -11,6 +11,7 @@ struct BriefingDetailView: View {
     @State private var jiraConnected = false
     @State private var jiraSiteURL: String?
     @State private var dayPlanExists: Bool = false
+    @State private var allDayExpanded: Bool = false
 
     var body: some View {
         ScrollView {
@@ -57,14 +58,79 @@ struct BriefingDetailView: View {
     @ViewBuilder
     private var calendarSection: some View {
         if !calendarEvents.isEmpty {
+            let timed = calendarEvents.filter { !$0.isAllDay }
+            let allDay = calendarEvents.filter { $0.isAllDay }
+
             sectionView(
                 title: "Today's Schedule",
                 icon: "calendar",
                 iconColor: .blue
             ) {
-                ForEach(calendarEvents) { event in
+                if !allDay.isEmpty {
+                    allDayChip(allDay)
+                }
+                ForEach(timed) { event in
                     CalendarEventRow(event: event)
                 }
+            }
+        }
+    }
+
+    private func allDayChip(_ events: [CalendarEvent]) -> some View {
+        let previewTitles = events.prefix(3).map(\.title).joined(separator: " · ")
+        let extra = events.count - min(3, events.count)
+        let preview = extra > 0 ? "\(previewTitles) · +\(extra)" : previewTitles
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    allDayExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "sun.horizon")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text("\(events.count) all-day")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(preview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Image(systemName: allDayExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.08), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(events.map(\.title).joined(separator: "\n"))
+
+            if allDayExpanded {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(events) { event in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(.secondary.opacity(0.3))
+                                .frame(width: 6, height: 6)
+                            Text(event.title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.leading, 12)
+                    }
+                }
+                .padding(.top, 2)
             }
         }
     }
