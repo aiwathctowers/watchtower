@@ -20,6 +20,7 @@ import (
 	"watchtower/internal/db"
 	"watchtower/internal/digest"
 	"watchtower/internal/guide"
+	"watchtower/internal/inbox"
 	watchtowerslack "watchtower/internal/slack"
 	"watchtower/internal/sync"
 	"watchtower/internal/tracks"
@@ -834,4 +835,78 @@ func TestDaemon_DayPlanNilPipeline(t *testing.T) {
 	testTime := time.Date(2026, 4, 23, 8, 0, 0, 0, time.Local)
 	d.runDayPlanPhase(context.Background(), testTime)
 	d.runDayPlanConflictPhase(context.Background(), testTime)
+}
+
+// TestDaemon_RunSyncInvokesAllTrackedPhases is a regression guard against
+// silent removal of phase methods from runSync. It wires every pipeline that
+// records to pipeline_runs (digests, tracks, people, inbox) and asserts each
+// shows up in pipeline_runs after a single runSync — so deleting a phase call
+// (or breaking trackedPipelineRun) fails this test instead of slipping through.
+//
+// briefing/day_plan are not asserted here because they have additional
+// runtime gates (Hour, lastBriefing, current user, prior plan absence) that
+// have their own focused tests; this test concentrates on the four phases
+// that should always run on a fresh DB with messages present.
+func TestDaemon_RunSyncInvokesAllTrackedPhases(t *testing.T) {
+	var syncCount atomic.Int32
+	orch, _ := newTestOrchestrator(t, &syncCount)
+
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	wsDir := dir + "/.local/share/watchtower/test-ws"
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+
+	database, err := db.Open(wsDir + "/watchtower.db")
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	// Seed a workspace + channel + a single message so phaseChannelDigests
+	// has work; tracks/people then run on the resulting digest signals.
+	require.NoError(t, database.UpsertWorkspace(db.Workspace{
+		ID: "T024BE7LD", Name: "test-ws", Domain: "test-ws",
+	}))
+	require.NoError(t, database.SetCurrentUserID("U001"))
+	require.NoError(t, database.EnsureChannel("C1", "general", "public", ""))
+	require.NoError(t, database.UpsertMessage(db.Message{
+		ChannelID: "C1", TS: "1700000000.000001", TSUnix: 1700000000.000001,
+		UserID: "U002", Text: "hello world",
+	}))
+
+	cfg := &config.Config{
+		ActiveWorkspace: "test-ws",
+		Workspaces: map[string]*config.WorkspaceConfig{
+			"test-ws": {SlackToken: "xoxp-test"},
+		},
+		Sync:   config.SyncConfig{PollInterval: 10 * time.Second},
+		Digest: config.DigestConfig{Enabled: true, MinMessages: 1},
+	}
+
+	gen := &mockGenerator{}
+	l := log.New(os.Stderr, "[phase-test] ", 0)
+
+	d := New(orch, cfg)
+	d.SetLogger(l)
+	d.SetDB(database)
+	d.SetDigestPipeline(digest.New(database, cfg, gen, l))
+	d.SetTracksPipeline(tracks.New(database, cfg, gen, l))
+	d.SetPeoplePipeline(guide.New(database, cfg, gen, l))
+	d.SetInboxPipeline(inbox.New(database, cfg, gen, l))
+
+	// Force people pipeline past its 24h throttle.
+	d.lastPeople = time.Time{}
+
+	d.runSync(context.Background())
+
+	// phaseSlackSync must have run.
+	assert.GreaterOrEqual(t, syncCount.Load(), int32(1), "phaseSlackSync did not run")
+
+	runs, err := database.GetPipelineRuns(50)
+	require.NoError(t, err)
+	seen := make(map[string]bool, len(runs))
+	for _, r := range runs {
+		seen[r.Pipeline] = true
+	}
+	for _, name := range []string{"digests", "tracks", "people", "inbox"} {
+		assert.Truef(t, seen[name], "expected pipeline_runs row for %q (phase method missing from runSync?)", name)
+	}
 }

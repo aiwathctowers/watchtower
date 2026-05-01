@@ -77,7 +77,7 @@
 - `internal/inbox/feedback_test.go::TestInbox04_WrongClassChangesItemButNotRule`
 - `internal/inbox/feedback_test.go::TestInbox04_WrongPriorityDoesNotCreateRule`
 - `internal/inbox/feedback_test.go::TestInbox04_PositiveFeedbackDoesNotCreateRule`
-- `internal/db/migration_test.go::TestMigrationV72_DropsLegacyExplicitFeedback`
+- `internal/db/schema_contracts_test.go::TestInbox04_NoLegacyExplicitFeedbackTable`
 
 **Locked since:** 2026-04-28
 

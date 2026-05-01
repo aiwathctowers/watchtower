@@ -161,7 +161,7 @@ When the AI re-extracts a track I've already read and there's actually new conte
 - `internal/db/tracks_test.go::TestTracks06_HistoryCapAt30`
 - `internal/db/tracks_test.go::TestTracks06_GetTrackStatesOrdersDescByCreatedAt`
 - `internal/db/tracks_test.go::TestTracks06_HistoryCascadesOnTrackDelete`
-- `internal/db/migration_test.go::TestMigrationV73_CreatesTrackStatesTable`
+- `internal/db/schema_contracts_test.go::TestTracks06_TrackStatesTableExists`
 - `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_returnsDescendingOrder`
 - `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_emptyForNewTrack`
 - `WatchtowerDesktop/Tests/TrackStateQueriesTests.swift::test_TRACKS_06_fetchByTrackID_decodesAllFields`
